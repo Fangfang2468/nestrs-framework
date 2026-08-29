@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+description = "基于 Nestjs 的范式结合 Springboot 的功能设计，打造 Rust 语言的 Nestjs 框架"
+repository= "https://github.com/Fangfang2468/nestrs-framework"
+authors = ["Frank Fang"]
+license = "MIT"
+
+[workspace.dependencies]
+
+# 宏编程工具
+clap = "4"
+linkme = "0.3"
+proc-macro2 = "1.0"
+syn = { version = "2.0.118", features = ["full"] }
+quote = "1.0.46"
+
+# 基础工具
+ahash = "0.8.12"
+thiserror = "2"             # 错误定义
+anyhow = "1.0.103"          # 
+
+
+# 底层工具
+tokio = "1.53.1"
+serde = "1"                 # 序列化/反序列化框架
+serde_json = "1"            # JSON 格式：请求体解析 + 响应体构造 + ...
+chrono = "0.4"              # 时间处理
+rand = "0.8"                # 密码学安全随机数：Refresh Token 32 字节生成、authorization_code / code_verifier 生成
