@@ -1,0 +1,10 @@
+[package]
+name = "nestrs-injection"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]

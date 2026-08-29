@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "nestrs-framework"
+name = "nestrs-injection"
 version = "0.1.0"
