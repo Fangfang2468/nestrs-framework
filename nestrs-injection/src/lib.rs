@@ -1,14 +1,13 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+pub mod registration;
+pub mod lifetime;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+
+
+#[doc(hidden)]
+pub mod __private {
+    /// 仅供宏生成的分布式注册静态项使用的 `linkme` crate 重导出。
+    ///
+    /// 下游应用无需也不应为了 DI 注册而直接依赖此名称。
+    pub use linkme;
 }

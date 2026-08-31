@@ -8,3 +8,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+ahash = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+linkme = { workspace = true }
