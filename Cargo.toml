@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["nestrs-injection"]
+members = ["example/nestrs-base",
+    "nestrs-injection",
+    "nestrs-macro"
+]
+
+exclude = ["./example/**"]
 
 [workspace.package]
 version = "0.1.0"
@@ -18,6 +23,10 @@ linkme = "0.3"
 proc-macro2 = "1.0"
 syn = { version = "2.0.118", features = ["full"] }
 quote = "1.0.46"
+zyn = "0.5.4"
+cargo_metadata = "0.23.1"
+walkdir = "2.5.0"
+toml = "1.1.4"
 
 # 基础工具
 ahash = "0.8.12"
@@ -31,3 +40,8 @@ serde = "1"                 # 序列化/反序列化框架
 serde_json = "1"            # JSON 格式：请求体解析 + 响应体构造 + ...
 chrono = "0.4"              # 时间处理
 rand = "0.8"                # 密码学安全随机数：Refresh Token 32 字节生成、authorization_code / code_verifier 生成
+memsafe = "1.0.2"
+
+
+# 遥测库
+opentelemetry = "0.32.0"
