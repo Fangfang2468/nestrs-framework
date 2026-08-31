@@ -1,0 +1,20 @@
+[package]
+name = "nestrs-macro"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+zyn = { workspace = true, features = ["derive", "diagnostics", "ext"] }
+nestrs-injection = { path = "../nestrs-injection" }
+
+
+[lib]
+proc-macro = true
+
+
+[dev-dependencies]
+trybuild = "1"
