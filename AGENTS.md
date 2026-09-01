@@ -1377,3 +1377,60 @@ ci(framework): 增加 workspace CI 检查
 ```
 
 **Scope 以 Cargo package 为边界，`framework` 表示整个 Nestrs Monorepo；Description 必须使用中文。**
+
+---
+
+# 架构共识
+
+本部分为 Nestrs 框架的模块划分共识，AI 在分析、修改本仓库时必须遵守。
+
+## 1. 分层模型
+
+```text
+nestrs-bootstrap（顶层引导库：创建 / 配置 / 运行 Nestrs 实例，对接所有生态库）
+   │
+   ├── nestrs-macro（proc macro，生成注册代码）
+   ├── nestrs-logger
+   ├── nestrs-config
+   └── nestrs-injection（框架核心：DI 容器 + linkme 宿主）
+```
+
+## 2. 依赖方向
+
+* 依赖必须单向向下，禁止任何形式的循环依赖（Cargo 在 manifest 层面拒绝循环）。
+* `nestrs-injection` 是所有生态库的地基：`nestrs-logger`、`nestrs-config`、
+  `nestrs-macro`、`nestrs-bootstrap` 都依赖它。
+* `nestrs-bootstrap` 是唯一允许依赖全部生态库的顶层引导库。
+* 任何生态库不得反向依赖 `nestrs-bootstrap`。
+
+## 3. linkme 归属
+
+* linkme 由 `nestrs-injection` 通过 `#[doc(hidden)] pub mod __private { pub use linkme; }`
+  暴露给宏生成的代码使用。
+* 宏生成的分布式注册代码必须引用 `::nestrs_injection::__private::linkme`，
+  不得硬编码其他路径。
+* 用户无需也不应直接配置 linkme 依赖。
+
+## 4. 命名约定
+
+* 顶层引导库命名为 `nestrs-bootstrap`，**不得**命名为 `nestrs-common`。
+  原因：`common` 在主流生态中通常指"被所有模块依赖的底层公共库"
+  （如 `@nestjs/common`、`spring-common`），而本项目的引导库依赖所有生态库，
+  语义上属于 bootstrap。
+* `nestrs-injection` 承担框架核心职责（DI 容器 + linkme 宿主）；
+  未来若改名为 `nestrs-core`，需同步更新本文件与所有引用。
+
+## 5. Feature 开关
+
+* `nestrs-macro` 的 `injection` feature 控制注入相关宏的编译开关，默认开启。
+* `zyn` 是宏库的基础依赖，不与任何 feature 绑定。
+* 未来 `nestrs-bootstrap` 的 feature 应聚合各生态库
+  （例如 `default = ["injection", "logger", "config"]`）。
+
+## 6. 设计参照
+
+* `nestrs-injection` ≈ Spring Framework 的 `spring-context` / NestJS 的
+  `@nestjs/common`（地基）。
+* `nestrs-bootstrap` ≈ Spring Boot 的 `spring-boot` / NestJS 的 core
+  （在容器之上引导、配置、运行应用）。
+* 可选集成通过运行期注册（linkme 分布式切片）接入，而非编译期依赖。
