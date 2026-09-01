@@ -1,0 +1,9 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/constructor-requires-matching-return-type.rs:7:5
+  |
+7 |     #[constructor]
+  |     ^^^^^^^^^^^^^^ expected `Option<Other>`, found `Option<Service>`
+  |
+  = note: expected enum `Option<Other>`
+             found enum `Option<Service>`
+  = note: this error originates in the attribute macro `constructor` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,5 @@
+error: `#[constructor]` 只能标注不带 `self` 的关联函数
+ --> tests/ui/fail/constructor-requires-no-receiver.rs:7:8
+  |
+7 |     fn new(&self) -> Self {
+  |        ^^^

@@ -1,0 +1,21 @@
+error[E0658]: attributes on expressions are experimental
+ --> tests/ui/fail/factory-requires-function-item.rs:4:21
+  |
+4 |     let _callback = #[factory] || 1;
+  |                     ^^^^^^^^^^
+  |
+  = note: see issue #15701 <https://github.com/rust-lang/rust/issues/15701> for more information
+
+error[E0658]: custom attributes cannot be applied to expressions
+ --> tests/ui/fail/factory-requires-function-item.rs:4:21
+  |
+4 |     let _callback = #[factory] || 1;
+  |                     ^^^^^^^^^^
+  |
+  = note: see issue #54727 <https://github.com/rust-lang/rust/issues/54727> for more information
+
+error: expected one of: `fn`, `extern`, `use`, `static`, `const`, `unsafe`, `mod`, `type`, `struct`, `enum`, `union`, `trait`, `auto`, `impl`, `default`, `macro`, identifier, `self`, `super`, `crate`, `::`
+ --> tests/ui/fail/factory-requires-function-item.rs:4:32
+  |
+4 |     let _callback = #[factory] || 1;
+  |                                ^

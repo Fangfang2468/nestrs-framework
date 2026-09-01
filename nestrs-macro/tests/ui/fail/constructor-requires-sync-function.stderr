@@ -1,0 +1,5 @@
+error: `#[constructor]` 不能标注 `async` 函数
+ --> tests/ui/fail/constructor-requires-sync-function.rs:7:5
+  |
+7 |     async fn new() -> Self {
+  |     ^^^^^

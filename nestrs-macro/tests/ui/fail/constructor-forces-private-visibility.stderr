@@ -1,0 +1,8 @@
+error[E0624]: associated function `new` is private
+  --> tests/ui/fail/constructor-forces-private-visibility.rs:17:25
+   |
+10 |         pub fn new() -> Self {
+   |             ---------------- private associated function defined here
+...
+17 |     providers::Service::new();
+   |                         ^^^ private associated function

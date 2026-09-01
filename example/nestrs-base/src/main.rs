@@ -1,12 +1,32 @@
-use nestrs_macro::injectable;
+use nestrs_macro::{constructor, factory, injectable, primary};
 
-fn cleanup_test() {}
+struct A;
+
+trait TraitTest1 {
+}
+
+trait TraitTest2 {
+}
+
+async fn cleanup_test() {}
 
 #[injectable(cleanup = "cleanup_test")]
+#[primary(TraitTest1)]
 pub struct UserController {
 
 }
 
+impl UserController {
+
+    #[constructor]
+    pub fn new() -> Self {
+        UserController {}
+    }
+}
+
+#[factory]
+pub fn use_factory() {
+}
 
 
 fn main() {

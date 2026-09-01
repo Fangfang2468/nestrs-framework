@@ -1,0 +1,5 @@
+error: `#[constructor]` 不接受参数
+ --> tests/ui/fail/constructor-requires-no-arguments.rs:6:19
+  |
+6 |     #[constructor(unused)]
+  |                   ^^^^^^

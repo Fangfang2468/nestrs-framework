@@ -1,0 +1,5 @@
+error: `#[factory]` 只能标注普通函数，不能用于带 `self` 的 impl 方法
+ --> tests/ui/fail/factory-requires-item-fn.rs:7:8
+  |
+7 |     fn create(&self) {}
+  |        ^^^^^^

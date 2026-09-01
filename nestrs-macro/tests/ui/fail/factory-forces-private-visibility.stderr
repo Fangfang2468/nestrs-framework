@@ -1,0 +1,11 @@
+error[E0603]: function `create` is private
+  --> tests/ui/fail/factory-forces-private-visibility.rs:11:16
+   |
+11 |     providers::create();
+   |                ^^^^^^ private function
+   |
+note: the function `create` is defined here
+  --> tests/ui/fail/factory-forces-private-visibility.rs:7:9
+   |
+ 7 |     pub fn create() {}
+   |         ^^^^^^^^^^^

@@ -1,0 +1,8 @@
+error: extern crate is not supported in `trait`s or `impl`s
+ --> tests/ui/fail/factory-requires-module-function.rs:6:5
+  |
+6 |     #[factory]
+  |     ^^^^^^^^^^
+  |
+  = help: consider moving the extern crate out to a nearby module scope
+  = note: this error originates in the attribute macro `factory` (in Nightly builds, run with -Z macro-backtrace for more info)
