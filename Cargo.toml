@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["example/nestrs-base",
-    "nestrs-injection",
+    "nestrs-core",
     "nestrs-macro"
 ]
 

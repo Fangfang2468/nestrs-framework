@@ -1388,15 +1388,15 @@ AI 在分析、修改本仓库时必须遵守；如需变更，应先与维护�
 ## 1. 总体定位
 
 * Nestrs 框架以依赖注入（DI）为根基，**框架的核心能力建立在 DI 容器之上**。
-* `nestrs-injection` 承担框架核心（即未来 `nestrs-core` 的位置）：
+* `nestrs-core`（由原 `nestrs-injection` 更名而来）承担框架核心位置：
   DI 容器 + linkme 宿主，是所有生态库的地基。
-* `nestrs-bootstrap` 是顶层引导库，基于 `nestrs-injection` 之上统筹
+* `nestrs-bootstrap` 是顶层引导库，基于 `nestrs-core` 之上统筹
   logger、config、injection、macro 等所有生态库，导出 `NestrsFactory`，
   形成 Nestrs 框架的最小闭环，达成基础功能。
 
 ## 2. 分层模型
 
-所有生态库都建立在 `nestrs-injection` 之上；`nestrs-bootstrap` 位于最顶层：
+所有生态库都建立在 `nestrs-core` 之上；`nestrs-bootstrap` 位于最顶层：
 
 ```text
 ┌───────────────────────────────────────────────┐
@@ -1412,7 +1412,7 @@ AI 在分析、修改本仓库时必须遵守；如需变更，应先与维护�
         └──────────┼───────────┘
                    ▼
         ┌──────────────────────┐
-        │ nestrs-injection     │
+        │ nestrs-core         │
         │ DI 容器 + linkme 宿主 │
         └──────────────────────┘
 ```
@@ -1420,24 +1420,24 @@ AI 在分析、修改本仓库时必须遵守；如需变更，应先与维护�
 ## 3. 依赖方向
 
 * 依赖必须单向向下，禁止任何形式的循环依赖（Cargo 在 manifest 层面直接拒绝循环）。
-* `nestrs-injection` 是所有生态库的地基：`nestrs-macro`、`nestrs-logger`、
+* `nestrs-core` 是所有生态库的地基：`nestrs-macro`、`nestrs-logger`、
   `nestrs-config`、`nestrs-bootstrap` 均依赖它。
 * `nestrs-bootstrap` 位于最顶层，允许依赖全部生态库；
   各生态库不得反向依赖 `nestrs-bootstrap`。
-* 由于所有生态库都建立在 `nestrs-injection` 之上，"只使用宏、不使用 injection"
+* 由于所有生态库都建立在 `nestrs-core` 之上，"只使用宏、不使用 injection"
   的场景在本架构中不存在，因此宏生成代码可以固定引用 injection 的私有重导出。
 
 ## 4. linkme 归属
 
-* linkme 的唯一对外宿主是 `nestrs-injection`：
+* linkme 的唯一对外宿主是 `nestrs-core`：
   `#[doc(hidden)] pub mod __private { pub use linkme; }`
-* 宏生成的分布式注册代码统一引用 `::nestrs_injection::__private::linkme`
+* 宏生成的分布式注册代码统一引用 `::nestrs_core::__private::linkme`
   （固定路径，不得改为指向其他库）。
 * 用户无需也不应直接配置 linkme 依赖。
-* 理由：injection 是所有生态库的共同地基，由它提供 linkme 重导出
+* 理由：`nestrs-core` 是所有生态库的共同地基，由它提供 linkme 重导出
   不会出现"宏配套其他运行时库时断链"的问题。
 * 当 `nestrs-bootstrap` 落地后，若用户只直接依赖 bootstrap，则应由
-  bootstrap 转发该路径（re-export `nestrs-injection` 或转发其 `__private`），
+  bootstrap 转发该路径（re-export `nestrs-core` 或转发其 `__private`），
   保证宏生成代码在用户 crate 中可解析。
 
 ## 5. nestrs-bootstrap 职责
@@ -1454,8 +1454,8 @@ AI 在分析、修改本仓库时必须遵守；如需变更，应先与维护�
   原因：`common` 在主流生态中通常指"被所有模块依赖的底层公共库"
   （如 `@nestjs/common`、`spring-common`），而该库依赖所有生态库，
   语义上属于 bootstrap。
-* `nestrs-injection` 承担框架核心（`nestrs-core`）的位置；
-  未来若正式改名为 `nestrs-core`，需同步更新本节与所有引用。
+* `nestrs-core` 即框架核心库（由原 `nestrs-injection` 更名而来）；
+  后续若再次改名，需同步更新本节与所有引用。
 
 ## 7. Feature 开关
 
@@ -1466,7 +1466,7 @@ AI 在分析、修改本仓库时必须遵守；如需变更，应先与维护�
 
 ## 8. 设计参照
 
-* `nestrs-injection` ≈ Spring Framework 的 `spring-context` / NestJS 的
+* `nestrs-core` ≈ Spring Framework 的 `spring-context` / NestJS 的
   `@nestjs/common`（地基）。
 * `nestrs-bootstrap` ≈ Spring Boot 的 `spring-boot` / NestJS 的 core
   （在容器之上引导、配置、运行应用）。

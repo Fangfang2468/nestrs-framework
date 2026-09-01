@@ -1,6 +1,6 @@
 //! Nestrs 的 proc macro 集。
 //!
-//! 与 `nestrs-injection` 配套使用的宏（`injectable`、`factory`、`constructor`、
+//! 与 `nestrs-core` 配套使用的宏（`injectable`、`factory`、`constructor`、
 //! `primary`、`bind`）通过 `injection` feature 控制编译开关：
 //!
 //! ```toml

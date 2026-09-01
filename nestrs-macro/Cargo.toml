@@ -9,11 +9,11 @@ license.workspace = true
 
 [features]
 default = ["injection"]
-injection = ["dep:nestrs-injection"]
+injection = ["dep:nestrs-core"]
 
 [dependencies]
 zyn = { workspace = true, features = ["derive", "diagnostics", "ext"] }
-nestrs-injection = { path = "../nestrs-injection", optional = true }
+nestrs-core = { path = "../nestrs-core", optional = true }
 
 
 [lib]

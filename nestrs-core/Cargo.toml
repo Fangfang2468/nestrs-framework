@@ -1,5 +1,5 @@
 [package]
-name = "nestrs-injection"
+name = "nestrs-core"
 version.workspace = true
 edition.workspace = true
 description.workspace = true

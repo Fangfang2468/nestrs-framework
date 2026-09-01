@@ -8,5 +8,5 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-nestrs-injection = { path = '../../nestrs-injection' }
+nestrs-core = { path = '../../nestrs-core' }
 nestrs-macro = { path = "../../nestrs-macro", default-features = false, features = ["injection"] }

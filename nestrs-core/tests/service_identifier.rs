@@ -1,4 +1,4 @@
-use nestrs_injection::registration::{
+use nestrs_core::registration::{
     service_identifier::ServiceIdentifier, service_type::ServiceType,
 };
 
