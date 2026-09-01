@@ -1,0 +1,9 @@
+error[E0432]: unresolved import `self`
+ --> tests/ui/fail/bind-requires-module-function.rs:6:5
+  |
+6 |     #[bind]
+  |     ^^^^^^^
+7 |     impl Service {}
+  |          ------- no `Service` in the root
+  |
+  = note: this error originates in the attribute macro `bind` (in Nightly builds, run with -Z macro-backtrace for more info)

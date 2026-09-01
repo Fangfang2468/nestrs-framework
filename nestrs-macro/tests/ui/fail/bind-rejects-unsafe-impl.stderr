@@ -1,0 +1,5 @@
+error: `#[bind]` 不能标注 `unsafe` impl
+ --> tests/ui/fail/bind-rejects-unsafe-impl.rs:7:1
+  |
+7 | unsafe impl Marker for Service {}
+  | ^^^^^^

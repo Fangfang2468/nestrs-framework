@@ -1,0 +1,5 @@
+error: `#[primary]` 不能标注 `unsafe` 函数
+ --> tests/ui/fail/primary-rejects-unsafe-function.rs:4:1
+  |
+4 | unsafe fn create() {}
+  | ^^^^^^

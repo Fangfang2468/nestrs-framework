@@ -1,0 +1,5 @@
+error: `#[factory]` 不能标注 `extern` 函数
+ --> tests/ui/fail/factory-rejects-extern-function.rs:4:1
+  |
+4 | extern "C" fn create() {}
+  | ^^^^^^

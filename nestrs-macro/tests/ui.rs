@@ -1,3 +1,5 @@
+#![cfg(feature = "injection")]
+
 #[test]
 fn ui() {
     let t = trybuild::TestCases::new();

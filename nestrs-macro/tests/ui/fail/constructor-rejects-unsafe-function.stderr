@@ -1,0 +1,5 @@
+error: `#[constructor]` 不能标注 `unsafe` 函数
+ --> tests/ui/fail/constructor-rejects-unsafe-function.rs:7:5
+  |
+7 |     unsafe fn new() -> Self {
+  |     ^^^^^^

@@ -1,0 +1,5 @@
+error: `#[primary]` 不接受参数
+ --> tests/ui/fail/primary-rejects-arguments.rs:5:11
+  |
+5 | #[primary(TraitTest)]
+  |           ^^^^^^^^^

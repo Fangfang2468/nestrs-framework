@@ -1,0 +1,5 @@
+error: `#[constructor]` 不能标注 `extern` 函数
+ --> tests/ui/fail/constructor-rejects-extern-function.rs:7:5
+  |
+7 |     extern "C" fn new() -> Self {
+  |     ^^^^^^

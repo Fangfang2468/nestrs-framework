@@ -1,0 +1,9 @@
+error[E0432]: unresolved import `self`
+ --> tests/ui/fail/primary-requires-module-function.rs:4:5
+  |
+4 |     #[primary]
+  |     ^^^^^^^^^^
+5 |     struct Service;
+  |            ------- no `Service` in the root
+  |
+  = note: this error originates in the attribute macro `primary` (in Nightly builds, run with -Z macro-backtrace for more info)

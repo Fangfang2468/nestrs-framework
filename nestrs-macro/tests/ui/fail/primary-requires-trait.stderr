@@ -1,5 +1,0 @@
-error[E0404]: expected trait, found struct `NotATrait`
- --> tests/ui/fail/primary-requires-trait.rs:5:11
-  |
-5 | #[primary(NotATrait)]
-  |           ^^^^^^^^^ not a trait

@@ -8,10 +8,11 @@ trait TraitTest1 {
 trait TraitTest2 {
 }
 
+
 async fn cleanup_test() {}
 
 #[injectable(cleanup = "cleanup_test")]
-#[primary(TraitTest1)]
+#[primary]
 pub struct UserController {
 
 }

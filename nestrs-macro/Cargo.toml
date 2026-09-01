@@ -7,9 +7,13 @@ repository.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+default = ["injection"]
+injection = ["dep:nestrs-injection"]
+
 [dependencies]
 zyn = { workspace = true, features = ["derive", "diagnostics", "ext"] }
-nestrs-injection = { path = "../nestrs-injection" }
+nestrs-injection = { path = "../nestrs-injection", optional = true }
 
 
 [lib]

@@ -1,0 +1,5 @@
+error: `#[factory]` 不能标注 `unsafe` 函数
+ --> tests/ui/fail/factory-rejects-unsafe-function.rs:4:1
+  |
+4 | unsafe fn create() {}
+  | ^^^^^^

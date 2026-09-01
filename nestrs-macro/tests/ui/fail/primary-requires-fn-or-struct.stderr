@@ -1,0 +1,5 @@
+error: `#[primary]` 只能标注普通函数或结构体
+ --> tests/ui/fail/primary-requires-fn-or-struct.rs:4:1
+  |
+4 | enum Service {}
+  | ^^^^

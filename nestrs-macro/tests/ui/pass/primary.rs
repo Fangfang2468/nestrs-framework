@@ -1,15 +1,18 @@
 use nestrs_macro::primary;
 
-trait TraitTest1 {}
-trait TraitTest2 {}
+#[primary]
+pub struct Service;
 
 #[primary]
-struct DefaultPrimary;
+struct DefaultService;
 
 #[primary()]
-struct ExplicitDefaultPrimary;
+struct ExplicitDefaultService;
 
-#[primary(TraitTest1, TraitTest2)]
-struct TraitPrimary;
+#[primary]
+fn create() {}
+
+#[primary]
+async fn create_async() {}
 
 fn main() {}
