@@ -1,8 +1,8 @@
-use crate::injection::attrs::{lifetime::ServiceLifetime, service_key::ServiceKey};
+use crate::injection::attrs::{
+    cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKey,
+};
 
-use zyn::{Attribute, syn::Path};
-
-
+use zyn::{Attribute};
 
 // #[zyn("injectable")] 表示解析 #[injectable(...)] 的参数
 // #[zyn(default)] / #[zyn(default = "...")] 允许参数缺省
@@ -14,10 +14,10 @@ pub struct InjectableConfig {
     pub lifetime: ServiceLifetime,
 
     /// 服务输出使用的静态限定符。
-    #[zyn(default = ServiceKey::Nil)]
-    pub key: ServiceKey,
+    #[zyn(default)]
+    pub key: Option<ServiceKey>,
 
     /// 输出服务的异步 cleanup 回调路径。
     #[zyn(default)]
-    pub cleanup: Option<Path>,
+    pub cleanup: Option<CleanupPath>,
 }

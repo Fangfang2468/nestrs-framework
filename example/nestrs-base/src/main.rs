@@ -1,8 +1,8 @@
 use nestrs_macro::injectable;
 
+fn cleanup_test() {}
 
-
-#[injectable]
+#[injectable(cleanup = "cleanup_test")]
 pub struct UserController {
 
 }

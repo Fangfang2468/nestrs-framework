@@ -2,9 +2,6 @@ use zyn::{Arg, FromArg, syn::{Expr, Lit, ExprLit, spanned::Spanned}};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ServiceKey {
-    /// 没有 Key 值
-    Nil,
-
     /// 同一服务类型命名空间中的静态名称。
     Named(String),
     
