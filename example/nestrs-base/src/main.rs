@@ -1,11 +1,9 @@
-use nestrs_macro::{constructor, factory, injectable, primary};
+use nestrs_core::registration::service_collection::ServiceCollection;
+use nestrs_macro::{bind, factory, injectable, primary};
 
-struct A;
 
-trait TraitTest1 {
-}
-
-trait TraitTest2 {
+trait GetUser: Send + Sync {
+    fn get_user(&self) -> String;
 }
 
 
@@ -17,13 +15,15 @@ pub struct UserController {
 
 }
 
-impl UserController {
+#[bind]
+impl GetUser for UserController {
 
-    #[constructor]
-    pub fn new() -> Self {
-        UserController {}
+    fn get_user(&self) -> String {
+        "John Doe".into()
     }
 }
+
+
 
 #[factory]
 pub fn use_factory() {
@@ -31,5 +31,5 @@ pub fn use_factory() {
 
 
 fn main() {
-    println!("Hello, world!");
+    let collection = ServiceCollection::new();
 }

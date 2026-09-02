@@ -24,8 +24,8 @@ use zyn::{
 use crate::injection::injectable::config::InjectableConfig;
 #[cfg(feature = "injection")]
 use crate::utility::{
-    impl_self_ident, CheckConstructor, MustBePrivateFn, RequireModuleScope, RejectUnsafeAndExternFn,
-    RejectUnsafeImpl, ShouldBeAsyncFn,
+    impl_self_ident, CheckConstructor, CheckInterfaceType, MustBePrivateFn, RequireModuleScope,
+    RejectUnsafeAndExternFn, RejectUnsafeImpl, ShouldBeAsyncFn,
 };
 
 
@@ -195,10 +195,61 @@ pub fn bind(
     #[zyn(input)] item: syn::ItemImpl, // 被标注的项，自动提取
     args: Args,                        // #[bind(...)] 里的原始参数
 ) -> zyn::TokenStream {
+    if let Some(arg) = args.iter().next() {
+        return syn::Error::new(arg.span(), "`#[bind]` 不接受参数")
+            .into_compile_error()
+            .into();
+    }
+
+    let interface = match &item.trait_ {
+        Some((None, interface, _)) => interface.clone(),
+        Some((Some(_), _, _)) => {
+            return syn::Error::new(item.span(), "`#[bind]` 不支持负 trait impl")
+                .into_compile_error()
+                .into();
+        }
+        None => {
+            return syn::Error::new(
+                item.span(),
+                "`#[bind]` 只能标注 trait impl（例如 `impl Trait for Service`）",
+            )
+            .into_compile_error()
+            .into();
+        }
+    };
+
+    if !item.generics.params.is_empty() {
+        return syn::Error::new(
+            item.generics.span(),
+            "`#[bind]` 不支持泛型 impl；请绑定具体的服务类型",
+        )
+        .into_compile_error()
+        .into();
+    }
+
+    let service = item.self_ty.clone();
+
     zyn! {
         @RejectUnsafeImpl(macro_name = "bind".to_string(), item = item.clone()) {
             @RequireModuleScope(ident = impl_self_ident(&item)) {
-                {{ item }}
+                @CheckInterfaceType(interface = interface.clone()) {
+                    {{ item }}
+
+                    const _: () = {
+                        #[::nestrs_core::__private::linkme::distributed_slice(
+                            ::nestrs_core::__private::REFLECT_METADATA_BIND
+                        )]
+                        #[linkme(crate = ::nestrs_core::__private::linkme)]
+                        fn __nestrs_reflect_metadata_bind()
+                            -> ::nestrs_core::__private::InterfaceBinding
+                        {
+                            ::nestrs_core::__private::InterfaceBinding {
+                                service_type: ::nestrs_core::registration::service_type::ServiceType::create::<{{ service }}>(),
+                                trait_type: ::nestrs_core::registration::service_type::ServiceType::create::<dyn {{ interface }}>(),
+                            }
+                        }
+                    };
+                }
             }
         }
     }

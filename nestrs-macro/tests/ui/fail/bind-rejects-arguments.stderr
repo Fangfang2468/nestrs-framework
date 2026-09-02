@@ -1,0 +1,5 @@
+error: `#[bind]` 不接受参数
+ --> tests/ui/fail/bind-rejects-arguments.rs:7:8
+  |
+7 | #[bind(primary)]
+  |        ^^^^^^^

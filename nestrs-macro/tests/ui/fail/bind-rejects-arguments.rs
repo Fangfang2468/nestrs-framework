@@ -1,10 +1,10 @@
 use nestrs_macro::bind;
 
-trait ServiceInterface: Send + Sync {}
+trait ServiceInterface {}
 
 struct Service;
 
-#[bind]
+#[bind(primary)]
 impl ServiceInterface for Service {}
 
 fn main() {}
