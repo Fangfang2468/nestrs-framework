@@ -47,9 +47,25 @@ pub(crate) fn check_constructor(macro_name: String, children: zyn::TokenStream) 
         let _: ::core::option::Option<#return_type> = ::core::option::Option::<Self>::None;
     };
 
-    // 将编译期断言置于函数体第一条语句，使 `-> Self` 与 `-> 当前 impl 类型` 都能通过校验。
+    // `zyn::attribute` only forwards doc attributes to the generated proc-macro entrypoint,
+    // so the handler's `#[deprecated]` attribute alone cannot warn a macro caller. Emit a
+    // lint-only reference in each valid expansion to surface the same deprecation message.
+    let deprecation_warning: syn::Stmt = syn::parse_quote! {
+        {
+            #[deprecated(
+                since = "0.1.0",
+                note = "`#[constructor]` Rust暂不支持静态反射，还无法实现该功能，先留下口子，需要自定义构造请先使用 `#[factory]`"
+            )]
+            const __NESTRS_CONSTRUCTOR_IS_DEPRECATED: () = ();
+
+            let _ = __NESTRS_CONSTRUCTOR_IS_DEPRECATED;
+        }
+    };
+
+    // 将弃用诊断与编译期断言置于函数体开头，使 `-> Self` 与 `-> 当前 impl 类型` 都能通过校验。
     let mut output_item = item;
-    output_item.block.stmts.insert(0, return_type_assertion);
+    output_item.block.stmts.insert(0, deprecation_warning);
+    output_item.block.stmts.insert(1, return_type_assertion);
 
     zyn! {
         {{ output_item }}

@@ -1,3 +1,12 @@
+warning: use of deprecated constant `Service::new::__NESTRS_CONSTRUCTOR_IS_DEPRECATED`: `#[constructor]` Rust暂不支持静态反射，还无法实现该功能，先留下口子，需要自定义构造请先使用 `#[factory]`
+ --> tests/ui/fail/constructor-requires-matching-return-type.rs:7:5
+  |
+7 |     #[constructor]
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+  = note: this warning originates in the attribute macro `constructor` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error[E0308]: mismatched types
  --> tests/ui/fail/constructor-requires-matching-return-type.rs:7:5
   |
