@@ -59,7 +59,7 @@ pub fn injectable(
         Err(diag) => return diag.emit().into(),
     };
 
-    println!("[调试]：解析 `#[injectable]` 参数成功，配置为：\n{config:#?}");
+    // println!("[调试]：解析 `#[injectable]` 参数成功，配置为：\n{config:#?}");
 
     // 结构体名称
     let struct_name = item.ident.clone();
