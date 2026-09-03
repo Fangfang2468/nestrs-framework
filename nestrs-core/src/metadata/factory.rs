@@ -6,9 +6,9 @@ use crate::registration::{
 
 
 #[derive(Debug, Clone)]
-pub struct FieldInjection {
-    /// 注入的字段名称。
-    pub field_name: &'static str,
+pub struct FactoryParameterInjection {
+    /// 参数在函数签名中的位置
+    pub parameter_index: usize,
 
     /// 注入的服务的 [`ServiceIdentifier`]。
     pub service_identifier: ServiceIdentifier,
@@ -17,13 +17,14 @@ pub struct FieldInjection {
     pub optional: bool,
 }
 
+
 #[derive(Debug, Clone)]
-pub struct StructComponent {
+pub struct FactoryComponent {
     /// 服务的类型
     pub service_type: ServiceType,
 
     /// 服务的字段注入
-    pub field_injections: Vec<FieldInjection>,
+    pub parameter_injections: Vec<FactoryParameterInjection>,
 
     /// 当多个 [`ServiceIdentifier`] 能匹配当前服务时（一般常见使用 trait 标注字段类型时的注入），该服务是否是首选服务
     pub primary: bool,
@@ -32,7 +33,6 @@ pub struct StructComponent {
     pub source: ServiceSource,
 }
 
-
 /// 记录使用 `#[injectable]` 注册的服务的元数据。
 #[distributed_slice]
-pub static REFLECT_METADATA_INJECTABLE: [fn() -> StructComponent] = [..];
+pub static REFLECT_METADATA_FACTORY: [fn() -> FactoryComponent] = [..];

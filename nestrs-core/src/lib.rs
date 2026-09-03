@@ -16,5 +16,6 @@ pub mod __private {
     pub use crate::metadata::{
         impl_bind::{InterfaceBinding, REFLECT_METADATA_BIND},
         injectable::{StructComponent, FieldInjection, REFLECT_METADATA_INJECTABLE},
+        factory::{FactoryComponent, FactoryParameterInjection, REFLECT_METADATA_FACTORY},
     };
 }
