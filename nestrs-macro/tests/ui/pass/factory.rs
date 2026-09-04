@@ -1,8 +1,10 @@
 use nestrs_macro::factory;
 
 #[factory]
-fn create() {}
+fn create() -> u8 {
+    1
+}
 
 fn main() {
-    create();
+    let _ = create();
 }

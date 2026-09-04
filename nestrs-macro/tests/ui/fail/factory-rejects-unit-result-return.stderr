@@ -1,0 +1,17 @@
+error: `#[factory]` 标记的函数不能返回成功值为 `()` 的 `Result`
+ --> tests/ui/fail/factory-rejects-unit-result-return.rs:4:36
+  |
+4 | fn bare_result_factory() -> Result<(), &'static str> {
+  |                                    ^^
+
+error: `#[factory]` 标记的函数不能返回成功值为 `()` 的 `Result`
+ --> tests/ui/fail/factory-rejects-unit-result-return.rs:9:52
+  |
+9 | fn core_result_factory() -> ::core::result::Result<(()), &'static str> {
+  |                                                    ^^^^
+
+error: `#[factory]` 标记的函数不能返回成功值为 `()` 的 `Result`
+  --> tests/ui/fail/factory-rejects-unit-result-return.rs:14:43
+   |
+14 | async fn async_result_factory() -> Result<(), &'static str> {
+   |                                           ^^

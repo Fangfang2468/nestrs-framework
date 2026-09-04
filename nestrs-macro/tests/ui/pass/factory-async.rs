@@ -1,6 +1,8 @@
 use nestrs_macro::factory;
 
 #[factory]
-async fn create() {}
+async fn create() -> u8 {
+    1
+}
 
 fn main() {}

@@ -143,13 +143,11 @@ pub fn injectable(
 
 /// 将模块作用域内的私有函数声明为服务工厂函数。
 ///
-/// 支持同步与 `async` 函数；不允许带 `self`、`unsafe` 或 `extern` 的函数。
+/// 支持同步与 `async` 函数；不允许带 `self`、`unsafe` 或 `extern` 的函数。直接返回值、
+/// `Result` 的 `Ok` 类型与显式 `Future::Output` 均不能为 `()`。
 #[cfg(feature = "injection")]
 #[zyn::attribute]
-pub fn factory(
-    #[zyn(input)] item: syn::ItemFn,
-    _args: Args,
-) -> zyn::TokenStream {
+pub fn factory(#[zyn(input)] item: syn::ItemFn, _args: Args) -> zyn::TokenStream {
     if item.sig.receiver().is_some() {
         return syn::Error::new(
             item.sig.ident.span(),
@@ -161,9 +159,16 @@ pub fn factory(
 
     zyn! {
         @RejectUnsafeAndExternFn(macro_name = "factory".to_string(), item = item.clone()) {
-            @RequireModuleScope(ident = Some(item.sig.ident.clone())) {
-                @MustBePrivateFn() {
-                    {{ item }}
+            @RequireNonUnitReturnType(macro_name = "factory".to_string(), item = item.clone()) {
+                @RequireNonUnitResultOkType(macro_name = "factory".to_string(), item = item.clone()) {
+                    @RequireNonUnitFutureOutputType(macro_name = "factory".to_string(), item = item.clone()) {
+                        @RequireModuleScope(ident = Some(item.sig.ident.clone())) {
+                            @MustBePrivateFn() {
+                                #[allow(dead_code)]
+                                {{ item }}
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -1,0 +1,17 @@
+error: `#[factory]` 标记的函数不能返回 `Output` 为 `()` 的 `Future`
+ --> tests/ui/fail/factory-rejects-unit-future-output.rs:6:50
+  |
+6 | fn bare_future_factory() -> impl Future<Output = ()> {
+  |                                                  ^^
+
+error: `#[factory]` 标记的函数不能返回 `Output` 为 `()` 的 `Future`
+  --> tests/ui/fail/factory-rejects-unit-future-output.rs:11:64
+   |
+11 | fn std_future_factory() -> impl ::std::future::Future<Output = ()> {
+   |                                                                ^^
+
+error: `#[factory]` 标记的函数不能返回 `Output` 为 `()` 的 `Future`
+  --> tests/ui/fail/factory-rejects-unit-future-output.rs:16:66
+   |
+16 | fn core_future_factory() -> impl ::core::future::Future<Output = (())> + Send {
+   |                                                                  ^^^^

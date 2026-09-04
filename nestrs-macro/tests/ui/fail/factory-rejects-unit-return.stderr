@@ -1,0 +1,17 @@
+error: `#[factory]` 标记的函数不能返回 `()`
+ --> tests/ui/fail/factory-rejects-unit-return.rs:4:4
+  |
+4 | fn implicit_unit() {}
+  |    ^^^^^^^^^^^^^
+
+error: `#[factory]` 标记的函数不能返回 `()`
+ --> tests/ui/fail/factory-rejects-unit-return.rs:7:23
+  |
+7 | fn explicit_unit() -> () {}
+  |                       ^^
+
+error: `#[factory]` 标记的函数不能返回 `()`
+  --> tests/ui/fail/factory-rejects-unit-return.rs:10:28
+   |
+10 | fn parenthesized_unit() -> (()) {}
+   |                            ^^^^
