@@ -1,0 +1,8 @@
+error[E0599]: no associated function or constant named `__nestrs_construct` found for struct `Service` in the current scope
+  --> tests/ui/fail/injectable-hides-internal-initialization.rs:10:22
+   |
+ 4 | struct Service {
+   | -------------- associated function or constant `__nestrs_construct` not found for this struct
+...
+10 |     let _ = Service::__nestrs_construct();
+   |                      ^^^^^^^^^^^^^^^^^^ associated function or constant not found in `Service`

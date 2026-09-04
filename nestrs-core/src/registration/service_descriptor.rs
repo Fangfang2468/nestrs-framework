@@ -1,13 +1,18 @@
 use crate::{
-    lifetime::Lifetime, registration::{injectable::Injectable, service_key::ServiceKey, service_source::ServiceSource, service_type::ServiceType},
+    construction::Constructor,
+    lifetime::Lifetime,
+    registration::{injectable::Injectable, service_key::ServiceKey, service_source::ServiceSource, service_type::ServiceType},
 };
 
 pub enum ServiceImplementation {
     /// 实例（直接提供服务的具体类型）
     Instance(Box<dyn Injectable>),
 
-    /// 构造工厂函数（传入一个函数用来实例化服务，类型自行）
-    ConstructFactory(fn()),
+    /// 构造工厂函数。
+    ///
+    /// callback 接收已编译的固定位置输入，并返回 owning 的 type-erased concrete
+    /// service；它不再是无法取得字段依赖的 `fn()` 占位。
+    ConstructFactory(Constructor),
 }
 
 /// 描述注册的服务

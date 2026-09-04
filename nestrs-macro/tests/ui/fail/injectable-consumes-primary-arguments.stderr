@@ -1,0 +1,5 @@
+error: `#[primary]` 不接受参数
+ --> tests/ui/fail/injectable-consumes-primary-arguments.rs:6:25
+  |
+6 | #[nestrs_macro::primary(Interface)]
+  |                         ^^^^^^^^^
