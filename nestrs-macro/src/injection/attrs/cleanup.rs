@@ -1,4 +1,7 @@
-use zyn::{Arg, syn::{Expr, ExprLit, Lit, Path, spanned::Spanned}};
+use zyn::{
+    syn::{spanned::Spanned, Expr, ExprLit, Lit, Path},
+    Arg,
+};
 
 #[derive(Debug, Clone)]
 pub struct CleanupPath {
@@ -22,27 +25,21 @@ impl zyn::FromArg for CleanupPath {
                             })
                     }
                     _ => {
-                        return Err(
-                            zyn::mark::error("cleanup = ... 期望一个函数路径字面量")
-                                .span(lit.span())
-                                .build()
-                        )
+                        return Err(zyn::mark::error("cleanup = ... 期望一个函数路径字面量")
+                            .span(lit.span())
+                            .build());
                     }
-                }
+                },
                 _ => {
-                    return Err(
-                        zyn::mark::error("cleanup = ... 期望一个函数路径字面量")
-                            .span(expr.span())
-                            .build()
-                    )
+                    return Err(zyn::mark::error("cleanup = ... 期望一个函数路径字面量")
+                        .span(expr.span())
+                        .build());
                 }
             }
         } else {
-            Err(
-                zyn::mark::error("cleanup 参数格式填写错误")
-                    .span(arg.span())
-                    .build()
-            )
+            Err(zyn::mark::error("cleanup 参数格式填写错误")
+                .span(arg.span())
+                .build())
         }
     }
 }

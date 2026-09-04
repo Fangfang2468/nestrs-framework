@@ -1,5 +1,7 @@
-use zyn::{Arg, FromArg, syn::{Expr, Lit, ExprLit, spanned::Spanned}};
-
+use zyn::{
+    syn::{spanned::Spanned, Expr, ExprLit, Lit},
+    Arg, FromArg,
+};
 
 /// 属性宏在编译期使用的生命周期配置。
 ///
@@ -16,13 +18,16 @@ pub enum ServiceLifetime {
 }
 
 impl FromArg for ServiceLifetime {
-
     fn from_arg(arg: &zyn::Arg) -> zyn::Result<Self> {
-        
         // 提取出原始写法，例如 "scoped" / Scoped / scoped / ServiceLifetime::Scoped
         let raw: String = match arg {
             // lifetime = "scoped"
-            Arg::Expr(_, Expr::Lit(ExprLit { lit: Lit::Str(s), .. })) => s.value(),
+            Arg::Expr(
+                _,
+                Expr::Lit(ExprLit {
+                    lit: Lit::Str(s), ..
+                }),
+            ) => s.value(),
             Arg::Lit(Lit::Str(s)) => s.value(),
 
             // lifetime = Scoped / lifetime = scoped / lifetime = ServiceLifetime::Scoped
@@ -36,22 +41,17 @@ impl FromArg for ServiceLifetime {
                 );
             }
         };
-        
 
         // 统一转 snake_case：Scoped / SCOPED / scoped → "scoped"
         let key = zyn::case::to_snake(&raw);
-        
 
         match key.as_str() {
             "singleton" => Ok(Self::Singleton),
             "scoped" => Ok(Self::Scoped),
             "transient" => Ok(Self::Transient),
-            other => Err(
-                zyn::mark::error(format!("未知的生命周期 `{other}`"))
-                    .span(arg.span())
-                    .build(),
-            ),
+            other => Err(zyn::mark::error(format!("未知的生命周期 `{other}`"))
+                .span(arg.span())
+                .build()),
         }
-
     }
 }

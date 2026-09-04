@@ -13,7 +13,6 @@ mod injection;
 
 mod utility;
 
-
 use zyn::{
     meta::Args,
     syn::{self, spanned::Spanned},
@@ -187,10 +186,7 @@ pub fn factory(#[zyn(input)] item: syn::ItemFn, _args: Args) -> zyn::TokenStream
     note = "`#[constructor]` Rust暂不支持静态反射，还无法实现该功能，先留下口子，需要自定义构造请先使用 `#[factory]`"
 )]
 #[zyn::attribute]
-pub fn constructor(
-    #[zyn(input)] item: syn::ItemFn,
-    args: Args,
-) -> zyn::TokenStream {
+pub fn constructor(#[zyn(input)] item: syn::ItemFn, args: Args) -> zyn::TokenStream {
     let macro_name = "constructor".to_owned();
 
     if let Some(arg) = args.iter().next() {

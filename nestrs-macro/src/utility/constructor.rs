@@ -5,7 +5,10 @@ use zyn::{
 
 /// 解析 children 中的构造函数，校验签名并注入返回类型断言。
 #[zyn::element]
-pub(crate) fn check_constructor(macro_name: String, children: zyn::TokenStream) -> zyn::TokenStream {
+pub(crate) fn check_constructor(
+    macro_name: String,
+    children: zyn::TokenStream,
+) -> zyn::TokenStream {
     let item: syn::ItemFn = match syn::parse2(children.clone()) {
         Ok(item) => item,
         Err(error) => return error.into_compile_error().into(),

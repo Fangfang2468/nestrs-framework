@@ -2,7 +2,7 @@ use crate::injection::attrs::{
     cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKey,
 };
 
-use zyn::{Attribute};
+use zyn::Attribute;
 
 // #[zyn("injectable")] 表示解析 #[injectable(...)] 的参数
 // #[zyn(default)] / #[zyn(default = "...")] 允许参数缺省
