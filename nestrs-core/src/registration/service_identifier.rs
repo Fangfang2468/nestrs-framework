@@ -1,5 +1,5 @@
 use crate::registration::{
-    service_descriptor::ServiceDescriptor, service_key::ServiceKey, service_type::ServiceType,
+    service_key::ServiceKey, service_type::ServiceType,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -23,17 +23,5 @@ impl ServiceIdentifier {
 impl From<ServiceType> for ServiceIdentifier {
     fn from(value: ServiceType) -> Self {
         Self::new(None, value)
-    }
-}
-
-impl From<ServiceDescriptor> for ServiceIdentifier {
-    fn from(value: ServiceDescriptor) -> Self {
-        let ServiceDescriptor {
-            service_key,
-            service_type,
-            ..
-        } = value;
-
-        Self::new(service_key, service_type)
     }
 }
