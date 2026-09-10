@@ -1,0 +1,5 @@
+error: `#[factory]` 不支持泛型函数；请返回具体服务类型
+ --> tests/ui/fail/factory-rejects-generic-function.rs:4:19
+  |
+4 | fn generic_factory<T>() -> u8 {
+  |                   ^^^

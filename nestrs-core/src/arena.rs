@@ -6,7 +6,7 @@
 
 use std::{
     alloc::{Layout, alloc, dealloc},
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     num::NonZeroUsize,
     ptr::NonNull,
 };
@@ -99,7 +99,6 @@ pub struct Arena {
     allocations: Vec<RawAllocation>,
     services: HashMap<ServiceIdentifier, ArenaServiceRef>,
     drop_log: Vec<DropEntry>,
-    building: HashSet<ServiceIdentifier>,
 }
 
 impl Arena {
@@ -109,7 +108,6 @@ impl Arena {
             allocations: Vec::new(),
             services: HashMap::new(),
             drop_log: Vec::new(),
-            building: HashSet::new(),
         }
     }
 
@@ -151,8 +149,8 @@ impl Arena {
 
     /// 手工向 Arena 提交一个 concrete 根实例。
     ///
-    /// 该入口适合没有 `#[injectable]` 构造器的外部根对象；正常服务构造应通过
-    /// `ServiceCollection` 与宏生成 constructor 完成。
+    /// 该入口适合手工装配 concrete 根对象，或供未来激活器提交已经构造的服务；
+    /// `Arena` 本身不负责服务激活。
     pub fn insert<T>(&mut self, identifier: ServiceIdentifier, value: T) -> Result<(), ArenaError>
     where
         T: Injectable,
@@ -163,22 +161,10 @@ impl Arena {
     /// 返回供 core 内部字段输入 ABI 消费的类型擦除服务引用。
     ///
     /// 此入口不能向下游 crate 公开：否则调用方可以先准备一个 `Inject<T>`，再丢弃
-    /// Arena，从安全代码中制造悬垂指针。宏只在 metadata 中保存 `prepare_input` 函数项，
-    /// 实际查找与调用始终由本 crate 的实例化 runtime 完成。
+    /// Arena，从安全代码中制造悬垂指针。宏只在 `Provider` 中保存 `prepare_input` 函数项，
+    /// 实际查找与调用将由本 crate 的未来激活器完成。
     pub(crate) fn lookup(&self, identifier: ServiceIdentifier) -> Option<ArenaServiceRef> {
         self.services.get(&identifier).copied()
-    }
-
-    /// 标记服务正在构造，用于阻止递归激活无限重入。
-    ///
-    /// 这不是依赖图构建或图验证；它只保护单次按需递归实例化不会因运行时重入耗尽栈。
-    pub(crate) fn begin_building(&mut self, identifier: ServiceIdentifier) -> bool {
-        self.building.insert(identifier)
-    }
-
-    /// 在一次构造尝试结束后清除运行期重入标记。
-    pub(crate) fn finish_building(&mut self, identifier: ServiceIdentifier) {
-        self.building.remove(&identifier);
     }
 
     /// 将宏构造 adapter 返回的具体服务移动至稳定 Arena 地址并发布其身份。
@@ -286,11 +272,40 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     use super::*;
+    use crate::{
+        construction::{
+            ConstructionContext, InputPosition, prepare_bound_optional, prepare_bound_required,
+        },
+        inject_wrapper::Inject,
+    };
 
     static DROP_ORDER: OnceLock<Mutex<Vec<&'static str>>> = OnceLock::new();
 
     struct First;
     struct Second;
+
+    trait Mailer: Send + Sync {
+        fn label(&self) -> &'static str;
+        fn address(&self) -> usize;
+    }
+
+    struct SmtpMailer {
+        label: &'static str,
+    }
+
+    impl Mailer for SmtpMailer {
+        fn label(&self) -> &'static str {
+            self.label
+        }
+
+        fn address(&self) -> usize {
+            self as *const Self as usize
+        }
+    }
+
+    fn project_smtp_mailer(value: &SmtpMailer) -> &(dyn Mailer + 'static) {
+        value
+    }
 
     impl Drop for First {
         fn drop(&mut self) {
@@ -372,5 +387,47 @@ mod tests {
             .get_by_identifier::<String>(identifier)
             .expect("service should remain readable") as *const String;
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn bound_inputs_keep_the_trait_vtable_and_concrete_arena_address() {
+        let identifier = ServiceIdentifier::from(ServiceType::create::<SmtpMailer>());
+        let mut arena = Arena::new();
+        arena
+            .insert(identifier, SmtpMailer { label: "smtp" })
+            .expect("concrete provider should commit to the arena");
+
+        let mut required_context = ConstructionContext::new();
+        prepare_bound_required::<SmtpMailer, dyn Mailer>(
+            &mut required_context,
+            InputPosition(0),
+            arena.lookup(identifier),
+            project_smtp_mailer,
+        )
+        .expect("typed projector should prepare the required trait input");
+        let required: Inject<dyn Mailer> = required_context
+            .take(InputPosition(0))
+            .expect("required trait token should be consumable");
+
+        let mut optional_context = ConstructionContext::new();
+        prepare_bound_optional::<SmtpMailer, dyn Mailer>(
+            &mut optional_context,
+            InputPosition(0),
+            arena.lookup(identifier),
+            project_smtp_mailer,
+        )
+        .expect("typed projector should prepare the optional trait input");
+        let optional: Inject<dyn Mailer> = optional_context
+            .take_optional(InputPosition(0))
+            .expect("optional trait token should be consumable")
+            .expect("present concrete provider should yield a trait token");
+
+        let concrete = arena
+            .get::<SmtpMailer>()
+            .expect("concrete provider should remain in the arena");
+        assert_eq!(required.label(), "smtp");
+        assert_eq!(optional.label(), "smtp");
+        assert_eq!(required.address(), concrete.address());
+        assert_eq!(optional.address(), concrete.address());
     }
 }

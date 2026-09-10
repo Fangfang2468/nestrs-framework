@@ -21,9 +21,16 @@ use zyn::{
 
 #[cfg(feature = "injection")]
 use crate::injection::{
-    attrs::primary::{DeferPrimaryToInjectable, PrimaryConfig, take_primary_for_injectable},
+    attrs::primary::{
+        DeferPrimaryToFactory, DeferPrimaryToInjectable, PrimaryConfig,
+        take_primary_for_factory, take_primary_for_injectable,
+    },
+    bind::EmitBoundProvider,
+    factory::{
+        EmitFactoryProvider, RewriteFactorySignature, analyze_factory, parse_factory_config,
+    },
     injectable::{
-        CollectInjectableMetadata, DefineGenericInjectableComponent, EmitInjectableRegistration,
+        CollectInjectableProvider, DefineGenericInjectableProvider, EmitInjectableRegistration,
         GenerateInjectableConstructor, RewriteInjectionField, analyze_fields,
         config::InjectableConfig,
     },
@@ -32,7 +39,7 @@ use crate::injection::{
 use crate::utility::{
     CheckConstructor, CheckInterfaceType, MustBePrivateFn, RejectUnsafeAndExternFn,
     RejectUnsafeImpl, RequireModuleScope, RequireNonUnitFutureOutputType,
-    RequireNonUnitResultOkType, RequireNonUnitReturnType, ShouldBeAsyncFn, impl_self_ident,
+    RequireNonUnitResultOkType, RequireNonUnitReturnType, impl_self_ident,
 };
 
 #[cfg(feature = "injection")]
@@ -45,7 +52,7 @@ use crate::utility::{
 /// 会在需要时通过 `Into<字段类型>` 转换，因此 `String` 字段可直接写
 /// `#[value("name")]`。
 ///
-/// 该 adapter 不是类型成员且只由 linkme metadata 持有函数指针，因而用户不能以
+/// 该 adapter 不是类型成员且只由 linkme Provider 持有函数指针，因而用户不能以
 /// `Service::__nestrs_construct(...)` 调用。由于它仍是非捕获函数，`#[value]` 不能
 /// 引用调用点局部变量或另一字段；表达式必须能转换为字段类型。
 #[zyn::attribute]
@@ -97,28 +104,17 @@ pub fn injectable(
     let scope_ident = Some(analyzed_fields.item.ident.clone());
     let is_open_generic_provider = !analyzed_fields.item.generics.params.is_empty();
 
-    // cleanup 函数路径（可选）。保留 config 本身，供字段元数据收集器写入
-    // provider 的 key 和 lifetime。
-    let cleanup_path = config
-        .cleanup
-        .as_ref()
-        .map(|cleanup| cleanup.func_path.clone());
-
-    // 字段定义、构造 adapter 与 metadata 是三个独立的输出职责。注册 scope 只
+    // 字段定义、构造 adapter 与 Provider 注册是三个独立的输出职责。注册 scope 只
     // 接收后两者作为 children，明确它们必须共享匿名词法作用域，避免把 helper
     // 暴露为用户可调用的 inherent method。
     zyn! {
         @RequireModuleScope(ident = scope_ident) {
-            @if (cleanup_path.is_some()) {
-                @ShouldBeAsyncFn(function_path = cleanup_path.clone().unwrap())
-            }
-
             @RewriteInjectionField(
                 analysis = analyzed_fields.clone(),
             )
             @if (is_open_generic_provider) {
                 {{ primary_attribute_use }}
-                @DefineGenericInjectableComponent(
+                @DefineGenericInjectableProvider(
                     analysis = analyzed_fields,
                     config = config,
                     primary = primary.is_primary(),
@@ -129,7 +125,7 @@ pub fn injectable(
                     @GenerateInjectableConstructor(
                         analysis = analyzed_fields.clone(),
                     )
-                    @CollectInjectableMetadata(
+                    @CollectInjectableProvider(
                         analysis = analyzed_fields,
                         config = config,
                         primary = primary.is_primary(),
@@ -146,26 +142,45 @@ pub fn injectable(
 /// `Result` 的 `Ok` 类型与显式 `Future::Output` 均不能为 `()`。
 #[cfg(feature = "injection")]
 #[zyn::attribute]
-pub fn factory(#[zyn(input)] item: syn::ItemFn, _args: Args) -> zyn::TokenStream {
-    if item.sig.receiver().is_some() {
-        return syn::Error::new(
-            item.sig.ident.span(),
-            "`#[factory]` 只能标注普通函数，不能用于带 `self` 的 impl 方法",
-        )
-        .into_compile_error()
-        .into();
-    }
+pub fn factory(#[zyn(input)] item: syn::ItemFn, args: Args) -> zyn::TokenStream {
+    let config = match parse_factory_config(&args) {
+        Ok(config) => config,
+        Err(error) => return error.emit().into(),
+    };
+
+    // `factory` 与 `injectable` 使用同一个 primary 交接模式：若 primary 位于下方，
+    // 这里直接消费原属性；若 primary 位于上方，则消费 primary 宏留下的私有 marker。
+    // 这一步必须发生在签名分析前，避免 marker 被当成非法参数属性或泄漏到最终函数。
+    let mut item = item;
+    let primary = match take_primary_for_factory(&mut item.attrs) {
+        Ok(primary) => primary,
+        Err(error) => return error.into_compile_error().into(),
+    };
+    let primary_attribute_use = primary.consumed_attribute_use();
+
+    let analysis = match analyze_factory(item) {
+        Ok(analysis) => analysis,
+        Err(error) => return error.into_compile_error().into(),
+    };
+    let scope_ident = Some(analysis.item.sig.ident.clone());
 
     zyn! {
-        @RejectUnsafeAndExternFn(macro_name = "factory".to_string(), item = item.clone()) {
-            @RequireNonUnitReturnType(macro_name = "factory".to_string(), item = item.clone()) {
-                @RequireNonUnitResultOkType(macro_name = "factory".to_string(), item = item.clone()) {
-                    @RequireNonUnitFutureOutputType(macro_name = "factory".to_string(), item = item.clone()) {
-                        @RequireModuleScope(ident = Some(item.sig.ident.clone())) {
+        @RejectUnsafeAndExternFn(macro_name = "factory".to_string(), item = analysis.item.clone()) {
+            @RequireNonUnitReturnType(macro_name = "factory".to_string(), item = analysis.item.clone()) {
+                @RequireNonUnitResultOkType(macro_name = "factory".to_string(), item = analysis.item.clone()) {
+                    @RequireNonUnitFutureOutputType(macro_name = "factory".to_string(), item = analysis.item.clone()) {
+                        @RequireModuleScope(ident = scope_ident) {
+                            {{ primary_attribute_use }}
                             @MustBePrivateFn() {
-                                #[allow(dead_code)]
-                                {{ item }}
+                                @RewriteFactorySignature(
+                                    analysis = analysis.clone(),
+                                )
                             }
+                            @EmitFactoryProvider(
+                                analysis = analysis.clone(),
+                                config = config,
+                                primary = primary.is_primary(),
+                            )
                         }
                     }
                 }
@@ -216,6 +231,14 @@ pub fn constructor(#[zyn(input)] item: syn::ItemFn, args: Args) -> zyn::TokenStr
 pub fn primary(#[zyn(input)] item: syn::Item, args: Args) -> zyn::TokenStream {
     let macro_name = "primary".to_owned();
     let primary_config = PrimaryConfig::from_args(&args);
+    let function_has_factory = matches!(
+        &item,
+        syn::Item::Fn(function)
+            if function
+                .attrs
+                .iter()
+                .any(|attribute| attribute.path().is_ident("factory"))
+    );
 
     fn reject(span: ::zyn::proc_macro2::Span, message: &str) -> ::zyn::proc_macro2::TokenStream {
         syn::Error::new(span, message).into_compile_error()
@@ -227,20 +250,30 @@ pub fn primary(#[zyn(input)] item: syn::Item, args: Args) -> zyn::TokenStream {
                 @match (item) {
                     // 函数标记：条件与 `#[factory]` 相同。
                     syn::Item::Fn(item) => {
-                        @if (item.sig.receiver().is_some()) {
-                            {{ reject(item.sig.ident.span(), "`#[primary]` 只能标注普通函数，不能用于带 `self` 的 impl 方法") }}
+                        // `primary` 在 `factory` 上方时，factory 尚未展开。只追加
+                        // 内部 marker，交由 factory 统一生成一个 Provider::Factory；
+                        // 不能在此处独立生成注册项。
+                        @if (function_has_factory) {
+                            @DeferPrimaryToFactory(
+                                item = item.clone(),
+                                primary = primary.clone(),
+                            )
                         } @else {
-                            @RejectUnsafeAndExternFn(macro_name = macro_name.clone(), item = item.clone()) {
-                                @RequireModuleScope(ident = Some(item.sig.ident.clone())) {
-                                    @MustBePrivateFn() {
-                                        {{ item }}
+                            @if (item.sig.receiver().is_some()) {
+                                {{ reject(item.sig.ident.span(), "`#[primary]` 只能标注普通函数，不能用于带 `self` 的 impl 方法") }}
+                            } @else {
+                                @RejectUnsafeAndExternFn(macro_name = macro_name.clone(), item = item.clone()) {
+                                    @RequireModuleScope(ident = Some(item.sig.ident.clone())) {
+                                        @MustBePrivateFn() {
+                                            {{ item }}
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                     // `primary` 位于 `injectable` 上方时，后者尚未展开。此
-                    // element 追加 marker，交由 injectable 收集为 StructComponent::primary。
+                    // element 追加 marker，交由 injectable 收集为 ProviderCommon::primary。
                     syn::Item::Struct(item) => {
                         @RequireModuleScope(ident = Some(item.ident.clone())) {
                             @DeferPrimaryToInjectable(
@@ -306,64 +339,10 @@ pub fn bind(
             @RequireModuleScope(ident = impl_self_ident(&item)) {
                 @CheckInterfaceType(interface = interface.clone()) {
                     {{ item }}
-
-                    const _: () = {
-                        fn __nestrs_project_bound_service(
-                            service: &{{ service }}
-                        ) -> &(dyn {{ interface }} + 'static) {
-                            let projected: &(dyn {{ interface }} + 'static) = service;
-                            projected
-                        }
-
-                        fn __nestrs_prepare_bound_required(
-                            context: &mut ::nestrs_core::__private::ConstructionContext,
-                            position: ::nestrs_core::__private::InputPosition,
-                            input: ::core::option::Option<::nestrs_core::__private::ArenaServiceRef>,
-                        ) -> ::core::result::Result<(), ::nestrs_core::__private::ActivationError> {
-                            ::nestrs_core::__private::prepare_bound_required::<
-                                {{ service }},
-                                dyn {{ interface }},
-                            >(
-                                context,
-                                position,
-                                input,
-                                __nestrs_project_bound_service,
-                            )
-                        }
-
-                        fn __nestrs_prepare_bound_optional(
-                            context: &mut ::nestrs_core::__private::ConstructionContext,
-                            position: ::nestrs_core::__private::InputPosition,
-                            input: ::core::option::Option<::nestrs_core::__private::ArenaServiceRef>,
-                        ) -> ::core::result::Result<(), ::nestrs_core::__private::ActivationError> {
-                            ::nestrs_core::__private::prepare_bound_optional::<
-                                {{ service }},
-                                dyn {{ interface }},
-                            >(
-                                context,
-                                position,
-                                input,
-                                __nestrs_project_bound_service,
-                            )
-                        }
-
-                        #[::nestrs_core::__private::linkme::distributed_slice(
-                            ::nestrs_core::__private::REFLECT_METADATA_BIND
-                        )]
-                        #[linkme(crate = ::nestrs_core::__private::linkme)]
-                        fn __nestrs_reflect_metadata_bind()
-                            -> ::nestrs_core::__private::InterfaceBinding
-                        {
-                            ::nestrs_core::__private::InterfaceBinding {
-                                service_type: ::nestrs_core::registration::service_type::ServiceType::create::<{{ service }}>(),
-                                trait_type: ::nestrs_core::registration::service_type::ServiceType::create::<dyn {{ interface }}>(),
-                                prepare_required: __nestrs_prepare_bound_required,
-                                prepare_optional: __nestrs_prepare_bound_optional,
-                            }
-                        }
-
-                        ()
-                    };
+                    @EmitBoundProvider(
+                        service = (*service).clone(),
+                        interface = interface.clone(),
+                    )
                 }
             }
         }

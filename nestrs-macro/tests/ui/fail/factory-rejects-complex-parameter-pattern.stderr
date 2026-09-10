@@ -1,0 +1,5 @@
+error: `#[factory]` 参数只支持简单标识符模式，例如 `database: Database`
+ --> tests/ui/fail/factory-rejects-complex-parameter-pattern.rs:4:26
+  |
+4 | fn destructuring_factory((left, right): (u8, u8)) -> u8 {
+  |                          ^^^^^^^^^^^^^

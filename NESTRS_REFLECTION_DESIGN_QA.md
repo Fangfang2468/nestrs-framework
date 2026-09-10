@@ -22,7 +22,9 @@
 
 **A：**
 
-当前仓库是一个“可运行的 `#[injectable]` 最小闭环”，但还不是完整 DI 框架。
+当前仓库保留了 `#[injectable]`、`#[bind]` 与 `#[factory]` 的 Provider 宏、统一
+linkme 注册 ABI 与 Arena 构造 ABI，但尚未提供服务
+activation runtime，因此还不是可端到端实例化的 DI 框架。
 
 现有 workspace 成员：
 
@@ -43,76 +45,66 @@ nestrs-macro
 ```text
 #[injectable] / #[bind] 宏
         ↓
-生成 AST、构造 adapter、反射元数据
+生成 AST、构造 adapter、Provider 定义
         ↓
 linkme 收集
         ↓
-ServiceCollection
-        ↓
-Arena 实例化
+供未来 Provider-first activation runtime 消费
 ```
 
-`cargo test --workspace --all-features` 当前通过，覆盖了：
+当前测试覆盖的 ABI 包括：
 
 - Arena 稳定地址
 - 逆序析构
 - `Inject<T>` 读取
-- 必选 / 可选依赖
-- `#[bind]` trait 投影
-- primary 候选
-- key 继承
-- 闭合泛型 provider
-- 运行时重入检测
+- 预绑定构造输入
+- `#[bind]` 的 typed trait 投影
+- 闭合泛型 Provider callback
+- Class、Bound 与 Factory Provider 的统一 linkme 收集
+- 同步与异步 Factory invoker ABI
 
 但以下能力尚未完整落地：
 
-- `#[factory]` 仅做语法校验，不注册服务
+- `Provider` 只描述注册意图，尚未执行 provider 选择或激活
 - `Lifetime` 只被记录，没有被运行时执行
-- cleanup 只做 async 校验，没有被调用
+- cleanup 会被记录为 async hook，但尚未被调用
+- 没有 Provider activation / resolve runtime
 - 没有全局注册表 / 编译图
 - 没有 async 构造和并发激活
 - 没有 scope 和 transient 语义
 
 ---
 
-### Q2：`ServiceDescriptor` 为什么看起来没有参与实例化？
+### Q2：`Provider` 为什么当前没有被 activation runtime 消费？
 
 **A：**
 
-你的观察正确。当前运行时的主要路径是：
+你的观察正确。旧的递归激活器已经移除；
+当前没有运行时激活路径：
 
 ```text
-linkme 收集
+linkme 收集的 `Provider`
         ↓
-Vec<StructComponent>
-        ↓
-ServiceCollection::instantiate()
+等待未来 Provider-first activation runtime
 ```
 
-而 `ServiceDescriptor` 的定义位于：
+Provider ABI 位于：
 
 ```text
-nestrs-core/src/registration/service_descriptor.rs
+nestrs-core/src/registration/provider.rs
 ```
 
-它当前没有被 `ServiceCollection` 持有或消费。唯一使用它的是：
-
-```rust
-impl From<ServiceDescriptor> for ServiceIdentifier
-```
-
-因此它目前更像一个遗留/预留模型。
-
-`StructComponent` 之所以被直接使用，是因为它已经包含了：
+`Provider::Class`、`Provider::Factory`、`Provider::Bound` 与 `Provider::Alias`
+统一描述注册/构造 ABI，尚无 activation runtime 直接消费它们。Class / Factory
+provider 共同保留：
 
 - 服务身份
-- 生命周期
-- 字段依赖
-- 构造 adapter 函数指针
-- primary
-- source
+- `ProviderCommon`（生命周期、primary、source、cleanup）
+- `InjectionSpec` 依赖列表
+- 结构体构造 adapter 或 factory invoker
 
-也就是说，`StructComponent` 本身已经是“宏生成的反射对象”，只是没有先转换成注册意图。
+也就是说，它们是未来 Provider 模型可复用的“宏生成注册对象”，但不能被误认为
+当前已经可解析服务的运行时容器。
 
 ---
 
@@ -120,8 +112,8 @@ impl From<ServiceDescriptor> for ServiceIdentifier
 
 > **重要澄清：反射层与注入语义层不能混为一谈。**
 >
-> 当前代码中的 `FieldInjection`、`FactoryParameterInjection`、`prepare_input`、
-> `Constructor`、`StructComponent` 等，属于“DI 注入语义”和“provider 注册信息”，
+> 当前代码中的 `InjectionSpec`、`prepare_input`、`Constructor`、`FactoryInvoker` 等，
+> 属于“DI 注入语义”和“provider 注册信息”，
 > 它们不是通用的“类型反射”。
 >
 > 本文后文为了与现有代码衔接，暂时把 `ComponentReflection` 当作“provider 注册 +
@@ -143,10 +135,10 @@ impl From<ServiceDescriptor> for ServiceIdentifier
 > 而是：
 >
 > ```text
-> RegisteredProvider
->     = ServiceDescriptor
->     + ProviderSemantics
->     + ProviderInvoker
+> Provider
+>     = ProviderCommon
+>     + InjectionSpec[]
+>     + Constructor | FactoryInvoker | Bound projector
 > ```
 >
 > `Type / ReflectionRegistry` 保留为“已注册类型的辅助查询能力”，
@@ -167,7 +159,7 @@ Provider 元数据统一描述：
 
 ```text
 token / ServiceIdentifier
-implementation / ProviderKind
+implementation / Provider variant
 dependencies / InjectionSpec[]
 invoker / ProviderInvoker
 lifecycle / Lifetime
@@ -175,27 +167,29 @@ selection / primary + key
 source / ServiceSource
 ```
 
-典型 ProviderKind：
+当前 Provider 形态：
 
 ```rust
-pub enum ProviderKind {
-    Injectable,
+pub enum Provider {
+    Class,
     Factory,
-    Generic,
-    Instance,
+    Bound,
     Alias,
 }
 ```
+
+开放泛型不作为 `Provider` 枚举变体注册；它通过 `ProviderDefinition::provider()` 与
+注入点中的已单态化 callback 在需要时生成闭合 `Provider::Class`。
 
 这个模型与 NestJS 的 Provider 概念非常接近：
 
 | NestJS | Nestrs 建议 |
 |---|---|
 | `@Injectable()` | `#[injectable]` |
-| `useClass` | `ProviderKind::Injectable` |
-| `useFactory` | `ProviderKind::Factory` |
-| `useValue` | `ProviderKind::Instance` |
-| `useExisting` | `ProviderKind::Alias` |
+| `useClass` | `Provider::Class` |
+| `useFactory` | `Provider::Factory` |
+| `useValue` | 尚未实现 |
+| `useExisting` | `Provider::Alias` |
 | `InjectionToken` | `ServiceIdentifier` |
 | `@Inject` | `#[inject]` |
 | `@Optional` | optional injection |
@@ -247,41 +241,41 @@ ServiceIdentifier = token
 Provider = 不同 provider 变体组成的元数据
 ```
 
-建议核心结构：
+当前核心 ABI：
 
 ```rust
 pub struct ProviderCommon {
     pub lifetime: Lifetime,
     pub primary: bool,
     pub source: ServiceSource,
+    pub cleanup: Option<CleanupHook>,
 }
 
 pub enum Provider {
-    Injectable {
-        token: ServiceIdentifier,
+    Class {
+        provide: ServiceIdentifier,
         common: ProviderCommon,
-        dependencies: &'static [InjectionSpec],
+        dependencies: Vec<InjectionSpec>,
         constructor: Constructor,
     },
     Factory {
-        token: ServiceIdentifier,
+        provide: ServiceIdentifier,
         common: ProviderCommon,
-        parameters: &'static [InjectionSpec],
+        dependencies: Vec<InjectionSpec>,
         invoker: FactoryInvoker,
     },
-    Generic {
-        family: GenericFamily,
-        common: ProviderCommon,
-        close: ?,
-    },
-    Instance {
-        token: ServiceIdentifier,
-        common: ProviderCommon,
-        value: InstanceValue,
+    Bound {
+        trait_type: ServiceType,
+        concrete_type: ServiceType,
+        key_policy: BoundKeyPolicy,
+        prepare_required: PrepareInput,
+        prepare_optional: PrepareInput,
+        source: ServiceSource,
     },
     Alias {
-        token: ServiceIdentifier,
+        provide: ServiceIdentifier,
         target: ServiceIdentifier,
+        source: ServiceSource,
     },
 }
 ```
@@ -311,19 +305,19 @@ linkme 自动收集
 用户不需要手动注册
 ```
 
-### 迁移策略：metadata 模块应被 Provider 替代
+### 已完成迁移：metadata 模块已由 Provider 替代
 
-当前 `nestrs-core/src/metadata` 中的类型不应继续作为独立中间层保留，
-而应迁移到 Provider 体系：
+原 `nestrs-core/src/metadata` 的 DTO 已删除；其语义已直接迁移到 Provider
+体系：
 
-| 当前 metadata | 新归属 |
+| 旧 metadata DTO | 新归属 |
 |---|---|
 | `StructComponent` | `Provider::Class` |
-| `FieldInjection` | `InjectionSpec` / `DependencyRequest` |
-| `ComponentDefinition` | `Provider::Generic` / 内部 generic closer |
+| `FieldInjection` | `InjectionSpec` |
+| `ComponentDefinition` | `ProviderDefinition` + `ClosedProviderCallback` |
 | `FactoryComponent` | `Provider::Factory` |
 | `FactoryParameterInjection` | `InjectionSpec` |
-| `InterfaceBinding` | `Provider::Bound` / `BindingRegistration` |
+| `InterfaceBinding` | `Provider::Bound` |
 | `REFLECT_METADATA_*` | 单一 `REFLECTED_PROVIDERS` |
 
 迁移后，宏可以直接生成：
@@ -341,19 +335,20 @@ fn __nestrs_provider() -> Provider {
 linkme 只需要：
 
 ```rust
-#[distributed_slice(REFLECTED_PROVIDERS)]
-static REFLECTED_PROVIDERS: [fn() -> Provider] = [..];
+#[distributed_slice]
+pub static REFLECTED_PROVIDERS: [fn() -> Provider] = [..];
 ```
 
 因此：
 
 ```text
-nestrs-core/src/metadata
+nestrs-core/src/metadata（已删除）
     ↓
-nestrs-core/src/provider
+nestrs-core/src/registration/provider.rs
 ```
 
-`metadata` 模块可以在完成迁移后删除。
+开放泛型不会生成 `Provider::Generic`；它由 `ProviderDefinition::provider()` 在
+已经单态化的注入点生成闭合 `Provider::Class`。
 
 注意：`ServiceType`、`ServiceIdentifier`、`ServiceKey`、`Lifetime`、
 `ServiceSource` 仍属于身份/注册公共模型，放在 `registration` 或 `provider`
@@ -373,7 +368,8 @@ nestrs-core/src/provider
     表达：怎么构造、有哪些依赖、泛型如何闭合、trait 如何投影
 ```
 
-当前 `ServiceDescriptor` 与 `StructComponent` 都包含了一部分两者混合的信息。
+当前 `Provider` 把共享声明属性收拢到 `ProviderCommon`，并把构造依赖收拢到
+`InjectionSpec`；它不等同于通用类型反射。
 
 典型混合点：
 
@@ -686,7 +682,7 @@ struct UserService {
 | 普通具体类型注入 | ✅ | `TypeId` + `ServiceIdentifier` |
 | `Repository<User>` 闭合注入 | ✅ | `TypeId<Repository<User>>` |
 | 多个闭合泛型实例区分 | ✅ | `TypeId` 不同 |
-| Open Generic 模板注册 | ✅ 有限 | 宏 + `ComponentDefinition` |
+| Open Generic 模板注册 | ✅ 有限 | `ProviderDefinition` + 注入点闭合 callback |
 | 泛型 trait 绑定 | ✅ 有限 | 宏为闭合类型生成投影 |
 | key / primary + 泛型 | ✅ | `ServiceIdentifier` |
 | 嵌套泛型结构匹配 | ⚠️ 有限 | 宏生成的 `TypeReflection` |
@@ -922,7 +918,7 @@ Activator.CreateInstance(type, args)
 ```text
 ReflectionRegistry::collect()
         ↓
-ServiceCollection::create()
+Provider-first 注册与候选选择
         ↓
 compile()
         ↓
@@ -943,24 +939,12 @@ provider.get::<UserController>()
 
 **A：**
 
-不是。
+不是。当前 `Arena` 只是稳定地址存储与析构顺序的低层构造 ABI。它可保存
+已经构造的实例，但不公开服务选择、递归依赖解析或缓存生命周期策略；
+旧的递归激活器也不再存在。因此它不是长期容器，更不是可直接调用的服务实例化
+入口。
 
-当前：
-
-```rust
-collection.instantiate::<A>()
-collection.instantiate::<B>()
-```
-
-每次调用都会创建新的 `Arena`。
-
-这意味着：
-
-- 两次调用之间 singleton 不共享
-- 更像“一次构造会话”
-- 不是“全局长生命周期容器”
-
-引入 `ServiceProvider` 后，应改为：
+未来引入 `ServiceProvider` 等 Provider-first activation runtime 后，才应由它持有：
 
 ```rust
 pub struct ServiceProvider {
@@ -1083,18 +1067,18 @@ new ServiceProviderOptions
 
 | ASP.NET Core | Nestrs 建议 |
 |---|---|
-| `IServiceCollection` | `ServiceCollection` |
-| `ServiceDescriptor` | `ServiceDescriptor` |
+| ASP.NET Core 服务集合接口 | 未来 Provider registry |
+| `ServiceDescriptor` | `Provider` |
 | `ServiceLifetime` | `Lifetime` |
 | `ServiceProvider` | `ServiceProvider` |
-| `ServiceCallSite` | `ComponentReflection` / `CompiledProvider` |
+| `ServiceCallSite` | 未来的 provider 构建计划 |
 | `CallSiteFactory` | `Compiler` / `GraphBuilder` |
 | `CallSiteChain` | `ResolveChain` / `ActivationChain` |
 | `CallSiteRuntimeResolver` | `Activator` |
 | `Type` | `Type` + `ReflectionRegistry` |
 | `ConstructorInfo.Invoke` | `Constructor(context)` |
 | `Activator.CreateInstance` | `Activator::create` |
-| `Type.MakeGenericType` | `component_definition::<T>()` |
+| `Type.MakeGenericType` | `ProviderDefinition::provider()` |
 | `IServiceScope` | `ServiceScope` |
 | `IServiceScopeFactory` | `ServiceScopeFactory` |
 | `ValidateOnBuild` | `ServiceProviderOptions.validate_on_build` |
@@ -1125,17 +1109,17 @@ new ServiceProviderOptions
 
 ```text
 宏
-  ├── ServiceDescriptor（注册意图）
-  ├── DependencyReflection[]（依赖声明）
+  ├── Provider::{Class, Factory, Bound, Alias}（注册意图）
+  ├── InjectionSpec[]（依赖声明）
   ├── Constructor（构造 adapter）
-  ├── GenericReflection（泛型家族）
-  └── BindingReflection（trait 投影）
+  ├── ProviderDefinition + ClosedProviderCallback（开放泛型闭合）
+  └── typed bound projector（trait 投影）
           ↓
 linkme
           ↓
-ReflectionRegistry
+REFLECTED_PROVIDERS
           ↓
-ServiceCollection
+Provider registry（未来）
           ↓
 Compiler / GraphBuilder
           ↓
@@ -1336,8 +1320,8 @@ factory adapter / Constructor
 
 **A：**
 
-1. `ReflectionRegistry` 使用全局 `OnceLock`，还是由 `ServiceCollection` 持有？
-2. `ServiceCollection` 是否允许运行时手动 `Add`？
+1. `ReflectionRegistry` 使用全局 `OnceLock`，还是由未来 Provider registry 持有？
+2. 未来 Provider registry 是否允许运行时手动添加 provider？
 3. 是否支持 `resolve_by_type(TypeId)`，还是只暴露 `resolve::<T>()`？
 4. 泛型注册采用“宏闭合回调”还是“泛型 family + 运行时匹配”？
 5. `LazyInject<T>` 是独立类型，还是扩展 `Inject<T>`？

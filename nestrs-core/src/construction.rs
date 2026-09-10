@@ -11,7 +11,9 @@ use thiserror::Error;
 use crate::{
     arena::ArenaServiceRef,
     inject_wrapper::Inject,
-    registration::{injectable::Injectable, service_type::ServiceType},
+    registration::{
+        injectable::Injectable, service_source::ServiceSource, service_type::ServiceType,
+    },
 };
 
 /// 构造输入在已编译 provider 中的位置。
@@ -54,6 +56,15 @@ pub enum ActivationError {
     UnprojectedTraitInput {
         position: InputPosition,
         trait_type: &'static str,
+    },
+
+    #[error("factory provider {provider}（{provider_source:?}）执行失败")]
+    FactoryFailed {
+        /// 发生错误的 factory 函数名。
+        provider: &'static str,
+
+        /// 对应 Provider 声明的静态来源。
+        provider_source: ServiceSource,
     },
 }
 

@@ -1,4 +1,3 @@
-use nestrs_core::registration::service_collection::ServiceCollection;
 use nestrs_macro::{bind, factory, injectable, primary};
 
 const BASE_RETRIES: u64 = 2;
@@ -135,14 +134,6 @@ pub fn use_factory() -> Result<u32, std::io::Error> {
 }
 
 fn main() {
-    let collection = ServiceCollection::new();
-    let arena = collection
-        .instantiate::<UserController>()
-        .expect("UserController、UserService 及其 Repository<UserEntity> 依赖应可直接实例化");
-    let controller = arena
-        .get::<UserController>()
-        .expect("UserController 应已提交到本次实例化 Arena");
-
-    let users = controller.get_all_users();
-    assert_eq!(users.len(), 2);
+    // 此示例只覆盖宏展开、元数据及构造 ABI 的编译契约。
+    // Provider-first activation runtime 尚未接入，因此不在这里实例化服务。
 }

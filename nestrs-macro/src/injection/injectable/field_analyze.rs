@@ -84,8 +84,8 @@ impl AnalyzedFields {
 /// 判断一个注入目标是否是带实参的 concrete type path。
 ///
 /// `Repository<User>` 与 `Repository<T>` 都属于这类路径：前者可直接产生已闭合
-/// callback，后者则由开放 provider 的 `ComponentDefinition` impl 额外施加
-/// `Repository<T>: ComponentDefinition` 约束后再单态化。`dyn Trait` 不属于
+/// callback，后者则由开放 provider 的 `ProviderDefinition` impl 额外施加
+/// `Repository<T>: ProviderDefinition` 约束后再单态化。`dyn Trait` 不属于
 /// `Type::Path`，因此始终保留现有的 bind 解析路径。
 pub(crate) fn is_generic_concrete_type_path(ty: &Type) -> bool {
     let Type::Path(type_path) = ty else {
@@ -114,7 +114,7 @@ pub(crate) fn analyze_fields(mut item: syn::ItemStruct) -> syn::Result<AnalyzedF
 /// 分析一个 `#[injectable]` 的所有字段。
 ///
 /// 接受具名、元组和单元结构体；元组字段保留位置语义，不杜撰会泄漏到运行时
-/// metadata 的伪字段名。
+/// provider 依赖描述的伪字段名。
 pub(crate) fn collect_field_specs(fields: &Fields) -> syn::Result<Vec<FieldSpec>> {
     let mut specs = Vec::with_capacity(fields.len());
 
@@ -660,7 +660,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_generic_parameters_for_component_definition_generation() {
+    fn preserves_generic_parameters_for_provider_definition_generation() {
         let item: syn::ItemStruct = syn::parse_str(
             r#"
             struct Repository<Entity>

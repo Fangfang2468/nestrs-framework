@@ -2,7 +2,6 @@ pub mod arena;
 mod construction;
 mod inject_wrapper;
 pub mod lifetime;
-mod metadata;
 pub mod registration;
 
 #[doc(hidden)]
@@ -22,14 +21,12 @@ pub mod __private {
     };
     /// 仅供宏展开引用的依赖令牌及其访问来源标记。
     pub use crate::inject_wrapper::{FactoryParameter, FieldInject, Inject};
-    pub use crate::metadata::{
-        factory::{FactoryComponent, FactoryParameterInjection, REFLECT_METADATA_FACTORY},
-        impl_bind::{InterfaceBinding, REFLECT_METADATA_BIND},
-        injectable::{
-            ComponentDefinition, ComponentDefinitionCallback, FieldInjection, FieldInjectionTarget,
-            REFLECT_METADATA_INJECTABLE, StructComponent, component_definition,
-        },
-    };
-    /// 仅供宏为泛型 component definition 声明其必要的服务约束。
+    /// 仅供宏为泛型 provider definition 声明其必要的服务约束。
     pub use crate::registration::injectable::Injectable;
+    /// 仅供宏写入和读取的统一 provider 注册 ABI。
+    pub use crate::registration::provider::{
+        ActivationFuture, AsyncConstructor, BoundKeyPolicy, CleanupFuture, CleanupHook,
+        ClosedProviderCallback, FactoryInvoker, InjectionSpec, InjectionTarget, Provider,
+        ProviderCommon, ProviderDefinition, REFLECTED_PROVIDERS, provider_definition,
+    };
 }

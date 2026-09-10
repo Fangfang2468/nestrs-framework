@@ -1,5 +1,4 @@
-pub trait Injectable: Send + Sync + 'static { }
-
+pub trait Injectable: Send + Sync + 'static {}
 
 /// 自动赋予全部线程安全、静态存活的类型可注入能力。
 ///

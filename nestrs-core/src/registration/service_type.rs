@@ -12,10 +12,8 @@ pub struct ServiceType {
     pub name: &'static str,
 }
 
-
 impl ServiceType {
-
-    /// 创建方法 
+    /// 创建方法
     pub fn create<S>() -> Self
     where
         S: Injectable + ?Sized,
@@ -27,10 +25,10 @@ impl ServiceType {
     }
 
     /// 获取类型短名称
-    /// 
+    ///
     /// ``` rust
     /// use nestrs_core::registration::service_type::{ServiceType};
-    /// 
+    ///
     /// struct UserService {
     ///    name: String,
     /// }
@@ -42,4 +40,3 @@ impl ServiceType {
         self.name.rsplit("::").next().unwrap_or(self.name)
     }
 }
-

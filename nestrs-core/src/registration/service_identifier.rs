@@ -1,6 +1,4 @@
-use crate::registration::{
-    service_key::ServiceKey, service_type::ServiceType,
-};
+use crate::registration::{service_key::ServiceKey, service_type::ServiceType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ServiceIdentifier {

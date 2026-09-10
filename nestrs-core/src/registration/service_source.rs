@@ -12,28 +12,15 @@ pub struct ServiceSource {
 
 impl ServiceSource {
     /// 用完整的静态调用点信息构造注册来源。
-    pub const fn new(
-        file: &'static str,
-        line: u32,
-        column: u32,
-    ) -> Self {
-        Self {
-            file,
-            line,
-            column,
-        }
+    pub const fn new(file: &'static str, line: u32, column: u32) -> Self {
+        Self { file, line, column }
     }
-
 
     /// 从调用 `caller()` 的位置推导有限来源信息。
     #[track_caller]
     pub fn caller() -> Self {
         let location = std::panic::Location::caller();
 
-        Self::new(
-            location.file(),
-            location.line(),
-            location.column()
-        )
+        Self::new(location.file(), location.line(), location.column())
     }
 }

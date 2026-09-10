@@ -1,7 +1,7 @@
 //! `#[injectable]` 隐藏构造 adapter 的生成。
 //!
-//! 此处只定义构造函数本身。它必须由 `registration` 放入与 linkme metadata
-//! factory 相同的匿名 `const` 作用域，才能把函数指针写入 `StructComponent`，同时
+//! 此处只定义构造函数本身。它必须由 `registration` 放入与 linkme provider
+//! factory 相同的匿名 `const` 作用域，才能把函数指针写入 `Provider::Class`，同时
 //! 不把 helper 暴露为结构体的 inherent method。
 
 use super::{
@@ -16,7 +16,7 @@ use zyn::{
 
 /// 输出一个仅供同一匿名注册作用域使用的构造 adapter。
 ///
-/// 该 element 不自行添加 `const` 包裹。若作为顶层 sibling 输出，metadata 就无法
+/// 该 element 不自行添加 `const` 包裹。若作为顶层 sibling 输出，provider 就无法
 /// 词法引用 `__nestrs_construct`；因此只能由 `EmitInjectableRegistration` 嵌入。
 #[zyn::element]
 pub(crate) fn generate_injectable_constructor(analysis: AnalyzedFields) -> zyn::TokenStream {
@@ -50,7 +50,7 @@ pub(crate) fn generate_injectable_constructor(analysis: AnalyzedFields) -> zyn::
     }
 }
 
-/// 输出开放泛型 `ComponentDefinition` 使用的无捕获构造 closure。
+/// 输出开放泛型 `ProviderDefinition` 使用的无捕获构造 closure。
 ///
 /// 它位于 trait 方法内部，因此 `Self` 已是由注入点单态化的服务类型；不像闭合
 /// component 的 linkme 注册，这里绝不能生成一个全局命名函数或把开放 provider

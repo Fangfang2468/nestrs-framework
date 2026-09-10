@@ -1,4 +1,4 @@
-//! `#[primary]` 与 `#[injectable]` 之间的属性协调。
+//! `#[primary]` 与 provider 宏之间的属性协调。
 //!
 //! 相邻属性宏按源码顺序展开。`#[primary]` 位于 `#[injectable]` 上方时，
 //! `primary` 必须把自己的配置暂存到尚未展开的结构体上；反过来则由
@@ -16,6 +16,12 @@ use zyn::{
 /// 它必须追加在既有 `#[injectable]` 属性之后，这样 Rust 会先展开
 /// `injectable`，由后者将该 marker 清除，而不会将它当作未知属性处理。
 const DEFERRED_PRIMARY_ATTRIBUTE: &str = "__nestrs_injectable_primary";
+
+/// 仅供 `primary` 与 `factory` 交接的私有属性。
+///
+/// 和 struct 的 marker 一样，它必须追加在 `#[factory]` 之后，使 factory 在下一次
+/// 属性展开时消费它，而不会让 Rust 尝试把内部 marker 当作另一个属性宏展开。
+const DEFERRED_FACTORY_PRIMARY_ATTRIBUTE: &str = "__nestrs_factory_primary";
 
 /// `#[primary]` 的已解析配置。
 ///
@@ -99,6 +105,28 @@ pub(crate) fn defer_primary_to_injectable(
     }
 }
 
+/// 当 `primary` 先展开且下方仍有 `factory` 时，追加私有交接 marker。
+///
+/// Factory provider 与 class provider 必须以相同的方式消费 primary：属性顺序只影响
+/// Rust 的展开顺序，不能影响最终 provider 的 `common.primary`。该 element 只保留
+/// 函数 AST，不生成任何 provider，也不改变 factory 自己负责的校验。
+#[zyn::element]
+pub(crate) fn defer_primary_to_factory(
+    item: syn::ItemFn,
+    primary: PrimaryConfig,
+) -> zyn::TokenStream {
+    let mut item = item.clone();
+
+    if primary.is_primary() && has_attribute_named(&item.attrs, "factory") {
+        item.attrs
+            .push(syn::parse_quote!(#[__nestrs_factory_primary]));
+    }
+
+    zyn! {
+        {{ item }}
+    }
+}
+
 /// 消费 `injectable` 负责的 primary 配置及其交接 marker。
 ///
 /// 这会同时移除源码中的 `#[primary]` 和上方 `primary` 留下的内部 marker，确保
@@ -106,13 +134,38 @@ pub(crate) fn defer_primary_to_injectable(
 pub(crate) fn take_primary_for_injectable(
     attributes: &mut Vec<Attribute>,
 ) -> syn::Result<PrimaryConfig> {
+    take_primary_for_provider(
+        attributes,
+        DEFERRED_PRIMARY_ATTRIBUTE,
+        "injectable",
+        "结构体",
+    )
+}
+
+/// 消费 `factory` 负责的 primary 配置及其交接 marker。
+///
+/// Factory 位于 `primary` 下方时会留下 `__nestrs_factory_primary`；factory 位于上方
+/// 时则直接移除仍在函数属性列表中的 `#[primary]`。两条路径都返回同一个配置，确保
+/// 一个 factory provider 只会被注册一次。
+pub(crate) fn take_primary_for_factory(
+    attributes: &mut Vec<Attribute>,
+) -> syn::Result<PrimaryConfig> {
+    take_primary_for_provider(attributes, DEFERRED_FACTORY_PRIMARY_ATTRIBUTE, "factory", "函数")
+}
+
+fn take_primary_for_provider(
+    attributes: &mut Vec<Attribute>,
+    deferred_attribute: &str,
+    provider_macro: &str,
+    item_kind: &str,
+) -> syn::Result<PrimaryConfig> {
     let mut primary = None;
     let mut retained = Vec::with_capacity(attributes.len());
 
     for attribute in std::mem::take(attributes) {
         let config = if attribute_is_named(&attribute, "primary") {
             PrimaryConfig::from_attribute(&attribute)?
-        } else if attribute_is_named(&attribute, DEFERRED_PRIMARY_ATTRIBUTE) {
+        } else if attribute_is_named(&attribute, deferred_attribute) {
             PrimaryConfig::enabled()
         } else {
             retained.push(attribute);
@@ -122,7 +175,9 @@ pub(crate) fn take_primary_for_injectable(
         if primary.replace(config).is_some() {
             return Err(syn::Error::new(
                 attribute.span(),
-                "同一个 `#[injectable]` 结构体不能重复标注 `#[primary]`",
+                format!(
+                    "同一个 `#[{provider_macro}]` {item_kind}不能重复标注 `#[primary]`"
+                ),
             ));
         }
     }
@@ -197,5 +252,39 @@ mod tests {
             take_primary_for_injectable(&mut item.attrs).expect("empty primary should be valid");
         assert!(primary.is_primary());
         assert!(item.attrs.is_empty());
+    }
+
+    #[test]
+    fn defers_primary_after_a_lower_factory_attribute() {
+        let item: syn::ItemFn = syn::parse_quote! {
+            #[factory]
+            fn build() -> Service {
+                Service
+            }
+        };
+
+        let rendered = DeferPrimaryToFactory {
+            item,
+            primary: PrimaryConfig::from_args(
+                &syn::parse_str("").expect("empty args should parse"),
+            )
+            .expect("bare primary should be valid"),
+        }
+        .render(&zyn::Input::default());
+        let mut item: syn::ItemFn =
+            syn::parse2(rendered.tokens().clone()).expect("element should render a function");
+
+        assert_eq!(item.attrs.len(), 2);
+        assert!(attribute_is_named(&item.attrs[0], "factory"));
+        assert!(attribute_is_named(
+            &item.attrs[1],
+            DEFERRED_FACTORY_PRIMARY_ATTRIBUTE
+        ));
+
+        let primary =
+            take_primary_for_factory(&mut item.attrs).expect("deferred primary should parse");
+        assert!(primary.is_primary());
+        assert_eq!(item.attrs.len(), 1);
+        assert!(attribute_is_named(&item.attrs[0], "factory"));
     }
 }

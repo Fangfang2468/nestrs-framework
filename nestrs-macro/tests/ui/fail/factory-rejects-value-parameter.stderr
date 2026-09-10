@@ -1,0 +1,5 @@
+error: `#[factory]` 参数不支持 #[value(...)]；factory 参数只能通过注入取得
+ --> tests/ui/fail/factory-rejects-value-parameter.rs:4:28
+  |
+4 | fn value_parameter_factory(#[value(1)] dependency: u8) -> u8 {
+  |                            ^^^^^^^^^^^
