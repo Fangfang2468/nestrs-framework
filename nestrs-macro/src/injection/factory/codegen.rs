@@ -104,9 +104,9 @@ fn generate_factory_adapter(analysis: FactoryAnalysis) -> zyn::TokenStream {
 
     zyn! {
         @if (is_async) {
-            fn __nestrs_factory_construct(
+            fn __nestrs_factory_construct<'frame>(
                 {{ context_binding.clone() }}
-            ) -> ::nestrs_core::__private::ActivationFuture {
+            ) -> ::nestrs_core::__private::FactoryFuture<'frame> {
                 ::std::boxed::Box::pin(async move {
                     @InvokeAsyncFactory(
                         function = analysis.item.sig.ident.clone(),
@@ -116,7 +116,7 @@ fn generate_factory_adapter(analysis: FactoryAnalysis) -> zyn::TokenStream {
                 })
             }
         } @else {
-            fn __nestrs_factory_construct(
+            fn __nestrs_factory_construct<'frame>(
                 {{ context_binding }}
             ) -> ::core::result::Result<
                 ::nestrs_core::__private::ErasedService,
@@ -135,9 +135,15 @@ fn generate_factory_adapter(analysis: FactoryAnalysis) -> zyn::TokenStream {
 /// 选择无输入时不会触发 unused-variable warning 的 context 参数写法。
 fn factory_context_binding(analysis: &FactoryAnalysis) -> zyn::TokenStream {
     if analysis.parameters.is_empty() {
-        quote!(_nestrs_factory_context: ::nestrs_core::__private::ConstructionContext)
+        quote!(
+            _nestrs_factory_context:
+                ::nestrs_core::__private::FactoryConstructionContext<'frame>
+        )
     } else {
-        quote!(mut __nestrs_factory_context: ::nestrs_core::__private::ConstructionContext)
+        quote!(
+            mut __nestrs_factory_context:
+                ::nestrs_core::__private::FactoryConstructionContext<'frame>
+        )
     }
 }
 
@@ -257,10 +263,11 @@ fn invoke_async_factory(
     }
 }
 
-/// 从预绑定 `ConstructionContext` 取出一个 factory 依赖参数。
+/// 从 frame-bound `FactoryConstructionContext` 取出一个 factory 依赖参数。
 ///
 /// 这里直接把 `take` 表达式作为 factory 调用实参，避免生成固定局部变量名与用户的
-/// 简单参数标识符发生碰撞。
+/// 简单参数标识符发生碰撞。返回 token 的 `FactoryParameter<'frame>` 会沿着 adapter
+/// future 保持到 factory 完成，从而不能逃逸至输出服务或后台任务。
 #[zyn::element]
 fn take_factory_parameter(
     parameter: FactoryParameterSpec,
@@ -503,6 +510,7 @@ mod tests {
         assert!(output.contains("REFLECTED_PROVIDERS"));
         assert!(output.contains("Provider :: Factory"));
         assert!(output.contains("FactoryInvoker :: Sync"));
+        assert!(output.contains("FactoryConstructionContext < 'frame >"));
         assert!(output.contains("take :: < Database >"));
         assert!(output.contains("take_optional :: < dyn Audit >"));
         assert!(output.contains("ServiceKey :: Named (\"audit\")"));
@@ -515,6 +523,7 @@ mod tests {
     fn emits_an_async_invoker_for_async_and_explicit_future_factories() {
         let async_output = render("async fn make() -> Service { todo!() }");
         assert!(async_output.contains("FactoryInvoker :: Async"));
+        assert!(async_output.contains("FactoryFuture < 'frame >"));
         assert!(async_output.contains("Box :: pin (async move"));
         assert!(async_output.contains("make"));
         assert!(async_output.contains(". await"));

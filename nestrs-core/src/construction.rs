@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::{
     arena::ArenaServiceRef,
-    inject_wrapper::Inject,
+    inject_wrapper::{FactoryParameter, Inject},
     registration::{
         injectable::Injectable, service_source::ServiceSource, service_type::ServiceType,
     },
@@ -241,6 +241,82 @@ impl ConstructionContext {
 
         slot.take()
             .ok_or(ActivationError::InputAlreadyTaken { position })
+    }
+}
+
+/// factory 调用期间由 core activation runtime 持有的不可伪造 frame。
+///
+/// 它目前只是 factory 参数逃逸边界的最小 runtime token：未来的 activation / lease
+/// runtime 可以把自己的 frame 语义放在这里，但不能以无来源的 `PhantomData` 代替真实
+/// 借用。该类型不向下游暴露构造入口，避免调用方自行制造 `'static` factory frame。
+pub(crate) struct FactoryActivationFrame {
+    _private: (),
+}
+
+impl FactoryActivationFrame {
+    #[allow(dead_code)] // provider 执行 runtime 接线后由其持有。
+    pub(crate) fn new() -> Self {
+        Self { _private: () }
+    }
+}
+
+/// 仅供 factory adapter 消费的 frame-bound 构造输入。
+///
+/// 与 [`ConstructionContext`] 不同，它从当前 activation frame 借用，因此
+/// [`Self::take`] 返回的 token 是 `Inject<T, FactoryParameter<'frame>>`，而不是可以
+/// 被长期保存在 injectable 字段中的 `Inject<T>`。这使 Rust 在 factory 试图把参数放进
+/// `'static` provider 输出、future 或后台任务时拒绝编译。
+///
+/// 宏生成的 adapter 可以调用 `take` / `take_optional`，但不能构造此上下文；只有 core
+/// runtime 能够把已绑定 [`ConstructionContext`] 与真实 activation frame 组合起来。
+#[doc(hidden)]
+pub struct FactoryConstructionContext<'frame> {
+    bound: ConstructionContext,
+    _frame: &'frame FactoryActivationFrame,
+}
+
+impl<'frame> FactoryConstructionContext<'frame> {
+    #[allow(dead_code)] // 未来 core activation runtime 会通过 FactoryInvoker 调用。
+    pub(crate) fn from_bound(
+        bound: ConstructionContext,
+        frame: &'frame FactoryActivationFrame,
+    ) -> Self {
+        Self {
+            bound,
+            _frame: frame,
+        }
+    }
+
+    /// 取走一个必选的、仅在本次 factory activation 内有效的注入参数。
+    pub fn take<T>(
+        &mut self,
+        position: InputPosition,
+    ) -> Result<Inject<T, FactoryParameter<'frame>>, ActivationError>
+    where
+        T: Injectable + ?Sized,
+    {
+        let token = self.bound.take::<T>(position)?;
+
+        // SAFETY: `ConstructionContext::take` 只返回由 core 以 Arena 稳定地址构造的
+        // `FieldInject` token；`self._frame` 把新 token 的 access marker 绑定到当前
+        // factory invocation，且该 marker 不会向业务代码暴露重绑入口。
+        Ok(unsafe { Inject::from_factory_ptr(token.into_ptr()) })
+    }
+
+    /// 取走一个可选的、仅在本次 factory activation 内有效的注入参数。
+    pub fn take_optional<T>(
+        &mut self,
+        position: InputPosition,
+    ) -> Result<Option<Inject<T, FactoryParameter<'frame>>>, ActivationError>
+    where
+        T: Injectable + ?Sized,
+    {
+        let token = self.bound.take_optional::<T>(position)?;
+
+        Ok(token.map(|token| {
+            // SAFETY: see `Self::take`; `None` carries no address and needs no conversion.
+            unsafe { Inject::from_factory_ptr(token.into_ptr()) }
+        }))
     }
 }
 
@@ -558,6 +634,50 @@ mod tests {
             Err(_) => panic!("adapter output should retain the concrete service"),
         };
         let Consumer { required, optional } = consumer;
+
+        assert!(std::ptr::eq(
+            &*required,
+            arena.get::<RequiredDependency>().unwrap()
+        ));
+        assert!(optional.is_some());
+    }
+
+    #[test]
+    fn factory_context_rebinds_inputs_to_the_activation_frame() {
+        let required_identifier =
+            ServiceIdentifier::from(ServiceType::create::<RequiredDependency>());
+        let optional_identifier =
+            ServiceIdentifier::from(ServiceType::create::<OptionalDependency>());
+        let mut arena = Arena::new();
+        arena
+            .insert(required_identifier, RequiredDependency)
+            .expect("required dependency should commit to the arena");
+        arena
+            .insert(optional_identifier, OptionalDependency)
+            .expect("optional dependency should commit to the arena");
+
+        let mut bound = ConstructionContext::new();
+        prepare_required::<RequiredDependency>(
+            &mut bound,
+            InputPosition(0),
+            arena.lookup(required_identifier),
+        )
+        .expect("required input should be prepared from the arena");
+        prepare_optional::<OptionalDependency>(
+            &mut bound,
+            InputPosition(1),
+            arena.lookup(optional_identifier),
+        )
+        .expect("optional input should be prepared from the arena");
+
+        let frame = FactoryActivationFrame::new();
+        let mut context = FactoryConstructionContext::from_bound(bound, &frame);
+        let required: Inject<RequiredDependency, FactoryParameter<'_>> = context
+            .take(InputPosition(0))
+            .expect("factory required input should be frame-bound");
+        let optional: Option<Inject<OptionalDependency, FactoryParameter<'_>>> = context
+            .take_optional(InputPosition(1))
+            .expect("factory optional input should be frame-bound");
 
         assert!(std::ptr::eq(
             &*required,

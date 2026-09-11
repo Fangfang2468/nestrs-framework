@@ -63,8 +63,10 @@ pub(crate) struct FactoryParameterSpec {
 /// factory 宏的共享分析结果。
 ///
 /// `item` 已经移除了参数上的 `#[inject]` marker，并把参数类型改写为
-/// `Inject<T>` / `Option<Inject<T>>`。因此它可以直接作为最终用户函数输出；所有
-/// provider metadata 与 adapter 取参继续读取 `parameters`，避免二次解析。
+/// `Inject<T, FactoryParameter<'frame>>` / `Option<...>`。`'frame` 是宏生成的隐藏
+/// 生命周期，并由 factory adapter 的真实 activation frame 绑定；因此最终用户函数不能
+/// 把参数安全地保存到长期服务或后台任务。所有 provider metadata 与 adapter 取参继续
+/// 读取 `parameters`，避免二次解析。
 #[derive(Clone, Debug)]
 pub(crate) struct FactoryAnalysis {
     pub(crate) item: ItemFn,
@@ -105,6 +107,20 @@ pub(crate) fn analyze_factory(mut item: ItemFn) -> syn::Result<FactoryAnalysis> 
     }
 
     let output = analyze_factory_return(&item)?;
+
+    // 用户声明的泛型已经在上方拒绝，因此这个名字不会与用户 ABI 冲突。只要存在参数，
+    // 就为重写后的函数添加一个由 adapter 推导的隐藏生命周期；不能使用一个无约束的
+    // `'_` 占位 lifetime，否则返回服务的类型约束可能把它错误地推断为 `'static`。
+    let parameter_lifetime = if item.sig.inputs.is_empty() {
+        None
+    } else {
+        let lifetime: syn::Lifetime = syn::parse_quote!('__nestrs_factory_frame);
+        item.sig
+            .generics
+            .params
+            .push(syn::parse_quote!('__nestrs_factory_frame));
+        Some(lifetime)
+    };
     let mut parameters = Vec::with_capacity(item.sig.inputs.len());
 
     for (position, argument) in item.sig.inputs.iter_mut().enumerate() {
@@ -122,7 +138,14 @@ pub(crate) fn analyze_factory(mut item: ItemFn) -> syn::Result<FactoryAnalysis> 
         let original_type = (*parameter.ty).clone();
         let (service_type, optional) = parse_inject_service_type(&original_type)?;
 
-        parameter.ty = Box::new(injected_parameter_type(&service_type, optional));
+        let parameter_lifetime = parameter_lifetime
+            .as_ref()
+            .expect("a factory parameter requires the generated activation lifetime");
+        parameter.ty = Box::new(injected_parameter_type(
+            &service_type,
+            optional,
+            parameter_lifetime,
+        ));
         parameters.push(FactoryParameterSpec {
             declaration_position: position,
             input_position: position,
@@ -428,11 +451,23 @@ fn is_disallowed_top_level_wrapper(path: &syn::Path) -> bool {
         .is_some_and(|segment| segment.ident == "Arc" || segment.ident == "Option")
 }
 
-fn injected_parameter_type(service_type: &Type, optional: bool) -> Type {
+fn injected_parameter_type(service_type: &Type, optional: bool, lifetime: &syn::Lifetime) -> Type {
     if optional {
-        syn::parse_quote!(::core::option::Option<::nestrs_core::__private::Inject<#service_type>>)
+        syn::parse_quote!(
+            ::core::option::Option<
+                ::nestrs_core::__private::Inject<
+                    #service_type,
+                    ::nestrs_core::__private::FactoryParameter<#lifetime>
+                >
+            >
+        )
     } else {
-        syn::parse_quote!(::nestrs_core::__private::Inject<#service_type>)
+        syn::parse_quote!(
+            ::nestrs_core::__private::Inject<
+                #service_type,
+                ::nestrs_core::__private::FactoryParameter<#lifetime>
+            >
+        )
     }
 }
 
@@ -619,12 +654,17 @@ mod tests {
         );
         assert!(analysis.parameters[2].optional);
         let rewritten = analysis.item.to_token_stream().to_string();
+        assert!(rewritten.contains("fn make < '__nestrs_factory_frame >"));
         assert!(
-            rewritten.contains("database : :: nestrs_core :: __private :: Inject < Database >")
+            rewritten.contains(
+                "database : :: nestrs_core :: __private :: Inject < Database , :: nestrs_core :: __private :: FactoryParameter < '__nestrs_factory_frame > >"
+            )
         );
-        assert!(rewritten.contains("cache : :: nestrs_core :: __private :: Inject < Cache >"));
         assert!(rewritten.contains(
-            "audit : :: core :: option :: Option < :: nestrs_core :: __private :: Inject < dyn Audit > >"
+            "cache : :: nestrs_core :: __private :: Inject < Cache , :: nestrs_core :: __private :: FactoryParameter < '__nestrs_factory_frame > >"
+        ));
+        assert!(rewritten.contains(
+            "audit : :: core :: option :: Option < :: nestrs_core :: __private :: Inject < dyn Audit , :: nestrs_core :: __private :: FactoryParameter < '__nestrs_factory_frame > > >"
         ));
         assert!(!rewritten.contains("# [ inject"));
     }

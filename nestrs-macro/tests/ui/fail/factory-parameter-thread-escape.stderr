@@ -1,0 +1,12 @@
+error[E0521]: borrowed data escapes outside of function
+  --> tests/ui/fail/factory-parameter-thread-escape.rs:13:5
+   |
+11 | #[factory]
+   | ---------- lifetime `'__nestrs_factory_frame` defined here
+12 | fn create(database: Database) -> Service {
+   |           -------- `database` is a reference that is only valid in the function body
+13 |     std::thread::spawn(move || database.ping())
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     |
+   |     `database` escapes the function body here
+   |     argument requires that `'__nestrs_factory_frame` must outlive `'static`

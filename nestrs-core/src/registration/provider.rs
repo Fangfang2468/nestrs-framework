@@ -10,8 +10,8 @@ use linkme::distributed_slice;
 
 use crate::{
     construction::{
-        ActivationError, ConstructionContext, Constructor, ErasedService, InputPosition,
-        PrepareInput,
+        ActivationError, ConstructionContext, Constructor, ErasedService, FactoryActivationFrame,
+        FactoryConstructionContext, InputPosition, PrepareInput,
     },
     lifetime::Lifetime,
     registration::{
@@ -20,12 +20,13 @@ use crate::{
     },
 };
 
-/// 一个异步 provider 激活操作的 owning future。
+/// 一个异步 factory 激活操作的 frame-bound future。
 ///
-/// future 持有构造输入和构造结果，调用方可以在合适的 runtime 中 await 它，再将成功
-/// 的 concrete 输出提交到 Arena。
-pub type ActivationFuture =
-    Pin<Box<dyn Future<Output = Result<ErasedService, ActivationError>> + Send + 'static>>;
+/// future 持有构造输入和构造结果，调用方可以在合适的 runtime 中 await 它，再将成功的
+/// concrete 输出提交到 Arena。`'frame` 同时约束 factory 参数的 `Inject` token，故它
+/// 不能被伪装为 `'static` task 或 provider 输出。
+pub type FactoryFuture<'frame> =
+    Pin<Box<dyn Future<Output = Result<ErasedService, ActivationError>> + Send + 'frame>>;
 
 /// 一个 cleanup hook 的 owning future。
 ///
@@ -38,23 +39,40 @@ pub type CleanupHook = fn() -> CleanupFuture;
 
 /// 同步或异步 factory 的真实调用 ABI。
 ///
-/// `Async` 不保存不可调用的占位函数，而是接收已经预绑定的构造输入，并返回 owning
-/// activation future。同步 factory 也通过 [`Self::invoke`] 统一为同一 future 形态。
+/// 两种 adapter 都由 `for<'frame>` 单态化，因此 factory 参数会被绑定为
+/// `Inject<T, FactoryParameter<'frame>>`。同步 factory 也不能复用 class 的
+/// [`Constructor`]：它同样可能错误地把参数存进返回服务。
 #[derive(Debug, Clone, Copy)]
 pub enum FactoryInvoker {
-    Sync(Constructor),
+    Sync(FactoryConstructor),
     Async(AsyncConstructor),
 }
 
+/// 同步 factory adapter 的单态化函数签名。
+pub type FactoryConstructor =
+    for<'frame> fn(FactoryConstructionContext<'frame>) -> Result<ErasedService, ActivationError>;
+
 /// 异步 factory adapter 的单态化函数签名。
-pub type AsyncConstructor = fn(ConstructionContext) -> ActivationFuture;
+pub type AsyncConstructor =
+    for<'frame> fn(FactoryConstructionContext<'frame>) -> FactoryFuture<'frame>;
 
 impl FactoryInvoker {
     /// 使用已绑定构造输入调用 factory。
-    pub fn invoke(self, context: ConstructionContext) -> ActivationFuture {
+    ///
+    /// 这不是公开的 service-locator API。只有 core activation runtime 能同时持有真实
+    /// `FactoryActivationFrame` 与 Arena 预绑定的 [`ConstructionContext`]，并保证 frame
+    /// 覆盖 returned future 的整个 poll/drop 期间。
+    #[allow(dead_code)] // 当前阶段尚未接线 provider activation runtime。
+    pub(crate) fn invoke<'frame>(
+        self,
+        context: ConstructionContext,
+        frame: &'frame FactoryActivationFrame,
+    ) -> FactoryFuture<'frame> {
         match self {
-            Self::Sync(constructor) => Box::pin(async move { constructor(context) }),
-            Self::Async(invoker) => invoker(context),
+            Self::Sync(constructor) => Box::pin(async move {
+                constructor(FactoryConstructionContext::from_bound(context, frame))
+            }),
+            Self::Async(invoker) => invoker(FactoryConstructionContext::from_bound(context, frame)),
         }
     }
 }
@@ -257,13 +275,60 @@ pub static REFLECTED_PROVIDERS: [fn() -> Provider] = [..];
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registration::{service_key::ServiceKey, service_type::ServiceType};
+    use std::{
+        future::Future,
+        sync::Arc,
+        task::{Context, Poll, Wake, Waker},
+    };
+
+    use crate::registration::{
+        service_key::ServiceKey, service_source::ServiceSource, service_type::ServiceType,
+    };
 
     struct Trait;
     struct Concrete;
 
-    fn construct_unit(_context: ConstructionContext) -> Result<ErasedService, ActivationError> {
+    struct NoopWake;
+
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    fn block_on<F>(future: F) -> F::Output
+    where
+        F: Future,
+    {
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        let mut future = std::pin::pin!(future);
+
+        loop {
+            match future.as_mut().poll(&mut context) {
+                Poll::Ready(output) => return output,
+                Poll::Pending => std::thread::yield_now(),
+            }
+        }
+    }
+
+    fn sync_factory<'frame>(
+        _context: FactoryConstructionContext<'frame>,
+    ) -> Result<ErasedService, ActivationError> {
         Ok(ErasedService::new(()))
+    }
+
+    fn async_factory<'frame>(
+        _context: FactoryConstructionContext<'frame>,
+    ) -> FactoryFuture<'frame> {
+        Box::pin(async { Ok(ErasedService::new(String::from("async"))) })
+    }
+
+    fn failing_factory<'frame>(
+        _context: FactoryConstructionContext<'frame>,
+    ) -> Result<ErasedService, ActivationError> {
+        Err(ActivationError::FactoryFailed {
+            provider: "failing_factory",
+            provider_source: ServiceSource::new("provider.rs", 1, 1),
+        })
     }
 
     #[test]
@@ -282,10 +347,32 @@ mod tests {
     }
 
     #[test]
-    fn sync_factory_invoker_returns_the_common_activation_future() {
-        let future: ActivationFuture =
-            FactoryInvoker::Sync(construct_unit).invoke(ConstructionContext::new());
+    fn factory_invoker_preserves_its_frame_across_sync_async_and_failure_paths() {
+        let frame = FactoryActivationFrame::new();
 
-        drop(future);
+        let synchronous =
+            block_on(FactoryInvoker::Sync(sync_factory).invoke(ConstructionContext::new(), &frame))
+                .expect("sync factory should resolve");
+        assert_eq!(synchronous.service_type(), ServiceType::create::<()>());
+
+        let asynchronous = block_on(
+            FactoryInvoker::Async(async_factory).invoke(ConstructionContext::new(), &frame),
+        )
+        .expect("async factory should resolve");
+        assert_eq!(asynchronous.service_type(), ServiceType::create::<String>());
+
+        let error = match block_on(
+            FactoryInvoker::Sync(failing_factory).invoke(ConstructionContext::new(), &frame),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("failing factory should retain its activation error"),
+        };
+        assert!(matches!(
+            error,
+            ActivationError::FactoryFailed {
+                provider: "failing_factory",
+                ..
+            }
+        ));
     }
 }

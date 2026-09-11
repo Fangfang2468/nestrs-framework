@@ -10,8 +10,10 @@ pub struct FieldInject(PhantomData<()>);
 
 /// `#[factory]` 参数令牌的激活期访问来源。
 ///
-/// 未来 factory 宏会使用该生命周期标记，使参数令牌不能安全地逃逸到比当前激活期更长的
-/// 服务或任务中。当前只定义 ABI，不接入 factory 构造流程。
+/// factory adapter 以一个由 core 运行时签发的真实 `&'frame` 激活借用创建此标记。
+/// 因此 `Inject<T, FactoryParameter<'frame>>` 不能安全地逃逸到比本次 factory 调用更长
+/// 的服务、future 或后台任务中。普通 `#[injectable]` 字段仍使用 [`FieldInject`]，不受
+/// 这个短生命周期限制。
 #[doc(hidden)]
 pub struct FactoryParameter<'frame>(PhantomData<&'frame mut ()>);
 
@@ -53,6 +55,39 @@ where
     }
 }
 
+impl<'frame, T: ?Sized> Inject<T, FactoryParameter<'frame>>
+where
+    T: Injectable,
+{
+    /// 将已验证的 Arena 地址重绑为仅在当前 factory 激活期有效的 token。
+    ///
+    /// # Safety
+    ///
+    /// `ptr` 必须来自由 `ConstructionContext` 准备的 field token；调用方还必须持有
+    /// 对同一次 factory activation guard 的 `&'frame` 借用。这个入口只供 core 的
+    /// `FactoryConstructionContext` 使用，不能向宏或业务代码开放。
+    pub(crate) unsafe fn from_factory_ptr(ptr: NonNull<T>) -> Self {
+        Self {
+            ptr,
+            _marker: PhantomData,
+            _access: PhantomData,
+        }
+    }
+}
+
+impl<T: ?Sized, Access> Inject<T, Access>
+where
+    T: Injectable,
+{
+    /// 消费 token 并返回 core 隐藏 ABI 持有的稳定 Arena 地址。
+    ///
+    /// 此方法刻意不是 public：唯一用途是在 factory context 中把已经准备的
+    /// `FieldInject` token 重绑为 frame-bound `FactoryParameter` token。
+    pub(crate) fn into_ptr(self) -> NonNull<T> {
+        self.ptr
+    }
+}
+
 impl<T: ?Sized, Access> Deref for Inject<T, Access>
 where
     T: Injectable,
@@ -79,7 +114,7 @@ unsafe impl<T: ?Sized, Access> Sync for Inject<T, Access> {}
 
 #[cfg(test)]
 mod tests {
-    use super::Inject;
+    use super::{FactoryParameter, Inject};
 
     use crate::{
         arena::Arena,
@@ -121,6 +156,8 @@ mod tests {
     fn inject_keeps_explicit_send_and_sync_for_recursive_dependencies() {
         assert_send::<Inject<String>>();
         assert_sync::<Inject<String>>();
+        assert_send::<Inject<String, FactoryParameter<'static>>>();
+        assert_sync::<Inject<String, FactoryParameter<'static>>>();
         assert_send::<First>();
         assert_sync::<First>();
     }

@@ -6,10 +6,7 @@ use std::{
 };
 
 use nestrs_core::{
-    __private::{
-        ActivationError, ActivationFuture, CleanupFuture, ConstructionContext, FactoryInvoker,
-        InjectionTarget, Provider, REFLECTED_PROVIDERS,
-    },
+    __private::{CleanupFuture, FactoryInvoker, InjectionTarget, Provider, REFLECTED_PROVIDERS},
     lifetime::Lifetime,
     registration::{
         service_identifier::ServiceIdentifier, service_key::ServiceKey, service_type::ServiceType,
@@ -143,13 +140,6 @@ where
         })
 }
 
-fn invoke(
-    invoker: FactoryInvoker,
-) -> Result<nestrs_core::__private::ErasedService, ActivationError> {
-    let future: ActivationFuture = invoker.invoke(ConstructionContext::new());
-    complete_immediately(future)
-}
-
 #[test]
 fn factory_collects_common_configuration_and_parameter_injections() {
     let configured = factory_provider_for::<ConfiguredService>();
@@ -231,84 +221,42 @@ fn factory_collects_common_configuration_and_parameter_injections() {
 }
 
 #[test]
-fn factory_invokers_execute_all_supported_return_shapes() {
+fn factory_invokers_describe_all_supported_return_shapes() {
     let direct = factory_provider_for::<DirectService>();
     let Provider::Factory { invoker, .. } = direct else {
         panic!("direct factory should register Provider::Factory");
     };
     assert!(matches!(invoker, FactoryInvoker::Sync(_)));
-    assert!(
-        invoke(invoker)
-            .expect("direct factory should succeed")
-            .downcast::<DirectService>()
-            .is_ok()
-    );
 
     let result = factory_provider_for::<ResultService>();
     let Provider::Factory { invoker, .. } = result else {
         panic!("result factory should register Provider::Factory");
     };
     assert!(matches!(invoker, FactoryInvoker::Sync(_)));
-    assert!(
-        invoke(invoker)
-            .expect("result factory success should be erased")
-            .downcast::<ResultService>()
-            .is_ok()
-    );
 
     let failed = factory_provider_for::<FailedService>();
     let Provider::Factory { invoker, .. } = failed else {
         panic!("failing result factory should register Provider::Factory");
     };
-    let error = match invoke(invoker) {
-        Err(error) => error,
-        Ok(_) => panic!("failed result factory should map its error"),
-    };
-    let ActivationError::FactoryFailed {
-        provider,
-        provider_source,
-    } = error
-    else {
-        panic!("failed result factory should use FactoryFailed")
-    };
-    assert_eq!(provider, "failed_result_factory");
-    assert!(provider_source.file.ends_with("factory_provider.rs"));
+    assert!(matches!(invoker, FactoryInvoker::Sync(_)));
 
     let asynchronous = factory_provider_for::<AsyncService>();
     let Provider::Factory { invoker, .. } = asynchronous else {
         panic!("async factory should register Provider::Factory");
     };
     assert!(matches!(invoker, FactoryInvoker::Async(_)));
-    assert!(
-        invoke(invoker)
-            .expect("async factory should succeed")
-            .downcast::<AsyncService>()
-            .is_ok()
-    );
 
     let explicit_future = factory_provider_for::<ExplicitFutureService>();
     let Provider::Factory { invoker, .. } = explicit_future else {
         panic!("explicit Future factory should register Provider::Factory");
     };
     assert!(matches!(invoker, FactoryInvoker::Async(_)));
-    assert!(
-        invoke(invoker)
-            .expect("explicit Future factory should succeed")
-            .downcast::<ExplicitFutureService>()
-            .is_ok()
-    );
 
     let explicit_result_future = factory_provider_for::<ExplicitFutureResultService>();
     let Provider::Factory { invoker, .. } = explicit_result_future else {
         panic!("explicit Result Future factory should register Provider::Factory");
     };
     assert!(matches!(invoker, FactoryInvoker::Async(_)));
-    assert!(
-        invoke(invoker)
-            .expect("explicit Result Future factory should succeed")
-            .downcast::<ExplicitFutureResultService>()
-            .is_ok()
-    );
 }
 
 #[test]

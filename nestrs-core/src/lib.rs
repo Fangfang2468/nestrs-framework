@@ -15,9 +15,9 @@ pub mod __private {
     pub use crate::arena::ArenaServiceRef;
     /// 仅供宏生成构造 adapter 与 core activation runtime 共用的隐藏 ABI。
     pub use crate::construction::{
-        ActivationError, ConstructionContext, Constructor, ErasedService, InputPosition,
-        PrepareInput, prepare_bound_optional, prepare_bound_required, prepare_optional,
-        prepare_optional_absent, prepare_required,
+        ActivationError, ConstructionContext, Constructor, ErasedService,
+        FactoryConstructionContext, InputPosition, PrepareInput, prepare_bound_optional,
+        prepare_bound_required, prepare_optional, prepare_optional_absent, prepare_required,
     };
     /// 仅供宏展开引用的依赖令牌及其访问来源标记。
     pub use crate::inject_wrapper::{FactoryParameter, FieldInject, Inject};
@@ -25,8 +25,8 @@ pub mod __private {
     pub use crate::registration::injectable::Injectable;
     /// 仅供宏写入和读取的统一 provider 注册 ABI。
     pub use crate::registration::provider::{
-        ActivationFuture, AsyncConstructor, BoundKeyPolicy, CleanupFuture, CleanupHook,
-        ClosedProviderCallback, FactoryInvoker, InjectionSpec, InjectionTarget, Provider,
-        ProviderCommon, ProviderDefinition, REFLECTED_PROVIDERS, provider_definition,
+        AsyncConstructor, BoundKeyPolicy, CleanupFuture, CleanupHook, ClosedProviderCallback,
+        FactoryConstructor, FactoryFuture, FactoryInvoker, InjectionSpec, InjectionTarget,
+        Provider, ProviderCommon, ProviderDefinition, REFLECTED_PROVIDERS, provider_definition,
     };
 }
