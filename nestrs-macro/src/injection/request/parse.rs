@@ -2,12 +2,11 @@
 //!
 //! `#[injectable]` 字段与 `#[factory]` 参数共用这里的实现，因此两者对
 //! `#[inject]`、`#[inject("name")]`、`#[inject(1)]` 与 `#[inject(key = ...)]`
-//! 的接受范围与诊断文案始终一致。
+//! 的接受范围与诊断文案始终一致。key 值的字面量规则由
+//! [`crate::injection::attrs::service_key`] 定义，这里只负责属性形态。
 
-use crate::injection::attrs::service_key::ServiceKey;
-use zyn::syn::{
-    self, Attribute, Expr, ExprLit, Lit, Meta, parse::Parser, punctuated::Punctuated,
-};
+use crate::injection::attrs::service_key::{self, ServiceKey};
+use zyn::syn::{self, Attribute, Lit, Meta, parse::Parser, punctuated::Punctuated};
 
 /// 从属性列表中取出唯一的 `#[inject(...)]` 并返回它声明的 key。
 ///
@@ -46,7 +45,7 @@ fn parse_inject_attribute(attribute: &Attribute) -> syn::Result<Option<ServiceKe
             }
 
             if let Ok(literal) = syn::parse2::<Lit>(list.tokens.clone()) {
-                return parse_service_key_literal(&literal).map(Some);
+                return service_key::from_literal(&literal).map(Some);
             }
 
             let metas = Punctuated::<Meta, syn::Token![,]>::parse_terminated
@@ -76,41 +75,11 @@ fn parse_inject_attribute(attribute: &Attribute) -> syn::Result<Option<ServiceKe
                 ));
             }
 
-            parse_service_key_expression(&value.value).map(Some)
+            service_key::from_expression(&value.value).map(Some)
         }
         Meta::NameValue(_) => Err(syn::Error::new_spanned(
             attribute,
             "#[inject] 参数必须写在括号中",
-        )),
-    }
-}
-
-fn parse_service_key_expression(expression: &Expr) -> syn::Result<ServiceKey> {
-    let Expr::Lit(ExprLit { lit, .. }) = expression else {
-        return Err(syn::Error::new_spanned(
-            expression,
-            "key 必须是字符串或非负整数值字面量",
-        ));
-    };
-
-    parse_service_key_literal(lit)
-}
-
-fn parse_service_key_literal(literal: &Lit) -> syn::Result<ServiceKey> {
-    match literal {
-        Lit::Str(value) if value.value().is_empty() => {
-            Err(syn::Error::new_spanned(value, "key 字符串不可为空"))
-        }
-        Lit::Str(value) => Ok(ServiceKey::Named(value.value())),
-        Lit::Int(value) => value
-            .base10_parse::<usize>()
-            .map(ServiceKey::Indexed)
-            .map_err(|_| {
-                syn::Error::new_spanned(value, "key 整数必须是可表示为 usize 的非负字面量")
-            }),
-        _ => Err(syn::Error::new_spanned(
-            literal,
-            "key 必须是字符串或非负整数值字面量",
         )),
     }
 }
