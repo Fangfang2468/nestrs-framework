@@ -27,11 +27,14 @@ pub mod __private {
     pub use crate::registration::dependency::{
         ClosedProviderCallback, DependencyRequest, Delivery, ProviderSource,
     };
-    /// 仅供宏写入和读取的统一 provider 注册 ABI。
+    /// 仅供宏写入和读取的实例 provider 注册 ABI。
     pub use crate::registration::provider::{
-        AsyncConstructor, BoundKeyPolicy, ClassProvider, CleanupFuture, CleanupHook,
-        FactoryConstructor, FactoryFuture, FactoryInvoker, FactoryProvider, Provider,
-        ProviderCommon, ProviderDefinition, REFLECTED_PROVIDERS, TraitBinding,
-        provider_definition,
+        AsyncConstructor, ClassProvider, CleanupFuture, CleanupHook, FactoryConstructor,
+        FactoryFuture, FactoryInvoker, FactoryProvider, Provider, ProviderCommon,
+        ProviderDefinition, REFLECTED_PROVIDERS, provider_definition,
+    };
+    /// 仅供宏写入和读取的 trait 绑定注册 ABI。
+    pub use crate::registration::binding::{
+        BoundKeyPolicy, REFLECTED_BINDINGS, TraitBinding,
     };
 }

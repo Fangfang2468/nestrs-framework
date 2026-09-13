@@ -1,3 +1,4 @@
+pub mod binding;
 pub mod dependency;
 pub mod injectable;
 pub mod provider;

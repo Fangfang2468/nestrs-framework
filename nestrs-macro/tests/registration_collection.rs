@@ -1,8 +1,10 @@
-//! 注册链路验证：三个属性宏生成的 `Provider` 都经 linkme 收进同一切片，
-//! 并且各自保留自己的声明形态，不被提前归一化。
+//! 注册链路验证：实例 provider 与 trait 绑定分别收进各自的 linkme 切片。
+//!
+//! `#[injectable]` / `#[factory]` 产出实例 provider，进入 `REFLECTED_PROVIDERS`；
+//! `#[bind]` 产出 trait 绑定，进入 `REFLECTED_BINDINGS`——绑定不是 provider。
 
 use nestrs_core::{
-    __private::{FactoryInvoker, Provider, REFLECTED_PROVIDERS},
+    __private::{FactoryInvoker, Provider, REFLECTED_BINDINGS, REFLECTED_PROVIDERS, TraitBinding},
     registration::{
         service_identifier::ServiceIdentifier, service_key::ServiceKey,
         service_type::ServiceType,
@@ -35,7 +37,7 @@ impl Greeter for GreeterService {
 }
 
 #[test]
-fn linkme_collects_class_factory_and_bound_registrations() {
+fn linkme_collects_providers_and_trait_bindings_separately() {
     let providers: Vec<Provider> = REFLECTED_PROVIDERS.iter().map(|entry| entry()).collect();
 
     let repository = ServiceIdentifier::from(ServiceType::create::<Repository>());
@@ -62,19 +64,16 @@ fn linkme_collects_class_factory_and_bound_registrations() {
         .expect("factory should register a factory provider for the keyed token");
     assert!(matches!(factory.invoker, FactoryInvoker::Sync(_)));
 
-    let binding = providers
-        .iter()
-        .find_map(|provider| match provider {
-            Provider::Bound(binding) => Some(binding),
-            _ => None,
-        })
-        .expect("bind should register a trait binding");
+    // provider 切片里只有实例生产者，绑定不在此处。
+    assert_eq!(providers.len(), 2);
+
+    let bindings: Vec<TraitBinding> = REFLECTED_BINDINGS.iter().map(|entry| entry()).collect();
+    assert_eq!(bindings.len(), 1);
+    let binding = &bindings[0];
     assert_eq!(binding.trait_type, ServiceType::create::<dyn Greeter>());
     assert_eq!(
         binding.concrete_type,
         ServiceType::create::<GreeterService>()
     );
-    assert!(binding.source.file.ends_with("provider_collection.rs"));
-
-    assert_eq!(providers.len(), 3);
+    assert!(binding.source.file.ends_with("registration_collection.rs"));
 }

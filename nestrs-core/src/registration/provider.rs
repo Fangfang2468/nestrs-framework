@@ -1,8 +1,12 @@
 //! Nestrs 的 provider 注册 ABI。
 //!
-//! provider 是 DI 注册、选择与激活的基础单位；[`ServiceIdentifier`] 只描述一个
-//! 可被请求或导出的 service token，不能再承担 provider 自身的身份。linkme 收集
-//! 的是构造 [`Provider`] 的函数项，因此各 provider 仍可携带 `Vec` 形式的依赖描述。
+//! provider 只表示「能为某个 token 产出实例」的注册：`#[injectable]` 的 class provider
+//! 与 `#[factory]` 的 factory provider；[`ServiceIdentifier`] 只描述一个可被请求或
+//! 导出的 service token，不能承担 provider 自身的身份。
+//!
+//! trait 与 concrete 之间的投影规则不是 provider，它由
+//! [`crate::registration::binding::TraitBinding`] 表达并单独收集。linkme 收集的是构造
+//! [`Provider`] 的函数项，因此各 provider 仍可携带 `Vec` 形式的依赖描述。
 
 use std::{future::Future, pin::Pin};
 
@@ -11,13 +15,12 @@ use linkme::distributed_slice;
 use crate::{
     construction::{
         ActivationError, ConstructionContext, Constructor, ErasedService, FactoryActivationFrame,
-        FactoryConstructionContext, PrepareInput,
+        FactoryConstructionContext,
     },
     lifetime::Lifetime,
     registration::{
         dependency::DependencyRequest, injectable::Injectable,
         service_identifier::ServiceIdentifier, service_source::ServiceSource,
-        service_type::ServiceType,
     },
 };
 
@@ -115,31 +118,6 @@ where
     S::provider()
 }
 
-/// `#[bind]` 将 trait 请求映射到 concrete provider 时采用的 key 策略。
-///
-/// bind 本身不声明 key；它继承消费方请求 `dyn Trait` 时携带的 key，并据此派生待激活
-/// 的 concrete provider token。这样 `#[inject(key = "red")] dyn Port` 可以匹配
-/// `#[injectable(key = "red")] ConcretePort`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BoundKeyPolicy {
-    InheritRequestedKey,
-}
-
-impl BoundKeyPolicy {
-    /// 根据 trait 请求派生需要激活的 concrete token。
-    pub fn concrete_identifier(
-        self,
-        requested: ServiceIdentifier,
-        concrete_type: ServiceType,
-    ) -> ServiceIdentifier {
-        match self {
-            Self::InheritRequestedKey => {
-                ServiceIdentifier::new(requested.service_key, concrete_type)
-            }
-        }
-    }
-}
-
 /// `#[injectable]` 注册的 class provider，对标 NestJS `useClass`。
 #[derive(Debug, Clone)]
 pub struct ClassProvider {
@@ -172,37 +150,10 @@ pub struct FactoryProvider {
     pub invoker: FactoryInvoker,
 }
 
-/// 将一个 concrete provider 的已提交地址投影为 trait-object 注入输入的规则。
-///
-/// 它不构造第二份实例，也不导出自己的 service token：resolver 应先按
-/// [`BoundKeyPolicy`] 从 trait 请求派生 concrete token，再激活对应的 class 或 factory
-/// provider，最后用这里的 projector 把稳定地址写入消费方槽位。
-#[derive(Debug, Clone, Copy)]
-pub struct TraitBinding {
-    /// 被导出的 trait 类型。实际请求 key 由 `key_policy` 解释。
-    pub trait_type: ServiceType,
-
-    /// 实际需要激活的 concrete 服务类型。
-    pub concrete_type: ServiceType,
-
-    /// concrete token 如何继承 trait 请求的 key。
-    pub key_policy: BoundKeyPolicy,
-
-    /// concrete-to-trait 必选投影函数。
-    pub prepare_required: PrepareInput,
-
-    /// concrete-to-trait 可选投影函数。
-    pub prepare_optional: PrepareInput,
-
-    /// bind 声明来源。
-    pub source: ServiceSource,
-}
-
 /// 一项静态 provider 注册。
 ///
-/// 三种注册项的角色并不相同：`Class` 与 `Factory` 是实例生产者，`Bound` 是 trait 与
-/// concrete 之间的投影规则。它们共用同一个 linkme 收集入口，并各自保留自己的声明
-/// 形态；解析路径按声明种类分派，与 NestJS 的 provider 解析方式一致。
+/// 两个变体都是实例生产者，差异只在实例如何被构造：结构体字段构造或工厂函数调用。
+/// 解析路径按声明种类分派，与 NestJS 的 provider 解析方式一致。
 #[derive(Debug, Clone)]
 pub enum Provider {
     /// `#[injectable]` 注册的 class provider。
@@ -210,9 +161,6 @@ pub enum Provider {
 
     /// `#[factory]` 注册的 factory provider。
     Factory(FactoryProvider),
-
-    /// `#[bind]` 注册的 trait 投影规则。
-    Bound(TraitBinding),
 }
 
 /// 当前链接单元内由宏或手工注册声明的 provider。
@@ -231,12 +179,7 @@ mod tests {
         task::{Context, Poll, Wake, Waker},
     };
 
-    use crate::registration::{
-        service_key::ServiceKey, service_source::ServiceSource, service_type::ServiceType,
-    };
-
-    struct Trait;
-    struct Concrete;
+    use crate::registration::{service_source::ServiceSource, service_type::ServiceType};
 
     struct NoopWake;
 
@@ -279,21 +222,6 @@ mod tests {
             provider: "failing_factory",
             provider_source: ServiceSource::new("provider.rs", 1, 1),
         })
-    }
-
-    #[test]
-    fn bound_key_policy_inherits_the_trait_request_key() {
-        let requested = ServiceIdentifier::new(
-            Some(ServiceKey::Named("red")),
-            ServiceType::create::<Trait>(),
-        );
-        let concrete_type = ServiceType::create::<Concrete>();
-
-        let resolved =
-            BoundKeyPolicy::InheritRequestedKey.concrete_identifier(requested, concrete_type);
-
-        assert_eq!(resolved.service_key, Some(ServiceKey::Named("red")));
-        assert_eq!(resolved.service_type, ServiceType::create::<Concrete>());
     }
 
     #[test]

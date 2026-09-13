@@ -1,5 +1,5 @@
 use nestrs_core::{
-    __private::{BoundKeyPolicy, Provider, REFLECTED_PROVIDERS, TraitBinding},
+    __private::{BoundKeyPolicy, REFLECTED_BINDINGS, TraitBinding},
     registration::service_type::ServiceType,
 };
 use nestrs_macro::bind;
@@ -19,30 +19,21 @@ impl Greeter for GreeterService {}
 impl HealthCheck for HealthCheckService {}
 
 #[test]
-fn bind_collects_typed_bound_providers() {
-    let bindings: Vec<_> = REFLECTED_PROVIDERS
+fn bind_collects_typed_trait_bindings() {
+    let bindings: Vec<TraitBinding> = REFLECTED_BINDINGS
         .iter()
-        .map(|provider| provider())
-        .filter_map(|provider| match provider {
-            Provider::Bound(TraitBinding {
-                trait_type,
-                concrete_type,
-                key_policy,
-                ..
-            }) => Some((trait_type, concrete_type, key_policy)),
-            _ => None,
-        })
+        .map(|binding| binding())
         .collect();
 
     assert_eq!(bindings.len(), 2);
-    assert!(bindings.iter().any(|(trait_type, concrete_type, key_policy)| {
-        *concrete_type == ServiceType::create::<GreeterService>()
-            && *trait_type == ServiceType::create::<dyn Greeter>()
-            && *key_policy == BoundKeyPolicy::InheritRequestedKey
+    assert!(bindings.iter().any(|binding| {
+        binding.concrete_type == ServiceType::create::<GreeterService>()
+            && binding.trait_type == ServiceType::create::<dyn Greeter>()
+            && binding.key_policy == BoundKeyPolicy::InheritRequestedKey
     }));
-    assert!(bindings.iter().any(|(trait_type, concrete_type, key_policy)| {
-        *concrete_type == ServiceType::create::<HealthCheckService>()
-            && *trait_type == ServiceType::create::<dyn HealthCheck>()
-            && *key_policy == BoundKeyPolicy::InheritRequestedKey
+    assert!(bindings.iter().any(|binding| {
+        binding.concrete_type == ServiceType::create::<HealthCheckService>()
+            && binding.trait_type == ServiceType::create::<dyn HealthCheck>()
+            && binding.key_policy == BoundKeyPolicy::InheritRequestedKey
     }));
 }
