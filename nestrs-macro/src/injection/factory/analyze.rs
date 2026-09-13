@@ -5,11 +5,16 @@
 //! 输入槽位、函数签名重写与成功输出类型判定；后续 codegen 只消费这些稳定事实，
 //! 不重新解析已经从最终函数项移除的 marker。
 
-use crate::injection::attrs::service_key::ServiceKey;
+use crate::injection::{
+    attrs::service_key::ServiceKey,
+    request::{
+        DependencyRequest, FACTORY_MESSAGES, inject_key, split_optional, unparenthesized_type,
+    },
+};
 
 use zyn::syn::{
-    self, Attribute, Expr, ExprLit, FnArg, GenericArgument, ItemFn, Lit, Meta, Pat, PathArguments,
-    ReturnType, Type, parse::Parser, punctuated::Punctuated, spanned::Spanned,
+    self, Attribute, FnArg, GenericArgument, ItemFn, Pat, PathArguments, ReturnType, Type,
+    spanned::Spanned,
 };
 
 /// factory adapter 应如何调用原始函数。
@@ -58,6 +63,23 @@ pub(crate) struct FactoryParameterSpec {
     pub(crate) key: Option<ServiceKey>,
     /// 原参数是否为 `Option<T>`，即缺失时可以交付 `None`。
     pub(crate) optional: bool,
+}
+
+impl FactoryParameterSpec {
+    /// 将参数事实转换为共享依赖请求。
+    ///
+    /// factory 参数的声明位置、输入槽位与标签都固定来自签名本身，因此这里不需要
+    /// 额外过滤：每个参数都是一项依赖请求。
+    pub(crate) fn dependency_request(&self) -> DependencyRequest {
+        DependencyRequest {
+            declaration_position: self.declaration_position,
+            input_position: self.input_position,
+            service_type: self.service_type.clone(),
+            key: self.key.clone(),
+            optional: self.optional,
+            label: Some(self.ident.clone()),
+        }
+    }
 }
 
 /// factory 宏的共享分析结果。
@@ -134,9 +156,9 @@ pub(crate) fn analyze_factory(mut item: ItemFn) -> syn::Result<FactoryAnalysis> 
         };
 
         let ident = simple_parameter_ident(&parameter.pat)?;
-        let key = parse_parameter_attributes(&mut parameter.attrs)?;
+        let key = take_parameter_key(&mut parameter.attrs)?;
         let original_type = (*parameter.ty).clone();
-        let (service_type, optional) = parse_inject_service_type(&original_type)?;
+        let (service_type, optional) = split_optional(&original_type, FACTORY_MESSAGES)?;
 
         let parameter_lifetime = parameter_lifetime
             .as_ref()
@@ -182,273 +204,33 @@ fn simple_parameter_ident(pattern: &Pat) -> syn::Result<syn::Ident> {
     Ok(identifier.ident.clone())
 }
 
-/// 解析并消费一个 factory 参数可使用的 marker 属性。
+/// 取出并消费一个 factory 参数可使用的 marker 属性。
 ///
 /// `#[inject]` 的省略形式和没有属性的参数具有同一语义。`#[value]` 对结构体字段
 /// 才有初始化意义，函数参数没有默认构造阶段，必须在这里明确拒绝。
-fn parse_parameter_attributes(attributes: &mut Vec<Attribute>) -> syn::Result<Option<ServiceKey>> {
-    let mut inject_attributes = Vec::new();
-
+fn take_parameter_key(attributes: &mut Vec<Attribute>) -> syn::Result<Option<ServiceKey>> {
     for attribute in attributes.iter() {
         if attribute.path().is_ident("inject") {
-            inject_attributes.push(attribute);
-        } else if attribute.path().is_ident("value") {
+            continue;
+        }
+        if attribute.path().is_ident("value") {
             return Err(syn::Error::new_spanned(
                 attribute,
                 "`#[factory]` 参数不支持 #[value(...)]；factory 参数只能通过注入取得",
             ));
-        } else {
-            return Err(syn::Error::new_spanned(
-                attribute,
-                "`#[factory]` 参数只支持 #[inject] 属性",
-            ));
         }
+        return Err(syn::Error::new_spanned(
+            attribute,
+            "`#[factory]` 参数只支持 #[inject] 属性",
+        ));
     }
 
-    let key = match inject_attributes.as_slice() {
-        [] => None,
-        [attribute] => parse_inject_attribute(attribute)?,
-        [_, duplicate, ..] => {
-            return Err(syn::Error::new_spanned(duplicate, "重复的 #[inject] 属性"));
-        }
-    };
+    let key = inject_key(attributes)?;
 
     // 所有允许的 marker 都已成为 `FactoryParameterSpec` 的事实；最终函数绝不能
     // 留下一个会被 rustc 当作未知属性的 `#[inject]`。
     attributes.clear();
     Ok(key)
-}
-
-/// 解析 `#[inject]`、`#[inject("name")]`、`#[inject(1)]` 与
-/// `#[inject(key = ...)]`。
-fn parse_inject_attribute(attribute: &Attribute) -> syn::Result<Option<ServiceKey>> {
-    match &attribute.meta {
-        Meta::Path(_) => Ok(None),
-        Meta::List(list) => {
-            if list.tokens.is_empty() {
-                return Err(syn::Error::new_spanned(
-                    attribute,
-                    "#[inject] 不接受空参数；请使用 #[inject]、#[inject(\"key\")] 或 #[inject(key = \"key\")]",
-                ));
-            }
-
-            if let Ok(literal) = syn::parse2::<Lit>(list.tokens.clone()) {
-                return parse_service_key_literal(&literal).map(Some);
-            }
-
-            let metas = Punctuated::<Meta, syn::Token![,]>::parse_terminated
-                .parse2(list.tokens.clone())
-                .map_err(|_| {
-                    syn::Error::new_spanned(attribute, "#[inject] 只接受一个字符串或整数 key")
-                })?;
-
-            if metas.len() != 1 {
-                return Err(syn::Error::new_spanned(
-                    attribute,
-                    "#[inject] 只接受一个 key 参数",
-                ));
-            }
-
-            let Some(Meta::NameValue(value)) = metas.first() else {
-                return Err(syn::Error::new_spanned(
-                    attribute,
-                    "#[inject] 只接受字符串或整数 key；命名形式请写为 key = ...",
-                ));
-            };
-
-            if !value.path.is_ident("key") {
-                return Err(syn::Error::new_spanned(
-                    &value.path,
-                    "#[inject] 只支持 key 参数",
-                ));
-            }
-
-            parse_service_key_expression(&value.value).map(Some)
-        }
-        Meta::NameValue(_) => Err(syn::Error::new_spanned(
-            attribute,
-            "#[inject] 参数必须写在括号中",
-        )),
-    }
-}
-
-fn parse_service_key_expression(expression: &Expr) -> syn::Result<ServiceKey> {
-    let Expr::Lit(ExprLit { lit, .. }) = expression else {
-        return Err(syn::Error::new_spanned(
-            expression,
-            "key 必须是字符串或非负整数值字面量",
-        ));
-    };
-
-    parse_service_key_literal(lit)
-}
-
-fn parse_service_key_literal(literal: &Lit) -> syn::Result<ServiceKey> {
-    match literal {
-        Lit::Str(value) if value.value().is_empty() => {
-            Err(syn::Error::new_spanned(value, "key 字符串不可为空"))
-        }
-        Lit::Str(value) => Ok(ServiceKey::Named(value.value())),
-        Lit::Int(value) => value
-            .base10_parse::<usize>()
-            .map(ServiceKey::Indexed)
-            .map_err(|_| {
-                syn::Error::new_spanned(value, "key 整数必须是可表示为 usize 的非负字面量")
-            }),
-        _ => Err(syn::Error::new_spanned(
-            literal,
-            "key 必须是字符串或非负整数值字面量",
-        )),
-    }
-}
-
-/// 剥离唯一允许的最外层 `Option<T>`，并验证最终服务请求类型。
-fn parse_inject_service_type(ty: &Type) -> syn::Result<(Type, bool)> {
-    if let Some(inner_type) = option_inner(ty)? {
-        validate_inject_service_type(&inner_type, true)?;
-        return Ok((unparenthesized_type(&inner_type).clone(), true));
-    }
-
-    validate_inject_service_type(ty, true)?;
-    Ok((unparenthesized_type(ty).clone(), false))
-}
-
-fn option_inner(ty: &Type) -> syn::Result<Option<Type>> {
-    let Type::Path(type_path) = unparenthesized_type(ty) else {
-        return Ok(None);
-    };
-
-    if type_path.qself.is_some()
-        || !type_path
-            .path
-            .segments
-            .last()
-            .is_some_and(|segment| segment.ident == "Option")
-    {
-        return Ok(None);
-    }
-
-    let segment = type_path
-        .path
-        .segments
-        .last()
-        .expect("an Option path always has a final segment");
-    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
-        return Err(syn::Error::new_spanned(
-            ty,
-            "`#[factory]` 可选参数必须写为 Option<T>",
-        ));
-    };
-
-    if arguments.args.len() != 1 {
-        return Err(syn::Error::new_spanned(
-            arguments,
-            "`#[factory]` 可选参数必须写为 Option<T>",
-        ));
-    }
-
-    let Some(GenericArgument::Type(inner_type)) = arguments.args.first() else {
-        return Err(syn::Error::new_spanned(
-            arguments,
-            "`#[factory]` 可选参数必须写为 Option<T>",
-        ));
-    };
-
-    Ok(Some(inner_type.clone()))
-}
-
-/// factory 参数支持和 `#[injectable]` 字段相同的可表达 service 形状。
-fn validate_inject_service_type(ty: &Type, is_top_level: bool) -> syn::Result<()> {
-    match unparenthesized_type(ty) {
-        Type::TraitObject(_) => Ok(()),
-        Type::Path(type_path) => {
-            if type_path.qself.is_some() {
-                return Err(syn::Error::new_spanned(
-                    ty,
-                    "#[inject] 不接受带限定的关联类型；请注入精确服务类型",
-                ));
-            }
-
-            if type_path.path.is_ident("Self") {
-                return Err(syn::Error::new_spanned(
-                    ty,
-                    "#[inject] 不接受 Self；请注入精确服务类型",
-                ));
-            }
-
-            if is_top_level && is_disallowed_top_level_wrapper(&type_path.path) {
-                return Err(syn::Error::new_spanned(
-                    ty,
-                    "#[inject] 不接受最外层 Arc<T> 或嵌套 Option<T>",
-                ));
-            }
-
-            for segment in &type_path.path.segments {
-                match &segment.arguments {
-                    PathArguments::None => {}
-                    PathArguments::AngleBracketed(arguments) => {
-                        validate_generic_arguments(arguments.args.iter())?;
-                    }
-                    PathArguments::Parenthesized(_) => {
-                        return Err(syn::Error::new_spanned(
-                            ty,
-                            "#[inject] 不接受函数式类型实参；请注入精确服务类型",
-                        ));
-                    }
-                }
-            }
-
-            Ok(())
-        }
-        Type::Reference(_) => Err(syn::Error::new_spanned(
-            ty,
-            "#[inject] 不接受引用；请注入精确服务类型",
-        )),
-        Type::ImplTrait(_) => Err(syn::Error::new_spanned(
-            ty,
-            "#[inject] 不接受 impl Trait；请注入精确服务类型",
-        )),
-        _ => Err(syn::Error::new_spanned(
-            ty,
-            "#[inject] 仅接受精确类型路径或 dyn Trait",
-        )),
-    }
-}
-
-fn validate_generic_arguments<'a>(
-    arguments: impl Iterator<Item = &'a GenericArgument>,
-) -> syn::Result<()> {
-    for argument in arguments {
-        match argument {
-            GenericArgument::Type(ty) => validate_inject_service_type(ty, false)?,
-            GenericArgument::AssocType(association) => {
-                validate_inject_service_type(&association.ty, false)?;
-            }
-            GenericArgument::Lifetime(_)
-            | GenericArgument::Const(_)
-            | GenericArgument::AssocConst(_) => {}
-            GenericArgument::Constraint(_) => {
-                return Err(syn::Error::new_spanned(
-                    argument,
-                    "#[inject] 不接受关联类型约束；请注入精确服务类型",
-                ));
-            }
-            _ => {
-                return Err(syn::Error::new_spanned(
-                    argument,
-                    "#[inject] 包含不支持的泛型实参；请注入精确服务类型",
-                ));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn is_disallowed_top_level_wrapper(path: &syn::Path) -> bool {
-    path.segments
-        .last()
-        .is_some_and(|segment| segment.ident == "Arc" || segment.ident == "Option")
 }
 
 fn injected_parameter_type(service_type: &Type, optional: bool, lifetime: &syn::Lifetime) -> Type {
@@ -611,14 +393,6 @@ fn is_standard_library_type_path(path: &syn::Path, module: &str, terminal: &str)
         && matches!(first.ident.to_string().as_str(), "core" | "std")
         && second.ident == module
         && third.ident == terminal
-}
-
-fn unparenthesized_type(ty: &Type) -> &Type {
-    match ty {
-        Type::Paren(parenthesized) => unparenthesized_type(&parenthesized.elem),
-        Type::Group(grouped) => unparenthesized_type(&grouped.elem),
-        _ => ty,
-    }
 }
 
 #[cfg(test)]

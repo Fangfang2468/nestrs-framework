@@ -8,9 +8,10 @@
 use super::{
     config::InjectableConfig,
     constructor::GenerateGenericInjectableConstructor,
-    field_analyze::{AnalyzedFields, FieldStrategy, is_generic_concrete_type_path},
+    field_analyze::{AnalyzedFields, FieldStrategy},
     provider::EmitClassProviderFields,
 };
+use crate::injection::request::requires_materialization;
 use zyn::{quote::quote, syn, zyn};
 
 /// 为一个开放泛型 provider 输出其按需具体化的 provider definition。
@@ -75,7 +76,7 @@ fn provider_definition_generics(analysis: &AnalyzedFields) -> syn::Generics {
             #service_type: ::nestrs_core::__private::Injectable
         ));
 
-        if is_generic_concrete_type_path(service_type) {
+        if requires_materialization(service_type) {
             where_clause.predicates.push(syn::parse_quote!(
                 #service_type: ::nestrs_core::__private::ProviderDefinition
             ));

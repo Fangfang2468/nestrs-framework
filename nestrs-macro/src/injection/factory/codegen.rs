@@ -5,19 +5,14 @@
 //! callback。这样 factory 函数保留用户可以在模块内调用的普通函数语义，而 runtime
 //! adapter 始终是不可从模块外命名的实现细节。
 
-use crate::injection::{
-    attrs::{cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKey},
-    injectable::field_analyze::is_generic_concrete_type_path,
+use crate::injection::render::{
+    EmitDependencyRequest, RenderCleanupHook, RenderServiceKey, RenderServiceLifetime,
 };
 
 use super::{
     FactoryAnalysis, FactoryConfig, FactoryInvocation, FactoryParameterSpec, FactoryResultKind,
 };
-use zyn::{
-    quote::quote,
-    syn::{self, Type},
-    zyn,
-};
+use zyn::{quote::quote, syn, zyn};
 
 /// 渲染已移除参数 marker 且已经改写参数类型的用户 factory 函数。
 ///
@@ -53,9 +48,6 @@ pub(crate) fn emit_factory_provider(
             @GenerateFactoryAdapter(
                 analysis = analysis.clone(),
             )
-            @EmitFactoryCleanupAdapter(
-                cleanup = config.cleanup.clone(),
-            )
 
             #[::nestrs_core::__private::linkme::distributed_slice(
                 ::nestrs_core::__private::REFLECTED_PROVIDERS
@@ -75,13 +67,11 @@ pub(crate) fn emit_factory_provider(
                             line!(),
                             column!(),
                         ),
-                        cleanup: @RenderFactoryCleanup(cleanup = config.cleanup.clone()),
+                        cleanup: @RenderCleanupHook(cleanup = config.cleanup.clone()),
                     },
                     dependencies: ::std::vec![
                         @for (parameter in analysis.parameters.iter()) {
-                            @EmitFactoryParameterInjection(
-                                parameter = parameter.clone(),
-                            ),
+                            @EmitDependencyRequest(request = parameter.dependency_request()),
                         }
                     ],
                     invoker: @RenderFactoryInvoker(
@@ -290,123 +280,6 @@ fn take_factory_parameter(
     }
 }
 
-/// 为可选 cleanup path 生成类型擦除的 `CleanupHook` adapter。
-#[zyn::element]
-fn emit_factory_cleanup_adapter(cleanup: Option<CleanupPath>) -> zyn::TokenStream {
-    let cleanup_path = cleanup.as_ref().map(|cleanup| cleanup.func_path.clone());
-
-    zyn! {
-        @if (cleanup_path.is_some()) {
-            fn __nestrs_factory_cleanup() -> ::nestrs_core::__private::CleanupFuture {
-                ::std::boxed::Box::pin(async move {
-                    {{ cleanup_path.clone().unwrap() }}().await;
-                })
-            }
-        }
-    }
-}
-
-/// 渲染一个 factory 参数的统一 `InjectionSpec`。
-#[zyn::element]
-fn emit_factory_parameter_injection(parameter: FactoryParameterSpec) -> zyn::TokenStream {
-    let service_type = parameter.service_type.clone();
-    let key = parameter.key.clone();
-    let declaration_position = parameter.declaration_position;
-    let input_position = parameter.input_position;
-    let ident = parameter.ident.clone();
-    let optional = parameter.optional;
-    let is_concrete = matches!(service_type, Type::Path(_));
-    let is_trait_object = matches!(service_type, Type::TraitObject(_));
-    let has_closed_provider = is_generic_concrete_type_path(&service_type);
-
-    zyn! {
-        ::nestrs_core::__private::InjectionSpec {
-            declaration_position: {{ declaration_position }},
-            input_position: ::nestrs_core::__private::InputPosition({{ input_position }}),
-            token: ::nestrs_core::registration::service_identifier::ServiceIdentifier::new(
-                @RenderServiceKey(key = key.clone()),
-                ::nestrs_core::registration::service_type::ServiceType::create::<{{ service_type.clone() }}>(),
-            ),
-            optional: {{ optional }},
-            label: ::core::option::Option::Some(stringify!({{ ident }})),
-            target: @RenderInjectionTarget(
-                is_concrete = is_concrete,
-                is_trait_object = is_trait_object,
-            ),
-            prepare_input: @RenderFactoryParameterPreparer(
-                service_type = service_type.clone(),
-                optional = optional,
-                is_concrete = is_concrete,
-                is_trait_object = is_trait_object,
-            ),
-            closed_provider: @RenderClosedProviderCallback(
-                service_type = service_type,
-                has_closed_provider = has_closed_provider,
-            ),
-        }
-    }
-}
-
-#[zyn::element]
-fn render_injection_target(is_concrete: bool, is_trait_object: bool) -> zyn::TokenStream {
-    zyn! {
-        @if (*is_concrete) {
-            ::nestrs_core::__private::InjectionTarget::Concrete
-        } @else if (*is_trait_object) {
-            ::nestrs_core::__private::InjectionTarget::TraitObject
-        } @else {
-            ::nestrs_core::__private::InjectionTarget::Unsupported
-        }
-    }
-}
-
-/// concrete 参数直接使用 monomorphized preparer；trait-object 参数必须等待 bind
-/// provider 的 typed projector。optional trait 在没有 bind 时可以安全地准备 `None`。
-#[zyn::element]
-fn render_factory_parameter_preparer(
-    service_type: Type,
-    optional: bool,
-    is_concrete: bool,
-    is_trait_object: bool,
-) -> zyn::TokenStream {
-    zyn! {
-        @if (*is_concrete) {
-            ::core::option::Option::Some(
-                @if (*optional) {
-                    ::nestrs_core::__private::prepare_optional::<{{ service_type }}>
-                } @else {
-                    ::nestrs_core::__private::prepare_required::<{{ service_type }}>
-                }
-                as ::nestrs_core::__private::PrepareInput
-            )
-        } @else if (*is_trait_object && *optional) {
-            ::core::option::Option::Some(
-                ::nestrs_core::__private::prepare_optional_absent::<{{ service_type }}>
-                    as ::nestrs_core::__private::PrepareInput
-            )
-        } @else {
-            ::core::option::Option::None
-        }
-    }
-}
-
-#[zyn::element]
-fn render_closed_provider_callback(
-    service_type: Type,
-    has_closed_provider: bool,
-) -> zyn::TokenStream {
-    zyn! {
-        @if (*has_closed_provider) {
-            ::core::option::Option::Some(
-                ::nestrs_core::__private::provider_definition::<{{ service_type }}>
-                    as ::nestrs_core::__private::ClosedProviderCallback
-            )
-        } @else {
-            ::core::option::Option::None
-        }
-    }
-}
-
 #[zyn::element]
 fn render_factory_invoker(invocation: FactoryInvocation) -> zyn::TokenStream {
     let is_async = matches!(invocation, FactoryInvocation::Async);
@@ -420,61 +293,13 @@ fn render_factory_invoker(invocation: FactoryInvocation) -> zyn::TokenStream {
     }
 }
 
-#[zyn::element]
-fn render_factory_cleanup(cleanup: Option<CleanupPath>) -> zyn::TokenStream {
-    zyn! {
-        @if (cleanup.is_some()) {
-            ::core::option::Option::Some(
-                __nestrs_factory_cleanup as ::nestrs_core::__private::CleanupHook
-            )
-        } @else {
-            ::core::option::Option::None
-        }
-    }
-}
-
-#[zyn::element]
-fn render_service_key(key: Option<ServiceKey>) -> zyn::TokenStream {
-    zyn! {
-        @match (key.as_ref()) {
-            Some(ServiceKey::Named(name)) => {
-                ::core::option::Option::Some(
-                    ::nestrs_core::registration::service_key::ServiceKey::Named({{ name }})
-                )
-            }
-            Some(ServiceKey::Indexed(index)) => {
-                ::core::option::Option::Some(
-                    ::nestrs_core::registration::service_key::ServiceKey::Indexed({{ index }})
-                )
-            }
-            None => {
-                ::core::option::Option::None
-            }
-        }
-    }
-}
-
-#[zyn::element]
-fn render_service_lifetime(lifetime: ServiceLifetime) -> zyn::TokenStream {
-    zyn! {
-        @match (lifetime) {
-            ServiceLifetime::Singleton => {
-                ::nestrs_core::lifetime::Lifetime::Singleton
-            }
-            ServiceLifetime::Scoped => {
-                ::nestrs_core::lifetime::Lifetime::Scoped
-            }
-            ServiceLifetime::Transient => {
-                ::nestrs_core::lifetime::Lifetime::Transient
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::injection::factory::analyze::analyze_factory;
+    use crate::injection::{
+        attrs::{lifetime::ServiceLifetime, service_key::ServiceKey},
+        factory::analyze::analyze_factory,
+    };
     use zyn::{Render, syn};
 
     fn render(source: &str) -> String {
