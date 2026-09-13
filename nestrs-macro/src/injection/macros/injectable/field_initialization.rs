@@ -57,7 +57,7 @@ fn should_use_into_conversion(expression: &Expr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::injection::injectable::field_analyze::collect_field_specs;
+    use crate::injection::macros::injectable::field_analyze::collect_field_specs;
     use zyn::{syn, Render};
 
     fn render_initializer(field_type: Type, strategy: FieldStrategy) -> String {

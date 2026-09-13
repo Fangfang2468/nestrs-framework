@@ -59,7 +59,9 @@ pub(crate) fn rewrite_injection_field(analysis: AnalyzedFields) -> zyn::TokenStr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::injection::injectable::field_analyze::{analyze_fields, collect_field_specs};
+    use crate::injection::macros::injectable::field_analyze::{
+        analyze_fields, collect_field_specs,
+    };
     use zyn::{quote::ToTokens, Render};
 
     #[test]

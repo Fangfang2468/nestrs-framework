@@ -92,7 +92,7 @@ mod tests {
     use super::*;
     use crate::injection::{
         attrs::{lifetime::ServiceLifetime, service_key::ServiceKey},
-        injectable::field_analyze::{AnalyzedFields, FieldSpec, collect_field_specs},
+        macros::injectable::field_analyze::{AnalyzedFields, FieldSpec, collect_field_specs},
     };
     use zyn::{Render, syn};
 

@@ -300,7 +300,7 @@ mod tests {
     use super::*;
     use crate::injection::{
         attrs::{lifetime::ServiceLifetime, service_key::ServiceKey},
-        factory::analyze::analyze_factory,
+        macros::factory::analyze::analyze_factory,
     };
     use zyn::{Render, syn};
 

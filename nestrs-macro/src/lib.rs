@@ -25,14 +25,16 @@ use crate::injection::{
         DeferPrimaryToFactory, DeferPrimaryToInjectable, PrimaryConfig,
         take_primary_for_factory, take_primary_for_injectable,
     },
-    bind::EmitBoundProvider,
-    factory::{
-        EmitFactoryProvider, RewriteFactorySignature, analyze_factory, parse_factory_config,
-    },
-    injectable::{
-        CollectInjectableProvider, DefineGenericInjectableProvider, EmitInjectableRegistration,
-        GenerateInjectableConstructor, RewriteInjectionField, analyze_fields,
-        config::InjectableConfig,
+    macros::{
+        bind::EmitBoundProvider,
+        factory::{
+            EmitFactoryProvider, RewriteFactorySignature, analyze_factory, parse_factory_config,
+        },
+        injectable::{
+            CollectInjectableProvider, DefineGenericInjectableProvider, EmitInjectableRegistration,
+            GenerateInjectableConstructor, RewriteInjectionField, analyze_fields,
+            config::InjectableConfig,
+        },
     },
 };
 #[cfg(feature = "injection")]
