@@ -5,7 +5,7 @@ mod reject_unsafe_extern;
 mod return_type;
 mod visibility;
 
-pub(crate) use constructor::CheckConstructor;
+
 pub(crate) use interface::CheckInterfaceType;
 pub(crate) use module_scope::{impl_self_ident, RequireModuleScope};
 pub(crate) use reject_unsafe_extern::{RejectUnsafeAndExternFn, RejectUnsafeImpl};

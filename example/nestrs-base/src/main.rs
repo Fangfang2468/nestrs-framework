@@ -102,6 +102,9 @@ pub struct UserController {
     #[inject]
     pub user_collection_getter: dyn IUserCollection,
 
+    #[inject]
+    pub user_collection_getter_optional: Option<dyn IUserCollection>,
+
     #[value("123")]
     pub name: String,
 
@@ -131,6 +134,7 @@ pub fn use_factory(
     optional_user_controller: Option<UserController>, // 👈 可选注入
     interface_user_controller: dyn IUserCollection, // 👈 接口注入（注入方式上的多态）
     #[inject("interface")] interface_user_controller2: dyn IUserCollection, // 👈 接口注入（具名服务注入）
+    generic_repository: Repository<UserEntity>                              // 👈 泛型服务注入
 ) -> Result<u32, std::io::Error> {
     Ok(1)
 }

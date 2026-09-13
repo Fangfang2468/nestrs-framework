@@ -39,7 +39,7 @@ use crate::injection::{
 };
 #[cfg(feature = "injection")]
 use crate::utility::{
-    CheckConstructor, CheckInterfaceType, MustBePrivateFn, RejectUnsafeAndExternFn,
+    CheckInterfaceType, MustBePrivateFn, RejectUnsafeAndExternFn,
     RejectUnsafeImpl, RequireModuleScope, RequireNonUnitFutureOutputType,
     RequireNonUnitResultOkType, RequireNonUnitReturnType, impl_self_ident,
 };
@@ -185,38 +185,6 @@ pub fn factory(#[zyn(input)] item: syn::ItemFn, args: Args) -> zyn::TokenStream 
                             )
                         }
                     }
-                }
-            }
-        }
-    }
-}
-
-/// 将返回 `Self` 的无 `self` 函数声明为服务构造函数。
-///
-/// `#[constructor]` 不接受属性参数；被标记的函数必须不带 `self`、不能是
-/// `unsafe` 或 `extern` 函数，并返回当前 impl 的类型。
-///
-/// 已弃用：当前不收集构造器元数据，请改用 `#[factory]` 自定义构造逻辑。
-#[cfg(feature = "injection")]
-#[deprecated(
-    since = "0.1.0",
-    note = "`#[constructor]` Rust暂不支持静态反射，还无法实现该功能，先留下口子，需要自定义构造请先使用 `#[factory]`"
-)]
-#[zyn::attribute]
-pub fn constructor(#[zyn(input)] item: syn::ItemFn, args: Args) -> zyn::TokenStream {
-    let macro_name = "constructor".to_owned();
-
-    if let Some(arg) = args.iter().next() {
-        return syn::Error::new(arg.span(), format!("`#[{macro_name}]` 不接受参数"))
-            .into_compile_error()
-            .into();
-    }
-
-    zyn! {
-        @RejectUnsafeAndExternFn(macro_name = macro_name.clone(), item = item.clone()) {
-            @CheckConstructor(macro_name = macro_name.clone()) {
-                @MustBePrivateFn() {
-                    {{ item }}
                 }
             }
         }
