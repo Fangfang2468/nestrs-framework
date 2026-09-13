@@ -1,7 +1,8 @@
 use nestrs_core::{
     __private::{
-        ActivationError, ConstructionContext, ErasedService, InjectionSpec, InjectionTarget,
-        InputPosition, Provider, ProviderCommon, REFLECTED_PROVIDERS,
+        ActivationError, ClassProvider, ConstructionContext, DependencyRequest, Delivery,
+        ErasedService, InputPosition, Provider, ProviderCommon, ProviderSource,
+        REFLECTED_PROVIDERS,
     },
     lifetime::Lifetime,
     registration::{
@@ -23,7 +24,7 @@ fn construct_component(_context: ConstructionContext) -> Result<ErasedService, A
 )]
 #[linkme(crate = ::nestrs_core::__private::linkme)]
 fn component_provider() -> Provider {
-    Provider::Class {
+    Provider::Class(ClassProvider {
         provide: ServiceIdentifier::new(
             Some(ServiceKey::Named("controller")),
             ServiceType::create::<Component>(),
@@ -35,17 +36,16 @@ fn component_provider() -> Provider {
             cleanup: None,
         },
         dependencies: vec![
-            InjectionSpec {
+            DependencyRequest {
                 declaration_position: 0,
                 input_position: InputPosition(0),
                 label: Some("database"),
                 token: ServiceIdentifier::from(ServiceType::create::<Database>()),
                 optional: false,
-                target: InjectionTarget::Concrete,
-                prepare_input: None,
-                closed_provider: None,
+                delivery: Delivery::Direct(nestrs_core::__private::prepare_required::<Database>),
+                provider_source: ProviderSource::Registered,
             },
-            InjectionSpec {
+            DependencyRequest {
                 declaration_position: 2,
                 input_position: InputPosition(1),
                 label: None,
@@ -54,13 +54,14 @@ fn component_provider() -> Provider {
                     ServiceType::create::<dyn Audit>(),
                 ),
                 optional: true,
-                target: InjectionTarget::TraitObject,
-                prepare_input: None,
-                closed_provider: None,
+                delivery: Delivery::RequiresBindingOrAbsent(
+                    nestrs_core::__private::prepare_optional_absent::<dyn Audit>,
+                ),
+                provider_source: ProviderSource::Registered,
             },
         ],
         constructor: construct_component,
-    }
+    })
 }
 
 #[test]
@@ -74,18 +75,18 @@ fn class_provider_keeps_provider_identity_and_dependency_input_layout() {
         .find(|provider| {
             matches!(
                 provider,
-                Provider::Class { provide, .. }
+                Provider::Class(ClassProvider { provide, .. })
                     if provide.service_type == ServiceType::create::<Component>()
             )
         })
         .expect("test class provider should be collected through linkme");
 
-    let Provider::Class {
+    let Provider::Class(ClassProvider {
         provide,
         common,
         dependencies,
         ..
-    } = provider
+    }) = provider
     else {
         panic!("selected registration should be a class provider")
     };
@@ -107,14 +108,21 @@ fn class_provider_keeps_provider_identity_and_dependency_input_layout() {
     assert_eq!(required.input_position, InputPosition(0));
     assert_eq!(required.label, Some("database"));
     assert!(!required.optional);
-    assert_eq!(required.target, InjectionTarget::Concrete);
+    assert!(matches!(required.delivery, Delivery::Direct(_)));
+    assert!(matches!(
+        required.provider_source,
+        ProviderSource::Registered
+    ));
 
     let optional_tuple = &dependencies[1];
     assert_eq!(optional_tuple.declaration_position, 2);
     assert_eq!(optional_tuple.input_position, InputPosition(1));
     assert_eq!(optional_tuple.label, None);
     assert!(optional_tuple.optional);
-    assert_eq!(optional_tuple.target, InjectionTarget::TraitObject);
+    assert!(matches!(
+        optional_tuple.delivery,
+        Delivery::RequiresBindingOrAbsent(_)
+    ));
     assert_eq!(
         optional_tuple.token,
         ServiceIdentifier::new(

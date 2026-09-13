@@ -1,5 +1,8 @@
 use nestrs_core::{
-    __private::{ConstructionContext, InjectionTarget, Provider, REFLECTED_PROVIDERS},
+    __private::{
+        ClassProvider, ConstructionContext, Delivery, Provider, ProviderSource,
+        REFLECTED_PROVIDERS,
+    },
     lifetime::Lifetime,
     registration::{
         service_identifier::ServiceIdentifier, service_key::ServiceKey, service_type::ServiceType,
@@ -70,7 +73,7 @@ fn injectable_collects_class_providers_and_dependency_specs() {
         .find(|provider| {
             matches!(
                 provider,
-                Provider::Class { provide, .. }
+                Provider::Class(ClassProvider { provide, .. })
                     if *provide
                         == ServiceIdentifier::new(
                             Some(ServiceKey::Named("controller")),
@@ -79,11 +82,11 @@ fn injectable_collects_class_providers_and_dependency_specs() {
             )
         })
         .expect("injectable macro should collect Controller provider");
-    let Provider::Class {
+    let Provider::Class(ClassProvider {
         common,
         dependencies,
         ..
-    } = controller
+    }) = controller
     else {
         panic!("Controller should be a class provider");
     };
@@ -102,9 +105,8 @@ fn injectable_collects_class_providers_and_dependency_specs() {
         database.token,
         ServiceIdentifier::from(ServiceType::create::<Database>())
     );
-    assert_eq!(database.target, InjectionTarget::Concrete);
-    assert!(database.prepare_input.is_some());
-    assert!(database.closed_provider.is_none());
+    assert!(matches!(database.delivery, Delivery::Direct(_)));
+    assert!(matches!(database.provider_source, ProviderSource::Registered));
     assert!(!database.optional);
 
     let audit = &dependencies[1];
@@ -118,9 +120,11 @@ fn injectable_collects_class_providers_and_dependency_specs() {
             ServiceType::create::<dyn Audit>(),
         )
     );
-    assert_eq!(audit.target, InjectionTarget::TraitObject);
-    assert!(audit.prepare_input.is_some());
-    assert!(audit.closed_provider.is_none());
+    assert!(matches!(
+        audit.delivery,
+        Delivery::RequiresBindingOrAbsent(_)
+    ));
+    assert!(matches!(audit.provider_source, ProviderSource::Registered));
     assert!(audit.optional);
 
     let tuple = providers
@@ -128,12 +132,12 @@ fn injectable_collects_class_providers_and_dependency_specs() {
         .find(|provider| {
             matches!(
                 provider,
-                Provider::Class { provide, .. }
+                Provider::Class(ClassProvider { provide, .. })
                     if provide.service_type == ServiceType::create::<TupleConsumer>()
             )
         })
         .expect("injectable macro should collect tuple provider");
-    let Provider::Class { dependencies, .. } = tuple else {
+    let Provider::Class(ClassProvider { dependencies, .. }) = tuple else {
         panic!("TupleConsumer should be a class provider");
     };
     assert_eq!(dependencies[0].declaration_position, 0);
@@ -152,12 +156,12 @@ fn injectable_collects_class_providers_and_dependency_specs() {
         .find(|provider| {
             matches!(
                 provider,
-                Provider::Class { provide, .. }
+                Provider::Class(ClassProvider { provide, .. })
                     if provide.service_type == ServiceType::create::<FieldValues>()
             )
         })
         .expect("injectable macro should collect FieldValues provider");
-    let Provider::Class { constructor, .. } = values else {
+    let Provider::Class(ClassProvider { constructor, .. }) = values else {
         panic!("FieldValues should be a class provider");
     };
     let erased_values = constructor(ConstructionContext::new())
@@ -177,12 +181,12 @@ fn injectable_collects_class_providers_and_dependency_specs() {
         .find(|provider| {
             matches!(
                 provider,
-                Provider::Class { provide, .. }
+                Provider::Class(ClassProvider { provide, .. })
                     if provide.service_type == ServiceType::create::<PrimaryBeforeInjectable>()
             )
         })
         .expect("primary-before-injectable should collect a class provider");
-    let Provider::Class { common, .. } = primary_before_injectable else {
+    let Provider::Class(ClassProvider { common, .. }) = primary_before_injectable else {
         panic!("primary-before-injectable should be a class provider");
     };
     assert!(common.primary);
@@ -192,12 +196,12 @@ fn injectable_collects_class_providers_and_dependency_specs() {
         .find(|provider| {
             matches!(
                 provider,
-                Provider::Class { provide, .. }
+                Provider::Class(ClassProvider { provide, .. })
                     if provide.service_type == ServiceType::create::<InjectableBeforePrimary>()
             )
         })
         .expect("injectable-before-primary should collect a class provider");
-    let Provider::Class { common, .. } = injectable_before_primary else {
+    let Provider::Class(ClassProvider { common, .. }) = injectable_before_primary else {
         panic!("injectable-before-primary should be a class provider");
     };
     assert!(common.primary);
@@ -207,12 +211,12 @@ fn injectable_collects_class_providers_and_dependency_specs() {
         .find(|provider| {
             matches!(
                 provider,
-                Provider::Class { provide, .. }
+                Provider::Class(ClassProvider { provide, .. })
                     if provide.service_type == ServiceType::create::<CleanupController>()
             )
         })
         .expect("injectable cleanup should be retained by its provider");
-    let Provider::Class { common, .. } = cleanup_controller else {
+    let Provider::Class(ClassProvider { common, .. }) = cleanup_controller else {
         panic!("CleanupController should be a class provider");
     };
     let cleanup = common

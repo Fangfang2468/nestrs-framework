@@ -64,24 +64,26 @@ pub(crate) fn emit_bound_provider(
             fn __nestrs_reflect_bound_provider()
                 -> ::nestrs_core::__private::Provider
             {
-                ::nestrs_core::__private::Provider::Bound {
-                    trait_type: ::nestrs_core::registration::service_type::ServiceType::create::<
-                        dyn {{ interface }}
-                    >(),
-                    concrete_type: ::nestrs_core::registration::service_type::ServiceType::create::<
-                        {{ service }}
-                    >(),
-                    key_policy: ::nestrs_core::__private::BoundKeyPolicy::InheritRequestedKey,
-                    prepare_required: __nestrs_prepare_bound_required
-                        as ::nestrs_core::__private::PrepareInput,
-                    prepare_optional: __nestrs_prepare_bound_optional
-                        as ::nestrs_core::__private::PrepareInput,
-                    source: ::nestrs_core::registration::service_source::ServiceSource::new(
-                        file!(),
-                        line!(),
-                        column!(),
-                    ),
-                }
+                ::nestrs_core::__private::Provider::Bound(
+                    ::nestrs_core::__private::TraitBinding {
+                        trait_type: ::nestrs_core::registration::service_type::ServiceType::create::<
+                            dyn {{ interface }}
+                        >(),
+                        concrete_type: ::nestrs_core::registration::service_type::ServiceType::create::<
+                            {{ service }}
+                        >(),
+                        key_policy: ::nestrs_core::__private::BoundKeyPolicy::InheritRequestedKey,
+                        prepare_required: __nestrs_prepare_bound_required
+                            as ::nestrs_core::__private::PrepareInput,
+                        prepare_optional: __nestrs_prepare_bound_optional
+                            as ::nestrs_core::__private::PrepareInput,
+                        source: ::nestrs_core::registration::service_source::ServiceSource::new(
+                            file!(),
+                            line!(),
+                            column!(),
+                        ),
+                    }
+                )
             }
 
             ()

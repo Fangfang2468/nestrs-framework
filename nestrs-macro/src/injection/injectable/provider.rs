@@ -31,15 +31,17 @@ pub(crate) fn collect_injectable_provider(
         )]
         #[linkme(crate = ::nestrs_core::__private::linkme)]
         fn __nestrs_reflect_provider() -> ::nestrs_core::__private::Provider {
-            ::nestrs_core::__private::Provider::Class {
-                @EmitClassProviderFields(
-                    analysis = analysis.clone(),
-                    config = config.clone(),
-                    primary = *primary,
-                    service_type = service_type.clone(),
-                )
-                constructor: __nestrs_construct,
-            }
+            ::nestrs_core::__private::Provider::Class(
+                ::nestrs_core::__private::ClassProvider {
+                    @EmitClassProviderFields(
+                        analysis = analysis.clone(),
+                        config = config.clone(),
+                        primary = *primary,
+                        service_type = service_type.clone(),
+                    )
+                    constructor: __nestrs_construct,
+                }
+            )
         }
     }
 }

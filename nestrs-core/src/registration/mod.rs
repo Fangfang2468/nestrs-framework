@@ -1,3 +1,4 @@
+pub mod dependency;
 pub mod injectable;
 pub mod provider;
 pub mod service_identifier;

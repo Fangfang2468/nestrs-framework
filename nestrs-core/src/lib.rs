@@ -23,10 +23,15 @@ pub mod __private {
     pub use crate::inject_wrapper::{FactoryParameter, FieldInject, Inject};
     /// 仅供宏为泛型 provider definition 声明其必要的服务约束。
     pub use crate::registration::injectable::Injectable;
+    /// 仅供宏写入和读取的依赖请求 ABI。
+    pub use crate::registration::dependency::{
+        ClosedProviderCallback, DependencyRequest, Delivery, ProviderSource,
+    };
     /// 仅供宏写入和读取的统一 provider 注册 ABI。
     pub use crate::registration::provider::{
-        AsyncConstructor, BoundKeyPolicy, CleanupFuture, CleanupHook, ClosedProviderCallback,
-        FactoryConstructor, FactoryFuture, FactoryInvoker, InjectionSpec, InjectionTarget,
-        Provider, ProviderCommon, ProviderDefinition, REFLECTED_PROVIDERS, provider_definition,
+        AsyncConstructor, BoundKeyPolicy, ClassProvider, CleanupFuture, CleanupHook,
+        FactoryConstructor, FactoryFuture, FactoryInvoker, FactoryProvider, Provider,
+        ProviderCommon, ProviderDefinition, REFLECTED_PROVIDERS, TraitBinding,
+        provider_definition,
     };
 }

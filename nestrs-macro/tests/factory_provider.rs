@@ -6,7 +6,10 @@ use std::{
 };
 
 use nestrs_core::{
-    __private::{CleanupFuture, FactoryInvoker, InjectionTarget, Provider, REFLECTED_PROVIDERS},
+    __private::{
+        CleanupFuture, Delivery, FactoryInvoker, FactoryProvider, Provider, ProviderSource,
+        REFLECTED_PROVIDERS,
+    },
     lifetime::Lifetime,
     registration::{
         service_identifier::ServiceIdentifier, service_key::ServiceKey, service_type::ServiceType,
@@ -128,7 +131,7 @@ where
         .find(|provider| {
             matches!(
                 provider,
-                Provider::Factory { provide, .. }
+                Provider::Factory(FactoryProvider { provide, .. })
                     if provide.service_type == ServiceType::create::<T>()
             )
         })
@@ -143,12 +146,12 @@ where
 #[test]
 fn factory_collects_common_configuration_and_parameter_injections() {
     let configured = factory_provider_for::<ConfiguredService>();
-    let Provider::Factory {
+    let Provider::Factory(FactoryProvider {
         provide,
         common,
         dependencies,
         invoker,
-    } = configured
+    }) = configured
     else {
         panic!("configured factory should register Provider::Factory");
     };
@@ -173,7 +176,7 @@ fn factory_collects_common_configuration_and_parameter_injections() {
     assert!(dependencies.is_empty());
 
     let parameterized = factory_provider_for::<ParameterizedService>();
-    let Provider::Factory { dependencies, .. } = parameterized else {
+    let Provider::Factory(FactoryProvider { dependencies, .. }) = parameterized else {
         panic!("parameterized factory should register Provider::Factory");
     };
     assert_eq!(dependencies.len(), 3);
@@ -187,9 +190,8 @@ fn factory_collects_common_configuration_and_parameter_injections() {
         ServiceIdentifier::from(ServiceType::create::<Database>())
     );
     assert!(!database.optional);
-    assert_eq!(database.target, InjectionTarget::Concrete);
-    assert!(database.prepare_input.is_some());
-    assert!(database.closed_provider.is_none());
+    assert!(matches!(database.delivery, Delivery::Direct(_)));
+    assert!(matches!(database.provider_source, ProviderSource::Registered));
 
     let cache = dependencies[1];
     assert_eq!(cache.declaration_position, 1);
@@ -200,8 +202,7 @@ fn factory_collects_common_configuration_and_parameter_injections() {
         ServiceIdentifier::from(ServiceType::create::<Cache>())
     );
     assert!(!cache.optional);
-    assert_eq!(cache.target, InjectionTarget::Concrete);
-    assert!(cache.prepare_input.is_some());
+    assert!(matches!(cache.delivery, Delivery::Direct(_)));
 
     let audit = dependencies[2];
     assert_eq!(audit.declaration_position, 2);
@@ -215,45 +216,44 @@ fn factory_collects_common_configuration_and_parameter_injections() {
         )
     );
     assert!(audit.optional);
-    assert_eq!(audit.target, InjectionTarget::Concrete);
-    assert!(audit.prepare_input.is_some());
-    assert!(audit.closed_provider.is_none());
+    assert!(matches!(audit.delivery, Delivery::Direct(_)));
+    assert!(matches!(audit.provider_source, ProviderSource::Registered));
 }
 
 #[test]
 fn factory_invokers_describe_all_supported_return_shapes() {
     let direct = factory_provider_for::<DirectService>();
-    let Provider::Factory { invoker, .. } = direct else {
+    let Provider::Factory(FactoryProvider { invoker, .. }) = direct else {
         panic!("direct factory should register Provider::Factory");
     };
     assert!(matches!(invoker, FactoryInvoker::Sync(_)));
 
     let result = factory_provider_for::<ResultService>();
-    let Provider::Factory { invoker, .. } = result else {
+    let Provider::Factory(FactoryProvider { invoker, .. }) = result else {
         panic!("result factory should register Provider::Factory");
     };
     assert!(matches!(invoker, FactoryInvoker::Sync(_)));
 
     let failed = factory_provider_for::<FailedService>();
-    let Provider::Factory { invoker, .. } = failed else {
+    let Provider::Factory(FactoryProvider { invoker, .. }) = failed else {
         panic!("failing result factory should register Provider::Factory");
     };
     assert!(matches!(invoker, FactoryInvoker::Sync(_)));
 
     let asynchronous = factory_provider_for::<AsyncService>();
-    let Provider::Factory { invoker, .. } = asynchronous else {
+    let Provider::Factory(FactoryProvider { invoker, .. }) = asynchronous else {
         panic!("async factory should register Provider::Factory");
     };
     assert!(matches!(invoker, FactoryInvoker::Async(_)));
 
     let explicit_future = factory_provider_for::<ExplicitFutureService>();
-    let Provider::Factory { invoker, .. } = explicit_future else {
+    let Provider::Factory(FactoryProvider { invoker, .. }) = explicit_future else {
         panic!("explicit Future factory should register Provider::Factory");
     };
     assert!(matches!(invoker, FactoryInvoker::Async(_)));
 
     let explicit_result_future = factory_provider_for::<ExplicitFutureResultService>();
-    let Provider::Factory { invoker, .. } = explicit_result_future else {
+    let Provider::Factory(FactoryProvider { invoker, .. }) = explicit_result_future else {
         panic!("explicit Result Future factory should register Provider::Factory");
     };
     assert!(matches!(invoker, FactoryInvoker::Async(_)));
@@ -272,7 +272,7 @@ fn factory_consumes_primary_in_either_attribute_order_once() {
             .filter(|provider| {
                 matches!(
                     provider,
-                    Provider::Factory { provide, .. } if provide.service_type == service_type
+                    Provider::Factory(FactoryProvider { provide, .. }) if provide.service_type == service_type
                 )
             })
             .collect();
@@ -282,7 +282,7 @@ fn factory_consumes_primary_in_either_attribute_order_once() {
             "each primary factory should emit exactly one Provider::Factory"
         );
 
-        let Provider::Factory { common, .. } = matching[0] else {
+        let Provider::Factory(FactoryProvider { common, .. }) = matching[0] else {
             unreachable!("the filter only retains factory providers");
         };
         assert!(common.primary);

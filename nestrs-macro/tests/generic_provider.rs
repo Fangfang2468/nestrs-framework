@@ -1,7 +1,10 @@
 use std::marker::PhantomData;
 
 use nestrs_core::{
-    __private::{ConstructionContext, Provider, ProviderDefinition, REFLECTED_PROVIDERS},
+    __private::{
+        ClassProvider, ConstructionContext, Delivery, Provider, ProviderDefinition,
+        ProviderSource, REFLECTED_PROVIDERS,
+    },
     registration::{
         service_identifier::ServiceIdentifier, service_type::ServiceType,
     },
@@ -31,13 +34,13 @@ struct UserService {
 #[test]
 fn generic_injectable_materializes_concrete_provider_definitions() {
     let direct = <Repository<Entity> as ProviderDefinition>::provider();
-    let Provider::Class {
+    let Provider::Class(ClassProvider {
         provide,
         common,
         dependencies,
         constructor,
         ..
-    } = direct
+    }) = direct
     else {
         panic!("generic provider definition should produce Provider::Class");
     };
@@ -72,7 +75,7 @@ fn injected_generic_repository_exposes_a_closed_provider_callback() {
         .find(|provider| {
             matches!(
                 provider,
-                Provider::Class { provide, .. }
+                Provider::Class(ClassProvider { provide, .. })
                     if provide.service_type == ServiceType::create::<UserService>()
             )
         })
@@ -83,13 +86,13 @@ fn injected_generic_repository_exposes_a_closed_provider_callback() {
     assert!(!providers.iter().any(|provider| {
         matches!(
             provider,
-            Provider::Class { provide, .. }
+            Provider::Class(ClassProvider { provide, .. })
                 if provide.service_type == ServiceType::create::<Repository<Entity>>()
                     || provide.service_type == ServiceType::create::<Repository<User>>()
         )
     }));
 
-    let Provider::Class { dependencies, .. } = user_service else {
+    let Provider::Class(ClassProvider { dependencies, .. }) = user_service else {
         panic!("UserService should be a class provider");
     };
     let dependency = dependencies
@@ -102,14 +105,17 @@ fn injected_generic_repository_exposes_a_closed_provider_callback() {
         ServiceIdentifier::from(ServiceType::create::<Repository<User>>())
     );
 
-    let repository_provider = dependency
-        .closed_provider
-        .expect("generic injection should carry its closed provider callback")();
-    let Provider::Class {
+    let repository_provider = match dependency.provider_source {
+        ProviderSource::Materialize(definition) => definition(),
+        ProviderSource::Registered => {
+            panic!("generic injection should carry its closed provider callback")
+        }
+    };
+    let Provider::Class(ClassProvider {
         provide,
         constructor,
         ..
-    } = repository_provider
+    }) = repository_provider
     else {
         panic!("generic callback should produce Provider::Class");
     };

@@ -54,30 +54,32 @@ pub(crate) fn emit_factory_provider(
             )]
             #[linkme(crate = ::nestrs_core::__private::linkme)]
             fn __nestrs_reflected_factory() -> ::nestrs_core::__private::Provider {
-                ::nestrs_core::__private::Provider::Factory {
-                    provide: ::nestrs_core::registration::service_identifier::ServiceIdentifier::new(
-                        @RenderServiceKey(key = config.key.clone()),
-                        ::nestrs_core::registration::service_type::ServiceType::create::<{{ analysis.output.success_type.clone() }}>(),
-                    ),
-                    common: ::nestrs_core::__private::ProviderCommon {
-                        lifetime: @RenderServiceLifetime(lifetime = config.lifetime),
-                        primary: {{ primary }},
-                        source: ::nestrs_core::registration::service_source::ServiceSource::new(
-                            file!(),
-                            line!(),
-                            column!(),
+                ::nestrs_core::__private::Provider::Factory(
+                    ::nestrs_core::__private::FactoryProvider {
+                        provide: ::nestrs_core::registration::service_identifier::ServiceIdentifier::new(
+                            @RenderServiceKey(key = config.key.clone()),
+                            ::nestrs_core::registration::service_type::ServiceType::create::<{{ analysis.output.success_type.clone() }}>(),
                         ),
-                        cleanup: @RenderCleanupHook(cleanup = config.cleanup.clone()),
-                    },
-                    dependencies: ::std::vec![
-                        @for (parameter in analysis.parameters.iter()) {
-                            @EmitDependencyRequest(request = parameter.dependency_request()),
-                        }
-                    ],
-                    invoker: @RenderFactoryInvoker(
-                        invocation = analysis.output.invocation,
-                    ),
-                }
+                        common: ::nestrs_core::__private::ProviderCommon {
+                            lifetime: @RenderServiceLifetime(lifetime = config.lifetime),
+                            primary: {{ primary }},
+                            source: ::nestrs_core::registration::service_source::ServiceSource::new(
+                                file!(),
+                                line!(),
+                                column!(),
+                            ),
+                            cleanup: @RenderCleanupHook(cleanup = config.cleanup.clone()),
+                        },
+                        dependencies: ::std::vec![
+                            @for (parameter in analysis.parameters.iter()) {
+                                @EmitDependencyRequest(request = parameter.dependency_request()),
+                            }
+                        ],
+                        invoker: @RenderFactoryInvoker(
+                            invocation = analysis.output.invocation,
+                        ),
+                    }
+                )
             }
 
             ()

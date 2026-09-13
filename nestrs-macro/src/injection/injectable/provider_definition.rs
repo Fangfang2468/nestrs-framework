@@ -35,17 +35,19 @@ pub(crate) fn define_generic_injectable_provider(
             for {{ service }} {{ type_generics }} {{ where_clause }}
         {
             fn provider() -> ::nestrs_core::__private::Provider {
-                ::nestrs_core::__private::Provider::Class {
-                    @EmitClassProviderFields(
-                        analysis = analysis.clone(),
-                        config = config.clone(),
-                        primary = *primary,
-                        service_type = service_type.clone(),
-                    )
-                    constructor: @GenerateGenericInjectableConstructor(
-                        analysis = analysis.clone(),
-                    ),
-                }
+                ::nestrs_core::__private::Provider::Class(
+                    ::nestrs_core::__private::ClassProvider {
+                        @EmitClassProviderFields(
+                            analysis = analysis.clone(),
+                            config = config.clone(),
+                            primary = *primary,
+                            service_type = service_type.clone(),
+                        )
+                        constructor: @GenerateGenericInjectableConstructor(
+                            analysis = analysis.clone(),
+                        ),
+                    }
+                )
             }
         }
     }

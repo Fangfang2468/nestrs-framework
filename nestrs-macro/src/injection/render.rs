@@ -12,15 +12,15 @@ use zyn::{syn, zyn};
 
 /// 渲染一条依赖请求的注册描述。
 ///
-/// 依赖的服务类型形态在这里一次性分流：concrete 与闭合泛型使用单个 monomorphized
-/// preparer，trait object 的 projector 则必须由匹配到的 `#[bind]` 提供。
+/// 请求的两个正交事实在这里一次性分流：值怎么进槽位（`delivery`）与 provider 从哪来
+/// （`provider_source`）。concrete 与闭合泛型的交付方式相同，差别只在 provider 需要
+/// 显式注册还是按需物化；trait object 的 projector 则必须由匹配到的 `#[bind]` 提供。
 #[zyn::element]
 pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenStream {
     let service_type = request.service_type.clone();
     let shape = classify(&service_type);
-    let is_concrete = shape != DependencyShape::TraitObject;
     let is_trait_object = shape == DependencyShape::TraitObject;
-    let has_closed_provider = shape == DependencyShape::ClosedGeneric;
+    let materializes = shape == DependencyShape::ClosedGeneric;
     let key = request.key.clone();
     let optional = request.optional;
     let declaration_position = request.declaration_position;
@@ -28,47 +28,51 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
     let label = request.label.clone();
 
     zyn! {
-        ::nestrs_core::__private::InjectionSpec {
+        ::nestrs_core::__private::DependencyRequest {
             declaration_position: {{ declaration_position }},
             input_position: ::nestrs_core::__private::InputPosition({{ input_position }}),
-            label: @RenderFieldLabel(label = label.clone()),
             token: ::nestrs_core::registration::service_identifier::ServiceIdentifier::new(
                 @RenderServiceKey(key = key.clone()),
                 ::nestrs_core::registration::service_type::ServiceType::create::<{{ service_type.clone() }}>(),
             ),
             optional: {{ optional }},
-            target: @RenderDependencyTarget(
-                is_concrete = is_concrete,
-                is_trait_object = is_trait_object,
-            ),
-            prepare_input: @RenderDependencyPreparer(
+            label: @RenderFieldLabel(label = label.clone()),
+            delivery: @RenderDelivery(
                 service_type = service_type.clone(),
                 optional = optional,
-                is_concrete = is_concrete,
                 is_trait_object = is_trait_object,
             ),
-            closed_provider: @RenderClosedProviderCallback(
+            provider_source: @RenderProviderSource(
                 service_type = service_type.clone(),
-                has_closed_provider = has_closed_provider,
+                materializes = materializes,
             ),
         }
     }
 }
 
-/// 为 concrete 类型渲染 Arena 输入准备函数项。
+/// 渲染依赖值写入构造输入槽位的方式。
 ///
-/// 函数项保留宏展开时已知的精确 `T`，运行时只需把查到的稳定地址传入；对 `dyn Trait`
-/// 则暂不生成错误的薄指针转换，等待 `#[bind]` 提供 concrete-to-trait projector。
+/// concrete 与闭合泛型都由消费点自己单态化 preparer；trait object 的 projector 只能
+/// 由匹配到的 `#[bind]` 提供，因此必选形态不携带 preparer，可选形态只携带一个
+/// 「只接受缺席」的兜底函数项。
 #[zyn::element]
-fn render_dependency_preparer(
+fn render_delivery(
     service_type: syn::Type,
     optional: bool,
-    is_concrete: bool,
     is_trait_object: bool,
 ) -> zyn::TokenStream {
     zyn! {
-        @if (*is_concrete) {
-            ::core::option::Option::Some(
+        @if (*is_trait_object) {
+            @if (*optional) {
+                ::nestrs_core::__private::Delivery::RequiresBindingOrAbsent(
+                    ::nestrs_core::__private::prepare_optional_absent::<{{ service_type }}>
+                        as ::nestrs_core::__private::PrepareInput
+                )
+            } @else {
+                ::nestrs_core::__private::Delivery::RequiresBinding
+            }
+        } @else {
+            ::nestrs_core::__private::Delivery::Direct(
                 @if (*optional) {
                     ::nestrs_core::__private::prepare_optional::<{{ service_type }}>
                 } @else {
@@ -76,52 +80,24 @@ fn render_dependency_preparer(
                 }
                 as ::nestrs_core::__private::PrepareInput
             )
-        } @else if (*is_trait_object && *optional) {
-            ::core::option::Option::Some(
-                ::nestrs_core::__private::prepare_optional_absent::<{{ service_type }}>
-                    as ::nestrs_core::__private::PrepareInput
-            )
-        } @else {
-            ::core::option::Option::None
         }
     }
 }
 
-/// 将宏期字段类型的形状写入 runtime 注册 ABI。
+/// 渲染解析期寻找 provider 的方式。
 ///
-/// 这里由 `syn::Type` 直接给出类别，而不是让 runtime 通过 `TypeId` 反推 `dyn Trait`。
-/// 后者无法恢复 trait-object 的 vtable，也会把 unsupported 类型误判成 concrete 服务。
+/// `TypeId` 不能还原开放泛型的 origin 或实参；闭合泛型因此在这里嵌入一个返回精确
+/// provider 的 callback，运行时只在缺少显式注册时调用它。
 #[zyn::element]
-fn render_dependency_target(is_concrete: bool, is_trait_object: bool) -> zyn::TokenStream {
+fn render_provider_source(service_type: syn::Type, materializes: bool) -> zyn::TokenStream {
     zyn! {
-        @if (*is_concrete) {
-            ::nestrs_core::__private::InjectionTarget::Concrete
-        } @else if (*is_trait_object) {
-            ::nestrs_core::__private::InjectionTarget::TraitObject
-        } @else {
-            ::nestrs_core::__private::InjectionTarget::Unsupported
-        }
-    }
-}
-
-/// 为一个已闭合的泛型服务请求渲染其具体化 callback。
-///
-/// `TypeId` 不能还原开放泛型的 origin 或实参；这个 callback 则在宏展开时已带着
-/// `Repository<UserEntity>` 这样的精确类型，运行时只需在缺少显式注册时调用它。
-/// 动态 trait 注入不会到达这里的 `Some` 分支，从而仍由 bind 的普通选择规则处理。
-#[zyn::element]
-fn render_closed_provider_callback(
-    service_type: syn::Type,
-    has_closed_provider: bool,
-) -> zyn::TokenStream {
-    zyn! {
-        @if (*has_closed_provider) {
-            ::core::option::Option::Some(
+        @if (*materializes) {
+            ::nestrs_core::__private::ProviderSource::Materialize(
                 ::nestrs_core::__private::provider_definition::<{{ service_type }}>
                     as ::nestrs_core::__private::ClosedProviderCallback
             )
         } @else {
-            ::core::option::Option::None
+            ::nestrs_core::__private::ProviderSource::Registered
         }
     }
 }

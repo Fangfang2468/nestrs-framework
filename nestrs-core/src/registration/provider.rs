@@ -11,12 +11,13 @@ use linkme::distributed_slice;
 use crate::{
     construction::{
         ActivationError, ConstructionContext, Constructor, ErasedService, FactoryActivationFrame,
-        FactoryConstructionContext, InputPosition, PrepareInput,
+        FactoryConstructionContext, PrepareInput,
     },
     lifetime::Lifetime,
     registration::{
-        injectable::Injectable, service_identifier::ServiceIdentifier,
-        service_source::ServiceSource, service_type::ServiceType,
+        dependency::DependencyRequest, injectable::Injectable,
+        service_identifier::ServiceIdentifier, service_source::ServiceSource,
+        service_type::ServiceType,
     },
 };
 
@@ -93,62 +94,6 @@ pub struct ProviderCommon {
     pub cleanup: Option<CleanupHook>,
 }
 
-/// 一次字段或 factory 参数的依赖请求。
-///
-/// 字段与函数参数都通过该结构描述，从而共享 token、可选性、构造输入位置和
-/// trait-object 交付策略。`prepare_input` 仅适用于 concrete 依赖或明确的 optional
-/// absence；trait object 的实际 projector 由匹配到的 [`Provider::Bound`] 提供。
-#[derive(Debug, Clone, Copy)]
-pub struct InjectionSpec {
-    /// 依赖在原始字段或参数声明中的零基位置。
-    ///
-    /// 对结构体字段，该位置包含 `#[value]` / 默认字段；它只服务于稳定诊断，不等同于
-    /// 构造 ABI 的输入槽位。
-    pub declaration_position: usize,
-
-    /// 依赖在构造输入中的位置。
-    pub input_position: InputPosition,
-
-    /// 查找依赖服务的 token。
-    pub token: ServiceIdentifier,
-
-    /// 缺失依赖时是否允许交付 `None`。
-    pub optional: bool,
-
-    /// 依赖诊断或元数据使用的可读标签。
-    pub label: Option<&'static str>,
-
-    /// 依赖请求的注入目标类别。
-    pub target: InjectionTarget,
-
-    /// 将 Arena 已发布的稳定地址准备为对应 `Inject<T>` 的单态化函数。
-    ///
-    /// 必选 trait object 和暂不支持的目标没有直接 preparer，故这里必须允许为空。
-    pub prepare_input: Option<PrepareInput>,
-
-    /// 当前注入点已单态化的泛型 provider fallback。
-    ///
-    /// 开放泛型的类型实参不能从 `TypeId` 反推；例如 `Repository<User>` 必须由宏在
-    /// 这个调用点嵌入一个返回闭合 provider 的 callback。
-    pub closed_provider: Option<ClosedProviderCallback>,
-}
-
-/// 依赖请求的目标类型形态。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum InjectionTarget {
-    /// 普通 concrete service 类型。
-    Concrete,
-
-    /// `dyn Trait`，需要 concrete-to-trait 的 typed projector。
-    TraitObject,
-
-    /// 当前稳定地址 ABI 尚不能表示的依赖类型。
-    Unsupported,
-}
-
-/// 已知闭合泛型服务转为 provider 的 callback。
-pub type ClosedProviderCallback = fn() -> Provider;
-
 /// 为一个已闭合的 Rust 服务类型定义 provider 蓝图。
 ///
 /// 这是宏与 runtime 之间的隐藏 ABI。它不是运行时反射：`Self` 在调用时已经是
@@ -195,74 +140,153 @@ impl BoundKeyPolicy {
     }
 }
 
+/// `#[injectable]` 注册的 class provider，对标 NestJS `useClass`。
+#[derive(Debug, Clone)]
+pub struct ClassProvider {
+    /// provider 导出的 service token。
+    pub provide: ServiceIdentifier,
+
+    /// provider 的共享声明属性。
+    pub common: ProviderCommon,
+
+    /// 结构体字段依赖。
+    pub dependencies: Vec<DependencyRequest>,
+
+    /// 构造 concrete service 的隐藏 adapter。
+    pub constructor: Constructor,
+}
+
+/// `#[factory]` 注册的 factory provider，对标 NestJS `useFactory`。
+#[derive(Debug, Clone)]
+pub struct FactoryProvider {
+    /// provider 导出的 service token。
+    pub provide: ServiceIdentifier,
+
+    /// provider 的共享声明属性。
+    pub common: ProviderCommon,
+
+    /// factory 参数依赖。
+    pub dependencies: Vec<DependencyRequest>,
+
+    /// 同步或异步 factory 的隐藏调用 adapter。
+    pub invoker: FactoryInvoker,
+}
+
+/// 将一个 concrete provider 的已提交地址投影为 trait-object 注入输入的规则。
+///
+/// 它不构造第二份实例，也不导出自己的 service token：resolver 应先按
+/// [`BoundKeyPolicy`] 从 trait 请求派生 concrete token，再激活对应的 class 或 factory
+/// provider，最后用这里的 projector 把稳定地址写入消费方槽位。
+#[derive(Debug, Clone, Copy)]
+pub struct TraitBinding {
+    /// 被导出的 trait 类型。实际请求 key 由 `key_policy` 解释。
+    pub trait_type: ServiceType,
+
+    /// 实际需要激活的 concrete 服务类型。
+    pub concrete_type: ServiceType,
+
+    /// concrete token 如何继承 trait 请求的 key。
+    pub key_policy: BoundKeyPolicy,
+
+    /// concrete-to-trait 必选投影函数。
+    pub prepare_required: PrepareInput,
+
+    /// concrete-to-trait 可选投影函数。
+    pub prepare_optional: PrepareInput,
+
+    /// bind 声明来源。
+    pub source: ServiceSource,
+}
+
 /// 一项静态 provider 注册。
+///
+/// 三种注册项的角色并不相同：`Class` 与 `Factory` 是实例生产者，`Bound` 是 trait 与
+/// concrete 之间的投影规则。它们共用同一个 linkme 收集入口，由 registry 在归一化时
+/// 按角色分区，解析路径因此不必在每次查询时重新判断变体。
 #[derive(Debug, Clone)]
 pub enum Provider {
-    /// `#[injectable]` 注册的 class provider，对标 NestJS `useClass`。
-    Class {
-        /// provider 导出的 service token。
-        provide: ServiceIdentifier,
+    /// `#[injectable]` 注册的 class provider。
+    Class(ClassProvider),
 
-        /// provider 的共享声明属性。
-        common: ProviderCommon,
+    /// `#[factory]` 注册的 factory provider。
+    Factory(FactoryProvider),
 
-        /// 结构体字段依赖。
-        dependencies: Vec<InjectionSpec>,
+    /// `#[bind]` 注册的 trait 投影规则。
+    Bound(TraitBinding),
+}
 
-        /// 构造 concrete service 的隐藏 adapter。
-        constructor: Constructor,
-    },
+/// 注册项的角色。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProviderKind {
+    /// `#[injectable]` 注册的 class provider。
+    Class,
 
-    /// `#[factory]` 注册的 factory provider，对标 NestJS `useFactory`。
-    Factory {
-        /// provider 导出的 service token。
-        provide: ServiceIdentifier,
+    /// `#[factory]` 注册的 factory provider。
+    Factory,
 
-        /// provider 的共享声明属性。
-        common: ProviderCommon,
+    /// `#[bind]` 注册的 trait 投影规则。
+    Bound,
+}
 
-        /// factory 参数依赖。
-        dependencies: Vec<InjectionSpec>,
+impl ProviderKind {
+    /// 用于诊断与日志的稳定名称。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Class => "Class",
+            Self::Factory => "Factory",
+            Self::Bound => "Bound",
+        }
+    }
+}
 
-        /// 同步或异步 factory 的隐藏调用 adapter。
-        invoker: FactoryInvoker,
-    },
+impl std::fmt::Display for ProviderKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
 
-    /// 将 concrete provider 的已提交地址投影为 trait-object 注入输入。
+impl Provider {
+    /// 注册项的角色。
+    pub fn kind(&self) -> ProviderKind {
+        match self {
+            Self::Class(_) => ProviderKind::Class,
+            Self::Factory(_) => ProviderKind::Factory,
+            Self::Bound(_) => ProviderKind::Bound,
+        }
+    }
+
+    /// 注册项的静态声明来源。
+    pub fn source(&self) -> ServiceSource {
+        match self {
+            Self::Class(provider) => provider.common.source,
+            Self::Factory(provider) => provider.common.source,
+            Self::Bound(binding) => binding.source,
+        }
+    }
+
+    /// 注册项导出的 service token。
     ///
-    /// 它不构造第二份实例；resolver 应先按 [`BoundKeyPolicy`] 从 trait 请求导出
-    /// concrete token，再激活对应 class 或 factory provider。
-    Bound {
-        /// 被导出的 trait 类型。实际请求 key 由 `key_policy` 解释。
-        trait_type: ServiceType,
+    /// [`Provider::Bound`] 不导出自己的 token：它把 concrete provider 的已提交地址
+    /// 投影给 trait 请求，因此这里返回 `None`。
+    pub fn exported_identifier(&self) -> Option<ServiceIdentifier> {
+        match self {
+            Self::Class(provider) => Some(provider.provide),
+            Self::Factory(provider) => Some(provider.provide),
+            Self::Bound(_) => None,
+        }
+    }
 
-        /// 实际需要激活的 concrete 服务类型。
-        concrete_type: ServiceType,
-
-        /// concrete token 如何继承 trait 请求的 key。
-        key_policy: BoundKeyPolicy,
-
-        /// concrete-to-trait 必选投影函数。
-        prepare_required: PrepareInput,
-
-        /// concrete-to-trait 可选投影函数。
-        prepare_optional: PrepareInput,
-
-        /// bind 声明来源。
-        source: ServiceSource,
-    },
-
-    /// 将一个 token 重定向到另一个 provider token，对标 NestJS `useExisting`。
-    Alias {
-        /// alias 导出的 token。
-        provide: ServiceIdentifier,
-
-        /// 实际目标 token。
-        target: ServiceIdentifier,
-
-        /// alias 声明来源。
-        source: ServiceSource,
-    },
+    /// 实例生产者共享的声明属性。
+    ///
+    /// [`Provider::Bound`] 是投影规则而不是实例生产者，其 lifetime、primary 与 cleanup
+    /// 全部继承自被绑定的 concrete provider，因此这里返回 `None`。
+    pub fn common(&self) -> Option<&ProviderCommon> {
+        match self {
+            Self::Class(provider) => Some(&provider.common),
+            Self::Factory(provider) => Some(&provider.common),
+            Self::Bound(_) => None,
+        }
+    }
 }
 
 /// 当前链接单元内由宏或手工注册声明的 provider。

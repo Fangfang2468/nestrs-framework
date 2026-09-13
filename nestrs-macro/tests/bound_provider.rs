@@ -1,5 +1,5 @@
 use nestrs_core::{
-    __private::{BoundKeyPolicy, Provider, REFLECTED_PROVIDERS},
+    __private::{BoundKeyPolicy, Provider, REFLECTED_PROVIDERS, TraitBinding},
     registration::service_type::ServiceType,
 };
 use nestrs_macro::bind;
@@ -24,12 +24,12 @@ fn bind_collects_typed_bound_providers() {
         .iter()
         .map(|provider| provider())
         .filter_map(|provider| match provider {
-            Provider::Bound {
+            Provider::Bound(TraitBinding {
                 trait_type,
                 concrete_type,
                 key_policy,
                 ..
-            } => Some((trait_type, concrete_type, key_policy)),
+            }) => Some((trait_type, concrete_type, key_policy)),
             _ => None,
         })
         .collect();
