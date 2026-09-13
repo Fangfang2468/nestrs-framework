@@ -5,7 +5,7 @@
 //! 多处重新解析 `#[inject]` 而产生漂移。
 
 use crate::injection::{
-    attrs::service_key::ServiceKey,
+    macros_attrs::service_key::ServiceKey,
     sub_macros::{
         inject::{self, DependencyRequest, INJECTABLE_MESSAGES, inject_key, split_optional},
         value,

@@ -299,7 +299,7 @@ fn render_factory_invoker(invocation: FactoryInvocation) -> zyn::TokenStream {
 mod tests {
     use super::*;
     use crate::injection::{
-        attrs::{lifetime::ServiceLifetime, service_key::ServiceKey},
+        macros_attrs::{lifetime::ServiceLifetime, service_key::ServiceKey},
         macros::factory::analyze::analyze_factory,
     };
     use zyn::{Render, syn};

@@ -91,7 +91,7 @@ pub(crate) fn emit_class_provider_fields(
 mod tests {
     use super::*;
     use crate::injection::{
-        attrs::{lifetime::ServiceLifetime, service_key::ServiceKey},
+        macros_attrs::{lifetime::ServiceLifetime, service_key::ServiceKey},
         macros::injectable::field_analyze::{AnalyzedFields, FieldSpec, collect_field_specs},
     };
     use zyn::{Render, syn};

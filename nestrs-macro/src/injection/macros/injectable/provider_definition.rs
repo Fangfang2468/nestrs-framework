@@ -92,7 +92,7 @@ fn provider_definition_generics(analysis: &AnalyzedFields) -> syn::Generics {
 mod tests {
     use super::*;
     use crate::injection::{
-        attrs::lifetime::ServiceLifetime, macros::injectable::field_analyze::analyze_fields,
+        macros_attrs::lifetime::ServiceLifetime, macros::injectable::field_analyze::analyze_fields,
     };
     use zyn::{Render, syn};
 

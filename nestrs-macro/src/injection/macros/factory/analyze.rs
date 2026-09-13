@@ -6,7 +6,7 @@
 //! 不重新解析已经从最终函数项移除的 marker。
 
 use crate::injection::{
-    attrs::service_key::ServiceKey,
+    macros_attrs::service_key::ServiceKey,
     sub_macros::{
         inject::{
             self, DependencyRequest, FACTORY_MESSAGES, inject_key, split_optional,

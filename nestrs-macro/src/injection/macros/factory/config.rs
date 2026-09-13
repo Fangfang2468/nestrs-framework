@@ -5,7 +5,7 @@
 //! 约束依附到结构体字段分析上，也让入口在处理 `#[primary]` 的属性顺序时只需要
 //! 传入已经确定的布尔值。
 
-use crate::injection::attrs::{
+use crate::injection::macros_attrs::{
     cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKey,
 };
 

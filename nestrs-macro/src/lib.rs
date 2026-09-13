@@ -21,7 +21,7 @@ use zyn::{
 
 #[cfg(feature = "injection")]
 use crate::injection::{
-    attrs::primary::{
+    macros_attrs::primary::{
         DeferPrimaryToFactory, DeferPrimaryToInjectable, PrimaryConfig,
         take_primary_for_factory, take_primary_for_injectable,
     },

@@ -5,7 +5,7 @@
 //! 各自的宏期事实，避免同一份 ABI 出现两套实现。
 
 use crate::injection::{
-    attrs::{cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKey},
+    macros_attrs::{cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKey},
     sub_macros::inject::{DependencyRequest, DependencyShape, classify},
 };
 use zyn::{syn, zyn};

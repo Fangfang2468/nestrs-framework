@@ -5,10 +5,10 @@
 //! `Option<T>` 可选形态与可注入服务类型的规则完全一致。
 //!
 //! 这里只做「源码语法 → 宏期事实」：不生成 token、不改写 AST、不依赖 provider 注册
-//! ABI。key 值的字面量规则定义在 [`crate::injection::attrs::service_key`]，注册 ABI
+//! ABI。key 值的字面量规则定义在 [`crate::injection::macros_attrs::service_key`]，注册 ABI
 //! 的渲染在 `crate::injection::render`。
 
-use crate::injection::attrs::service_key::{self, ServiceKey};
+use crate::injection::macros_attrs::service_key::{self, ServiceKey};
 use zyn::syn::{
     self, Attribute, GenericArgument, Lit, Meta, PathArguments, Type, parse::Parser,
     punctuated::Punctuated,

@@ -1,4 +1,4 @@
-use crate::injection::attrs::{
+use crate::injection::macros_attrs::{
     cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKey,
 };
 
