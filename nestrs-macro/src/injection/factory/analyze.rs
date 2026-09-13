@@ -7,8 +7,12 @@
 
 use crate::injection::{
     attrs::service_key::ServiceKey,
-    sub_macros::inject::{
-        DependencyRequest, FACTORY_MESSAGES, inject_key, split_optional, unparenthesized_type,
+    sub_macros::{
+        inject::{
+            self, DependencyRequest, FACTORY_MESSAGES, inject_key, split_optional,
+            unparenthesized_type,
+        },
+        value,
     },
 };
 
@@ -210,10 +214,10 @@ fn simple_parameter_ident(pattern: &Pat) -> syn::Result<syn::Ident> {
 /// 才有初始化意义，函数参数没有默认构造阶段，必须在这里明确拒绝。
 fn take_parameter_key(attributes: &mut Vec<Attribute>) -> syn::Result<Option<ServiceKey>> {
     for attribute in attributes.iter() {
-        if attribute.path().is_ident("inject") {
+        if inject::is_marker(attribute) {
             continue;
         }
-        if attribute.path().is_ident("value") {
+        if value::is_marker(attribute) {
             return Err(syn::Error::new_spanned(
                 attribute,
                 "`#[factory]` 参数不支持 #[value(...)]；factory 参数只能通过注入取得",

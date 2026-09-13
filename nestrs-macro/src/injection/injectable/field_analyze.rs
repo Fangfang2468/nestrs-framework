@@ -6,10 +6,13 @@
 
 use crate::injection::{
     attrs::service_key::ServiceKey,
-    sub_macros::inject::{DependencyRequest, INJECTABLE_MESSAGES, inject_key, split_optional},
+    sub_macros::{
+        inject::{self, DependencyRequest, INJECTABLE_MESSAGES, inject_key, split_optional},
+        value,
+    },
 };
 
-use zyn::syn::{self, Attribute, Expr, Field, Fields, Meta, Type, spanned::Spanned};
+use zyn::syn::{self, Expr, Field, Fields, Type, spanned::Spanned};
 
 /// 一个字段在自动构造时的来源。
 ///
@@ -125,10 +128,10 @@ pub(crate) fn collect_field_specs(fields: &Fields) -> syn::Result<Vec<FieldSpec>
     let mut specs = Vec::with_capacity(fields.len());
 
     for (index, field) in fields.iter().enumerate() {
-        let inject_attributes = marker_attributes(&field.attrs, "inject");
-        let value_attributes = marker_attributes(&field.attrs, "value");
+        let has_inject = field.attrs.iter().any(inject::is_marker);
+        let has_value = field.attrs.iter().any(value::is_marker);
 
-        if !inject_attributes.is_empty() && !value_attributes.is_empty() {
+        if has_inject && has_value {
             return Err(syn::Error::new_spanned(
                 field,
                 format!(
@@ -138,7 +141,7 @@ pub(crate) fn collect_field_specs(fields: &Fields) -> syn::Result<Vec<FieldSpec>
             ));
         }
 
-        let strategy = if !inject_attributes.is_empty() {
+        let strategy = if has_inject {
             let key = inject_key(&field.attrs)?;
             let (service_type, optional) = split_optional(&field.ty, INJECTABLE_MESSAGES)?;
 
@@ -147,12 +150,11 @@ pub(crate) fn collect_field_specs(fields: &Fields) -> syn::Result<Vec<FieldSpec>
                 key,
                 optional,
             }
-        } else if !value_attributes.is_empty() {
-            FieldStrategy::Value {
-                expression: parse_value_attribute(&value_attributes)?,
-            }
         } else {
-            FieldStrategy::Default
+            match value::parse(&field.attrs)? {
+                Some(expression) => FieldStrategy::Value { expression },
+                None => FieldStrategy::Default,
+            }
         };
 
         specs.push(FieldSpec {
@@ -191,16 +193,9 @@ pub(crate) fn collect_field_specs(fields: &Fields) -> syn::Result<Vec<FieldSpec>
 fn remove_field_strategy_attributes(fields: &mut Fields) {
     for field in fields.iter_mut() {
         field.attrs.retain(|attribute| {
-            !attribute.path().is_ident("inject") && !attribute.path().is_ident("value")
+            !inject::is_marker(attribute) && !value::is_marker(attribute)
         });
     }
-}
-
-fn marker_attributes<'a>(attributes: &'a [Attribute], name: &str) -> Vec<&'a Attribute> {
-    attributes
-        .iter()
-        .filter(|attribute| attribute.path().is_ident(name))
-        .collect()
 }
 
 fn field_label(field: &Field, index: usize) -> String {
@@ -211,58 +206,6 @@ fn field_label(field: &Field, index: usize) -> String {
         .unwrap_or_else(|| index.to_string())
 }
 
-/// 严格解析 `#[value(<Rust expression>)]`，保留表达式 AST 给构造 adapter 使用。
-fn parse_value_attribute(attributes: &[&Attribute]) -> syn::Result<Expr> {
-    let attribute = exactly_one_attribute(attributes, "value")?;
-
-    let Meta::List(list) = &attribute.meta else {
-        return Err(syn::Error::new_spanned(
-            attribute,
-            "#[value] 必须写为 #[value(<Rust expression>)]",
-        ));
-    };
-
-    if list.tokens.is_empty() {
-        return Err(syn::Error::new_spanned(
-            attribute,
-            "#[value] 必须包含一个 Rust 表达式，例如 #[value(1)]",
-        ));
-    }
-
-    let expression = syn::parse2::<Expr>(list.tokens.clone())?;
-    if let Expr::Assign(assign) = &expression {
-        if let Expr::Path(path) = assign.left.as_ref() {
-            if path.path.is_ident("expr") {
-                return Err(syn::Error::new_spanned(
-                    attribute,
-                    "#[value(expr = ...)] 已移除；请改用 #[value(...)]",
-                ));
-            }
-            if path.path.is_ident("func") {
-                return Err(syn::Error::new_spanned(
-                    attribute,
-                    "#[value(func = ...)] 已移除；请改用 #[value(path::to::function())]",
-                ));
-            }
-        }
-    }
-
-    Ok(expression)
-}
-
-fn exactly_one_attribute<'a>(
-    attributes: &[&'a Attribute],
-    name: &str,
-) -> syn::Result<&'a Attribute> {
-    match attributes {
-        [] => unreachable!("marker attribute was checked before parsing"),
-        [attribute] => Ok(*attribute),
-        [_, duplicate, ..] => Err(syn::Error::new_spanned(
-            duplicate,
-            format!("重复的 #[{name}] 属性"),
-        )),
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -5,3 +5,4 @@
 //! 展开入口，因此共享的语法与语义集中定义在这里，外层宏只负责各自 AST 改写。
 
 pub mod inject;
+pub mod value;

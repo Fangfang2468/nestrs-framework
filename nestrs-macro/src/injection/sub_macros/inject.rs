@@ -59,7 +59,7 @@ pub(crate) fn inject_key(attributes: &[Attribute]) -> syn::Result<Option<Service
     let mut found: Option<&Attribute> = None;
 
     for attribute in attributes {
-        if !attribute.path().is_ident("inject") {
+        if !is_marker(attribute) {
             continue;
         }
 
@@ -73,6 +73,11 @@ pub(crate) fn inject_key(attributes: &[Attribute]) -> syn::Result<Option<Service
         .map(parse_inject_attribute)
         .transpose()
         .map(Option::flatten)
+}
+
+/// 该属性是否是 `#[inject]` 子标注。
+pub(crate) fn is_marker(attribute: &Attribute) -> bool {
+    attribute.path().is_ident("inject")
 }
 
 /// 解析单个 `#[inject]` / `#[inject(...)]` 属性。
