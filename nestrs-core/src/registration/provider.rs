@@ -201,8 +201,8 @@ pub struct TraitBinding {
 /// 一项静态 provider 注册。
 ///
 /// 三种注册项的角色并不相同：`Class` 与 `Factory` 是实例生产者，`Bound` 是 trait 与
-/// concrete 之间的投影规则。它们共用同一个 linkme 收集入口，由 registry 在归一化时
-/// 按角色分区，解析路径因此不必在每次查询时重新判断变体。
+/// concrete 之间的投影规则。它们共用同一个 linkme 收集入口，并各自保留自己的声明
+/// 形态；解析路径按声明种类分派，与 NestJS 的 provider 解析方式一致。
 #[derive(Debug, Clone)]
 pub enum Provider {
     /// `#[injectable]` 注册的 class provider。
@@ -213,80 +213,6 @@ pub enum Provider {
 
     /// `#[bind]` 注册的 trait 投影规则。
     Bound(TraitBinding),
-}
-
-/// 注册项的角色。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ProviderKind {
-    /// `#[injectable]` 注册的 class provider。
-    Class,
-
-    /// `#[factory]` 注册的 factory provider。
-    Factory,
-
-    /// `#[bind]` 注册的 trait 投影规则。
-    Bound,
-}
-
-impl ProviderKind {
-    /// 用于诊断与日志的稳定名称。
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Class => "Class",
-            Self::Factory => "Factory",
-            Self::Bound => "Bound",
-        }
-    }
-}
-
-impl std::fmt::Display for ProviderKind {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-impl Provider {
-    /// 注册项的角色。
-    pub fn kind(&self) -> ProviderKind {
-        match self {
-            Self::Class(_) => ProviderKind::Class,
-            Self::Factory(_) => ProviderKind::Factory,
-            Self::Bound(_) => ProviderKind::Bound,
-        }
-    }
-
-    /// 注册项的静态声明来源。
-    pub fn source(&self) -> ServiceSource {
-        match self {
-            Self::Class(provider) => provider.common.source,
-            Self::Factory(provider) => provider.common.source,
-            Self::Bound(binding) => binding.source,
-        }
-    }
-
-    /// 注册项导出的 service token。
-    ///
-    /// [`Provider::Bound`] 不导出自己的 token：它把 concrete provider 的已提交地址
-    /// 投影给 trait 请求，因此这里返回 `None`。
-    pub fn exported_identifier(&self) -> Option<ServiceIdentifier> {
-        match self {
-            Self::Class(provider) => Some(provider.provide),
-            Self::Factory(provider) => Some(provider.provide),
-            Self::Bound(_) => None,
-        }
-    }
-
-    /// 实例生产者共享的声明属性。
-    ///
-    /// [`Provider::Bound`] 是投影规则而不是实例生产者，其 lifetime、primary 与 cleanup
-    /// 全部继承自被绑定的 concrete provider，因此这里返回 `None`。
-    pub fn common(&self) -> Option<&ProviderCommon> {
-        match self {
-            Self::Class(provider) => Some(&provider.common),
-            Self::Factory(provider) => Some(&provider.common),
-            Self::Bound(_) => None,
-        }
-    }
 }
 
 /// 当前链接单元内由宏或手工注册声明的 provider。

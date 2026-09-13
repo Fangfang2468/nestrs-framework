@@ -4,8 +4,8 @@
 use nestrs_core::{
     __private::{FactoryInvoker, Provider, REFLECTED_PROVIDERS},
     registration::{
-        provider::ProviderKind, service_identifier::ServiceIdentifier,
-        service_key::ServiceKey, service_type::ServiceType,
+        service_identifier::ServiceIdentifier, service_key::ServiceKey,
+        service_type::ServiceType,
     },
 };
 use nestrs_macro::{bind, factory, injectable};
@@ -41,13 +41,11 @@ fn linkme_collects_class_factory_and_bound_registrations() {
     let repository = ServiceIdentifier::from(ServiceType::create::<Repository>());
     let class = providers
         .iter()
-        .find(|provider| provider.kind() == ProviderKind::Class)
-        .expect("injectable should register a class provider");
-    assert_eq!(class.exported_identifier(), Some(repository));
-    assert!(class.common().is_some());
-    let Provider::Class(class) = class else {
-        panic!("injectable should keep its class declaration");
-    };
+        .find_map(|provider| match provider {
+            Provider::Class(class) if class.provide == repository => Some(class),
+            _ => None,
+        })
+        .expect("injectable should register a class provider for Repository");
     assert!(class.dependencies.is_empty());
     assert!(class.common.cleanup.is_none());
 
@@ -57,24 +55,20 @@ fn linkme_collects_class_factory_and_bound_registrations() {
     );
     let factory = providers
         .iter()
-        .find(|provider| provider.kind() == ProviderKind::Factory)
-        .expect("factory should register a factory provider");
-    assert_eq!(factory.exported_identifier(), Some(greeter));
-    let Provider::Factory(factory) = factory else {
-        panic!("factory should keep its factory declaration");
-    };
+        .find_map(|provider| match provider {
+            Provider::Factory(factory) if factory.provide == greeter => Some(factory),
+            _ => None,
+        })
+        .expect("factory should register a factory provider for the keyed token");
     assert!(matches!(factory.invoker, FactoryInvoker::Sync(_)));
 
     let binding = providers
         .iter()
-        .find(|provider| provider.kind() == ProviderKind::Bound)
+        .find_map(|provider| match provider {
+            Provider::Bound(binding) => Some(binding),
+            _ => None,
+        })
         .expect("bind should register a trait binding");
-    // Bound 不是实例 provider：它不导出自己的 service token。
-    assert!(binding.exported_identifier().is_none());
-    assert!(binding.common().is_none());
-    let Provider::Bound(binding) = binding else {
-        panic!("bind should keep its projection declaration");
-    };
     assert_eq!(binding.trait_type, ServiceType::create::<dyn Greeter>());
     assert_eq!(
         binding.concrete_type,
