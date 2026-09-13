@@ -11,7 +11,7 @@ use super::{
     field_analyze::{AnalyzedFields, FieldStrategy},
     provider::EmitClassProviderFields,
 };
-use crate::injection::request::requires_materialization;
+use crate::injection::sub_macros::inject::requires_materialization;
 use zyn::{quote::quote, syn, zyn};
 
 /// 为一个开放泛型 provider 输出其按需具体化的 provider definition。

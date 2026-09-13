@@ -6,7 +6,7 @@
 
 use crate::injection::{
     attrs::service_key::ServiceKey,
-    request::{DependencyRequest, INJECTABLE_MESSAGES, inject_key, split_optional},
+    sub_macros::inject::{DependencyRequest, INJECTABLE_MESSAGES, inject_key, split_optional},
 };
 
 use zyn::syn::{self, Attribute, Expr, Field, Fields, Meta, Type, spanned::Spanned};

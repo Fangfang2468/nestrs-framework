@@ -7,7 +7,7 @@
 
 use crate::injection::{
     attrs::service_key::ServiceKey,
-    request::{
+    sub_macros::inject::{
         DependencyRequest, FACTORY_MESSAGES, inject_key, split_optional, unparenthesized_type,
     },
 };

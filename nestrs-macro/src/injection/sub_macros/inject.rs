@@ -1,9 +1,135 @@
-//! 可注入服务请求类型的唯一分类与校验。
+//! `#[inject]` 子标注的唯一实现。
 //!
-//! 分类结果决定依赖请求的交付方式与 provider 来源，因此这里也是「trait 注入」与
-//! 「闭合泛型服务」两条路径唯一的静态分流点。
+//! `#[injectable]` 字段与 `#[factory]` 参数共用这个子标注：两者对 `#[inject]`、
+//! `#[inject("name")]`、`#[inject(1)]`、`#[inject(key = ...)]` 的接受范围，以及
+//! `Option<T>` 可选形态与可注入服务类型的规则完全一致。
+//!
+//! 这里只做「源码语法 → 宏期事实」：不生成 token、不改写 AST、不依赖 provider 注册
+//! ABI。key 值的字面量规则定义在 [`crate::injection::attrs::service_key`]，注册 ABI
+//! 的渲染在 `crate::injection::render`。
 
-use zyn::syn::{self, GenericArgument, PathArguments, Type};
+use crate::injection::attrs::service_key::{self, ServiceKey};
+use zyn::syn::{
+    self, Attribute, GenericArgument, Lit, Meta, PathArguments, Type, parse::Parser,
+    punctuated::Punctuated,
+};
+
+// ---------------------------------------------------------------------------
+// 依赖请求事实
+// ---------------------------------------------------------------------------
+
+/// 一个依赖请求的宏期事实。
+///
+/// 它与 `nestrs_core::registration::dependency::DependencyRequest` 一一对应：这里是
+/// 语法层事实，后者是写进 provider 注册 ABI 的运行时描述。`#[inject]` 字段与 factory
+/// 参数都先归一到这个形状，再共享同一套渲染逻辑。
+#[derive(Clone, Debug)]
+pub(crate) struct DependencyRequest {
+    /// 依赖在字段或参数声明中的零基位置。
+    ///
+    /// 对结构体字段，该位置包含 `#[value]` 与默认字段；它只服务于稳定诊断，不等同
+    /// 于构造 ABI 的输入槽位。
+    pub(crate) declaration_position: usize,
+
+    /// 依赖在构造输入中的位置。
+    pub(crate) input_position: usize,
+
+    /// 请求的服务类型；已剥离最外层 `Option` 与多余括号。
+    pub(crate) service_type: Type,
+
+    /// 静态服务限定符。
+    pub(crate) key: Option<ServiceKey>,
+
+    /// 缺失依赖时是否允许交付 `None`。
+    pub(crate) optional: bool,
+
+    /// 具名字段或参数的名称；元组字段为 `None`。
+    pub(crate) label: Option<syn::Ident>,
+}
+
+// ---------------------------------------------------------------------------
+// 属性语法
+// ---------------------------------------------------------------------------
+
+/// 从属性列表中取出唯一的 `#[inject(...)]` 并返回它声明的 key。
+///
+/// 未标注 `#[inject]` 与裸 `#[inject]` 都返回 `Ok(None)`（默认 key）；重复标注与
+/// 非法参数形态返回错误。属性本身不由这里移除，调用方按自己的 AST 改写职责处理。
+pub(crate) fn inject_key(attributes: &[Attribute]) -> syn::Result<Option<ServiceKey>> {
+    let mut found: Option<&Attribute> = None;
+
+    for attribute in attributes {
+        if !attribute.path().is_ident("inject") {
+            continue;
+        }
+
+        if found.is_some() {
+            return Err(syn::Error::new_spanned(attribute, "重复的 #[inject] 属性"));
+        }
+        found = Some(attribute);
+    }
+
+    found
+        .map(parse_inject_attribute)
+        .transpose()
+        .map(Option::flatten)
+}
+
+/// 解析单个 `#[inject]` / `#[inject(...)]` 属性。
+fn parse_inject_attribute(attribute: &Attribute) -> syn::Result<Option<ServiceKey>> {
+    match &attribute.meta {
+        Meta::Path(_) => Ok(None),
+        Meta::List(list) => {
+            if list.tokens.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    attribute,
+                    "#[inject] 不接受空参数；请使用 #[inject]、#[inject(\"key\")] 或 #[inject(key = \"key\")]",
+                ));
+            }
+
+            if let Ok(literal) = syn::parse2::<Lit>(list.tokens.clone()) {
+                return service_key::from_literal(&literal).map(Some);
+            }
+
+            let metas = Punctuated::<Meta, syn::Token![,]>::parse_terminated
+                .parse2(list.tokens.clone())
+                .map_err(|_| {
+                    syn::Error::new_spanned(attribute, "#[inject] 只接受一个字符串或整数 key")
+                })?;
+
+            if metas.len() != 1 {
+                return Err(syn::Error::new_spanned(
+                    attribute,
+                    "#[inject] 只接受一个 key 参数",
+                ));
+            }
+
+            let Some(Meta::NameValue(value)) = metas.first() else {
+                return Err(syn::Error::new_spanned(
+                    attribute,
+                    "#[inject] 只接受字符串或整数 key；命名形式请写为 key = ...",
+                ));
+            };
+
+            if !value.path.is_ident("key") {
+                return Err(syn::Error::new_spanned(
+                    &value.path,
+                    "#[inject] 只支持 key 参数",
+                ));
+            }
+
+            service_key::from_expression(&value.value).map(Some)
+        }
+        Meta::NameValue(_) => Err(syn::Error::new_spanned(
+            attribute,
+            "#[inject] 参数必须写在括号中",
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 服务类型形状
+// ---------------------------------------------------------------------------
 
 /// 共享语法在两个宏入口中的措辞差异。
 ///
@@ -229,16 +355,70 @@ mod tests {
     use super::*;
     use zyn::syn::parse_quote;
 
+    fn key_of(attribute: Attribute) -> syn::Result<Option<ServiceKey>> {
+        inject_key(&[attribute])
+    }
+
+    #[test]
+    fn parses_every_supported_key_form() {
+        assert_eq!(key_of(parse_quote!(#[inject])).expect("bare"), None);
+        assert_eq!(
+            key_of(parse_quote!(#[inject("named")])).expect("positional string"),
+            Some(ServiceKey::Named("named".to_owned()))
+        );
+        assert_eq!(
+            key_of(parse_quote!(#[inject(7)])).expect("positional integer"),
+            Some(ServiceKey::Indexed(7))
+        );
+        assert_eq!(
+            key_of(parse_quote!(#[inject(key = "named")])).expect("named string"),
+            Some(ServiceKey::Named("named".to_owned()))
+        );
+        assert_eq!(
+            key_of(parse_quote!(#[inject(key = 3)])).expect("named integer"),
+            Some(ServiceKey::Indexed(3))
+        );
+    }
+
+    #[test]
+    fn ignores_attributes_that_are_not_inject_markers() {
+        let attributes: Vec<Attribute> = vec![parse_quote!(#[value(1)])];
+
+        assert_eq!(
+            inject_key(&attributes).expect("non-inject attributes are ignored"),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_empty_and_invalid_keys() {
+        let duplicate = inject_key(&[parse_quote!(#[inject]), parse_quote!(#[inject])])
+            .expect_err("duplicate markers must fail");
+        assert!(duplicate.to_string().contains("重复的 #[inject] 属性"));
+
+        let empty = key_of(parse_quote!(#[inject()])).expect_err("empty list must fail");
+        assert!(empty.to_string().contains("不接受空参数"));
+
+        let empty_name = key_of(parse_quote!(#[inject(key = "")])).expect_err("empty key");
+        assert!(empty_name.to_string().contains("key 字符串不可为空"));
+
+        let float = key_of(parse_quote!(#[inject(key = 1.5)])).expect_err("float key");
+        assert!(float.to_string().contains("key 必须是字符串或非负整数值字面量"));
+
+        let unknown = key_of(parse_quote!(#[inject(name = "x")])).expect_err("unknown key name");
+        assert!(unknown.to_string().contains("只支持 key 参数"));
+
+        let two = key_of(parse_quote!(#[inject(a = 1, b = 2)])).expect_err("two keys");
+        assert!(two.to_string().contains("只接受一个 key 参数"));
+
+        let name_value = key_of(parse_quote!(#[inject = 1])).expect_err("name-value form");
+        assert!(name_value.to_string().contains("参数必须写在括号中"));
+    }
+
     #[test]
     fn classifies_concrete_closed_generic_and_trait_requests() {
-        assert_eq!(
-            classify(&parse_quote!(Database)),
-            DependencyShape::Concrete
-        );
-        assert_eq!(
-            classify(&parse_quote!((Database))),
-            DependencyShape::Concrete
-        );
+        assert_eq!(classify(&parse_quote!(Database)), DependencyShape::Concrete);
+        assert_eq!(classify(&parse_quote!((Database))), DependencyShape::Concrete);
         assert_eq!(
             classify(&parse_quote!(Repository<User>)),
             DependencyShape::ClosedGeneric
@@ -281,11 +461,18 @@ mod tests {
     fn rejects_invalid_optional_and_service_shapes() {
         let nested = split_optional(&parse_quote!(Option<Option<Database>>), INJECTABLE_MESSAGES)
             .expect_err("nested Option must fail");
-        assert!(nested.to_string().contains("不接受最外层 Arc<T> 或嵌套 Option<T>"));
+        assert!(
+            nested
+                .to_string()
+                .contains("不接受最外层 Arc<T> 或嵌套 Option<T>")
+        );
 
         let bare = split_optional(&parse_quote!(Option), FACTORY_MESSAGES)
             .expect_err("bare Option must fail");
-        assert!(bare.to_string().contains("`#[factory]` 可选参数必须写为 Option<T>"));
+        assert!(
+            bare.to_string()
+                .contains("`#[factory]` 可选参数必须写为 Option<T>")
+        );
 
         for rejected in [
             parse_quote!(&Database),

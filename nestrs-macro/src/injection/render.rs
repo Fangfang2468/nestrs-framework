@@ -6,7 +6,7 @@
 
 use crate::injection::{
     attrs::{cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKey},
-    request::{DependencyRequest, DependencyShape, classify},
+    sub_macros::inject::{DependencyRequest, DependencyShape, classify},
 };
 use zyn::{syn, zyn};
 
