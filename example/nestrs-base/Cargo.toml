@@ -1,5 +1,6 @@
 [package]
 name = "nestrs-base"
+default-run = "nestrs-base"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
@@ -10,3 +11,4 @@ license.workspace = true
 [dependencies]
 nestrs-core = { path = '../../nestrs-core' }
 nestrs-macro = { path = "../../nestrs-macro", default-features = false, features = ["injection"] }
+tokio = { workspace = true }
