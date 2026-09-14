@@ -62,7 +62,7 @@ mod tests {
     use crate::injection::macros::injectable::field_analyze::{
         analyze_fields, collect_field_specs,
     };
-    use zyn::{quote::ToTokens, Render};
+    use zyn::{Render, quote::ToTokens};
 
     #[test]
     fn rewrites_required_and_optional_inject_fields_only() {

@@ -167,11 +167,7 @@ pub(crate) fn analyze_factory(mut item: ItemFn) -> syn::Result<FactoryAnalysis> 
         let parameter_lifetime = parameter_lifetime
             .as_ref()
             .expect("a factory parameter requires the generated activation lifetime");
-        parameter.ty = Box::new(injected_parameter_type(
-            &service_type,
-            optional,
-            parameter_lifetime,
-        ));
+        *parameter.ty = injected_parameter_type(&service_type, optional, parameter_lifetime);
         parameters.push(FactoryParameterSpec {
             declaration_position: position,
             input_position: position,
@@ -295,6 +291,8 @@ fn analyze_success_type(
     candidate: &Type,
     invocation: FactoryInvocation,
 ) -> syn::Result<FactoryReturn> {
+    reject_qualified_nonstandard_result_path(candidate)?;
+
     if let Some(success_type) = standard_result_success_type(candidate) {
         validate_factory_success_type(success_type)?;
         return Ok(FactoryReturn {
@@ -310,6 +308,33 @@ fn analyze_success_type(
         invocation,
         result_kind: FactoryResultKind::Direct,
     })
+}
+
+/// 明确拒绝非标准库限定路径的 `*::Result`。
+///
+/// 宏只能可靠识别裸 `Result`、`std::result::Result` 与
+/// `core::result::Result`。若将 `anyhow::Result<T>` 或项目类型别名当作直接
+/// 服务输出，生成的 provider token 会错误地指向整个 Result 容器而非成功值。裸
+/// 类型别名在 proc macro 阶段无法解析，仍按普通直接输出处理；限定路径的 Result
+/// 则具有足够的语法证据，应在这里给出确定诊断。
+fn reject_qualified_nonstandard_result_path(ty: &Type) -> syn::Result<()> {
+    let Type::Path(type_path) = unparenthesized_type(ty) else {
+        return Ok(());
+    };
+    let Some(last_segment) = type_path.path.segments.last() else {
+        return Ok(());
+    };
+
+    let is_qualified_result = last_segment.ident == "Result"
+        && (type_path.qself.is_some() || type_path.path.segments.len() > 1);
+    if is_qualified_result && !is_standard_library_type_path(&type_path.path, "result", "Result") {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "`#[factory]` 仅支持裸 `Result`、`std::result::Result` 或 `core::result::Result`；不支持限定路径的 `Result` 或类型别名，请改用 `std::result::Result<T, E>`",
+        ));
+    }
+
+    Ok(())
 }
 
 /// `impl Trait` 和 `dyn Trait` 不能成为 factory provider 的 concrete token。
@@ -469,6 +494,23 @@ mod tests {
         .expect("future output");
         assert_eq!(future.output.invocation, FactoryInvocation::Async);
         assert_eq!(future.output.result_kind, FactoryResultKind::Result);
+    }
+
+    #[test]
+    fn accepts_standard_result_paths_and_rejects_qualified_nonstandard_result_paths() {
+        for source in [
+            "fn make() -> Result<Service, Error> { todo!() }",
+            "fn make() -> ::std::result::Result<Service, Error> { todo!() }",
+            "fn make() -> ::core::result::Result<Service, Error> { todo!() }",
+        ] {
+            let analysis = analyze(source).expect("standard Result path should be supported");
+            assert_eq!(analysis.output.result_kind, FactoryResultKind::Result);
+        }
+
+        let error = analyze("fn make() -> anyhow::Result<Service> { todo!() }")
+            .expect_err("qualified nonstandard Result must be rejected");
+        assert!(error.to_string().contains("不支持限定路径的 `Result`"));
+        assert!(error.to_string().contains("std::result::Result<T, E>"));
     }
 
     #[test]

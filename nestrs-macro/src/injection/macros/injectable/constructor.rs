@@ -200,7 +200,7 @@ mod tests {
     use crate::injection::macros::injectable::field_analyze::{
         AnalyzedFields, collect_field_specs,
     };
-    use zyn::{syn, Render};
+    use zyn::{Render, syn};
 
     fn render_constructor(item: ItemStruct, specs: Vec<FieldSpec>) -> String {
         GenerateInjectableConstructor {

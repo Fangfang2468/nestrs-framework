@@ -26,8 +26,9 @@ pub(crate) fn define_generic_injectable_provider(
     primary: bool,
 ) -> zyn::TokenStream {
     let service = analysis.item.ident.clone();
-    let provider_definition_generics = provider_definition_generics(&analysis);
-    let (impl_generics, type_generics, where_clause) = provider_definition_generics.split_for_impl();
+    let provider_definition_generics = provider_definition_generics(analysis);
+    let (impl_generics, type_generics, where_clause) =
+        provider_definition_generics.split_for_impl();
     let service_type = quote!(Self);
 
     zyn! {
@@ -92,7 +93,7 @@ fn provider_definition_generics(analysis: &AnalyzedFields) -> syn::Generics {
 mod tests {
     use super::*;
     use crate::injection::{
-        macros_attrs::lifetime::ServiceLifetime, macros::injectable::field_analyze::analyze_fields,
+        macros::injectable::field_analyze::analyze_fields, macros_attrs::lifetime::ServiceLifetime,
     };
     use zyn::{Render, syn};
 

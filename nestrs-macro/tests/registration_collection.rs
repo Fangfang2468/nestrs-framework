@@ -3,12 +3,9 @@
 //! `#[injectable]` / `#[factory]` 产出实例 provider，进入 `REFLECTED_PROVIDERS`；
 //! `#[bind]` 产出 trait 绑定，进入 `REFLECTED_BINDINGS`——绑定不是 provider。
 
-use nestrs_core::{
-    __private::{FactoryInvoker, Provider, REFLECTED_BINDINGS, REFLECTED_PROVIDERS, TraitBinding},
-    registration::{
-        service_identifier::ServiceIdentifier, service_key::ServiceKey,
-        service_type::ServiceType,
-    },
+use nestrs_core::__private::{
+    FactoryInvoker, Provider, REFLECTED_BINDINGS, REFLECTED_PROVIDERS, ServiceIdentifier,
+    ServiceKey, ServiceType, TraitBinding,
 };
 use nestrs_macro::{bind, factory, injectable};
 
@@ -51,6 +48,15 @@ fn linkme_collects_providers_and_trait_bindings_separately() {
     assert!(class.dependencies.is_empty());
     assert!(class.common.cleanup.is_none());
 
+    let constructed_repository =
+        (class.constructor)(nestrs_core::__private::ConstructionContext::new())
+            .expect("Repository constructor should succeed without dependencies");
+    let repository = match constructed_repository.downcast::<Repository>() {
+        Ok(repository) => repository,
+        Err(_) => panic!("Repository provider should preserve its concrete type"),
+    };
+    assert_eq!(repository.label, "registry");
+
     let greeter = ServiceIdentifier::new(
         Some(ServiceKey::Named("greeting")),
         ServiceType::create::<GreeterService>(),
@@ -76,4 +82,5 @@ fn linkme_collects_providers_and_trait_bindings_separately() {
         ServiceType::create::<GreeterService>()
     );
     assert!(binding.source.file.ends_with("registration_collection.rs"));
+    assert_eq!(Greeter::greet(&GreeterService), "hello");
 }

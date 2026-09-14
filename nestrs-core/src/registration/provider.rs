@@ -34,8 +34,9 @@ pub type FactoryFuture<'frame> =
 
 /// 一个 cleanup hook 的 owning future。
 ///
-/// cleanup 目前是 provider 生命周期结束时调用的无参数异步 hook；实际调度时机由未来
-/// 的 scope / lifecycle runtime 决定。
+/// cleanup 是 provider 生命周期结束时调用的无参数异步 hook。它只由 core runtime
+/// 的显式、消费式 `shutdown().await` 驱动；普通 `Drop`、激活失败或 activation future
+/// 取消只析构 Rust 值，不会隐式轮询这个 future。
 pub type CleanupFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
 /// provider 生命周期结束时调用的异步 cleanup hook。
@@ -66,7 +67,7 @@ impl FactoryInvoker {
     /// 这不是公开的 service-locator API。只有 core activation runtime 能同时持有真实
     /// `FactoryActivationFrame` 与 Arena 预绑定的 [`ConstructionContext`]，并保证 frame
     /// 覆盖 returned future 的整个 poll/drop 期间。
-    #[allow(dead_code)] // 当前阶段尚未接线 provider activation runtime。
+    #[allow(dead_code)] // v0 直接执行同步 factory；此统一 future ABI 留给后续 async activation。
     pub(crate) fn invoke<'frame>(
         self,
         context: ConstructionContext,
@@ -175,24 +176,17 @@ mod tests {
     use super::*;
     use std::{
         future::Future,
-        sync::Arc,
-        task::{Context, Poll, Wake, Waker},
+        task::{Context, Poll, Waker},
     };
 
     use crate::registration::{service_source::ServiceSource, service_type::ServiceType};
-
-    struct NoopWake;
-
-    impl Wake for NoopWake {
-        fn wake(self: Arc<Self>) {}
-    }
 
     fn block_on<F>(future: F) -> F::Output
     where
         F: Future,
     {
-        let waker = Waker::from(Arc::new(NoopWake));
-        let mut context = Context::from_waker(&waker);
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
         let mut future = std::pin::pin!(future);
 
         loop {

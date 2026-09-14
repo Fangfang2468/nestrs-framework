@@ -44,7 +44,7 @@ pub(crate) fn require_non_unit_result_ok_type(
     item: syn::ItemFn,
     children: zyn::TokenStream,
 ) -> zyn::TokenStream {
-    if let Some(span) = explicit_return_type(&item).and_then(unit_result_success_span) {
+    if let Some(span) = explicit_return_type(item).and_then(unit_result_success_span) {
         return syn::Error::new(
             span,
             format!("`#[{macro_name}]` 标记的函数不能返回成功值为 `()` 的 `Result`"),
@@ -69,7 +69,7 @@ pub(crate) fn require_non_unit_future_output_type(
     item: syn::ItemFn,
     children: zyn::TokenStream,
 ) -> zyn::TokenStream {
-    if let Some(span) = explicit_return_type(&item).and_then(unit_future_output_span) {
+    if let Some(span) = explicit_return_type(item).and_then(unit_future_output_span) {
         return syn::Error::new(
             span,
             format!("`#[{macro_name}]` 标记的函数不能返回 `Output` 为 `()` 的 `Future`"),

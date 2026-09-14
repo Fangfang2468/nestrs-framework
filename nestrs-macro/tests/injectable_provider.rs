@@ -1,12 +1,6 @@
-use nestrs_core::{
-    __private::{
-        ClassProvider, ConstructionContext, Delivery, Provider, ProviderSource,
-        REFLECTED_PROVIDERS,
-    },
-    lifetime::Lifetime,
-    registration::{
-        service_identifier::ServiceIdentifier, service_key::ServiceKey, service_type::ServiceType,
-    },
+use nestrs_core::__private::{
+    ClassProvider, ConstructionContext, Delivery, Lifetime, Provider, ProviderSource,
+    REFLECTED_PROVIDERS, ServiceIdentifier, ServiceKey, ServiceType,
 };
 use nestrs_macro::{injectable, primary};
 
@@ -62,6 +56,9 @@ struct InjectableBeforePrimary;
 #[injectable(cleanup = "cleanup_controller")]
 struct CleanupController;
 
+#[injectable(lifetime = Transient)]
+struct TransientController;
+
 #[test]
 fn injectable_collects_class_providers_and_dependency_specs() {
     let providers: Vec<_> = REFLECTED_PROVIDERS
@@ -97,6 +94,21 @@ fn injectable_collects_class_providers_and_dependency_specs() {
     assert!(common.cleanup.is_none());
     assert_eq!(dependencies.len(), 2);
 
+    let transient = providers
+        .iter()
+        .find(|provider| {
+            matches!(
+                provider,
+                Provider::Class(ClassProvider { provide, .. })
+                    if provide.service_type == ServiceType::create::<TransientController>()
+            )
+        })
+        .expect("injectable macro should collect TransientController provider");
+    let Provider::Class(ClassProvider { common, .. }) = transient else {
+        panic!("TransientController should be a class provider");
+    };
+    assert_eq!(common.lifetime, Lifetime::Transient);
+
     let database = &dependencies[0];
     assert_eq!(database.declaration_position, 0);
     assert_eq!(database.label, Some("database"));
@@ -106,7 +118,10 @@ fn injectable_collects_class_providers_and_dependency_specs() {
         ServiceIdentifier::from(ServiceType::create::<Database>())
     );
     assert!(matches!(database.delivery, Delivery::Direct(_)));
-    assert!(matches!(database.provider_source, ProviderSource::Registered));
+    assert!(matches!(
+        database.provider_source,
+        ProviderSource::Registered
+    ));
     assert!(!database.optional);
 
     let audit = &dependencies[1];

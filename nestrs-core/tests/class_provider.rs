@@ -1,14 +1,7 @@
-use nestrs_core::{
-    __private::{
-        ActivationError, ClassProvider, ConstructionContext, DependencyRequest, Delivery,
-        ErasedService, InputPosition, Provider, ProviderCommon, ProviderSource,
-        REFLECTED_PROVIDERS,
-    },
-    lifetime::Lifetime,
-    registration::{
-        service_identifier::ServiceIdentifier, service_key::ServiceKey,
-        service_source::ServiceSource, service_type::ServiceType,
-    },
+use nestrs_core::__private::{
+    ActivationError, ClassProvider, ConstructionContext, Delivery, DependencyRequest,
+    ErasedService, InputPosition, Lifetime, Provider, ProviderCommon, ProviderSource,
+    REFLECTED_PROVIDERS, ServiceIdentifier, ServiceKey, ServiceSource, ServiceType,
 };
 
 struct Component;

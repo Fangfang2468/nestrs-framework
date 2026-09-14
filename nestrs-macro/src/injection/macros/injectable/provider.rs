@@ -63,14 +63,14 @@ pub(crate) fn emit_class_provider_fields(
     let cleanup = config.cleanup.clone();
 
     zyn! {
-        provide: ::nestrs_core::registration::service_identifier::ServiceIdentifier::new(
+        provide: ::nestrs_core::__private::ServiceIdentifier::new(
             @RenderServiceKey(key = provider_key.clone()),
-            ::nestrs_core::registration::service_type::ServiceType::create::<{{ service_type }}>(),
+            ::nestrs_core::__private::ServiceType::create::<{{ service_type }}>(),
         ),
         common: ::nestrs_core::__private::ProviderCommon {
             lifetime: @RenderServiceLifetime(lifetime = lifetime),
             primary: {{ primary }},
-            source: ::nestrs_core::registration::service_source::ServiceSource::new(
+            source: ::nestrs_core::__private::ServiceSource::new(
                 file!(),
                 line!(),
                 column!(),
@@ -91,8 +91,8 @@ pub(crate) fn emit_class_provider_fields(
 mod tests {
     use super::*;
     use crate::injection::{
-        macros_attrs::{lifetime::ServiceLifetime, service_key::ServiceKey},
         macros::injectable::field_analyze::{AnalyzedFields, FieldSpec, collect_field_specs},
+        macros_attrs::{lifetime::ServiceLifetime, service_key::ServiceKey},
     };
     use zyn::{Render, syn};
 
@@ -142,9 +142,15 @@ mod tests {
         assert!(output.contains("Lifetime :: Scoped"));
         assert!(output.contains("ServiceKey :: Named (\"controller\")"));
         assert!(output.contains("declaration_position : 0usize"));
-        assert!(output.contains("input_position : :: nestrs_core :: __private :: InputPosition (0usize)"));
+        assert!(
+            output
+                .contains("input_position : :: nestrs_core :: __private :: InputPosition (0usize)")
+        );
         assert!(output.contains("declaration_position : 2usize"));
-        assert!(output.contains("input_position : :: nestrs_core :: __private :: InputPosition (1usize)"));
+        assert!(
+            output
+                .contains("input_position : :: nestrs_core :: __private :: InputPosition (1usize)")
+        );
         assert!(output.contains("ServiceKey :: Indexed (7usize)"));
         assert!(!output.contains("declaration_position : 1usize"));
         assert!(output.contains("primary : true"));

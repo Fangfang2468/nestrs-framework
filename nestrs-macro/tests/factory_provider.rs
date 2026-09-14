@@ -1,19 +1,12 @@
 use std::{
     future::Future,
     pin::Pin,
-    sync::Arc,
-    task::{Context, Poll, Wake, Waker},
+    task::{Context, Poll, Waker},
 };
 
-use nestrs_core::{
-    __private::{
-        CleanupFuture, Delivery, FactoryInvoker, FactoryProvider, Provider, ProviderSource,
-        REFLECTED_PROVIDERS,
-    },
-    lifetime::Lifetime,
-    registration::{
-        service_identifier::ServiceIdentifier, service_key::ServiceKey, service_type::ServiceType,
-    },
+use nestrs_core::__private::{
+    CleanupFuture, Delivery, FactoryInvoker, FactoryProvider, Lifetime, Provider, ProviderSource,
+    REFLECTED_PROVIDERS, ServiceIdentifier, ServiceKey, ServiceType,
 };
 use nestrs_macro::{factory, primary};
 
@@ -24,6 +17,7 @@ struct AsyncService;
 struct ExplicitFutureService;
 struct ExplicitFutureResultService;
 struct ConfiguredService;
+struct TransientFactoryService;
 struct ParameterizedService;
 struct PrimaryBeforeFactoryService;
 struct FactoryBeforePrimaryService;
@@ -57,13 +51,13 @@ async fn async_factory() -> AsyncService {
 
 #[factory]
 fn explicit_future_factory() -> impl ::core::future::Future<Output = ExplicitFutureService> {
-    async { ExplicitFutureService }
+    ::core::future::ready(ExplicitFutureService)
 }
 
 #[factory]
 fn explicit_result_future_factory()
 -> impl ::core::future::Future<Output = Result<ExplicitFutureResultService, FactoryError>> {
-    async { Ok(ExplicitFutureResultService) }
+    ::core::future::ready(Ok(ExplicitFutureResultService))
 }
 
 async fn configured_cleanup() {}
@@ -71,6 +65,11 @@ async fn configured_cleanup() {}
 #[factory(lifetime = Scoped, key = "configured", cleanup = "configured_cleanup")]
 fn configured_factory() -> ConfiguredService {
     ConfiguredService
+}
+
+#[factory(lifetime = Transient)]
+fn transient_factory() -> TransientFactoryService {
+    TransientFactoryService
 }
 
 #[factory]
@@ -97,17 +96,11 @@ fn factory_before_primary() -> FactoryBeforePrimaryService {
     FactoryBeforePrimaryService
 }
 
-struct NoopWake;
-
-impl Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
-}
-
 /// 当前 factory 适配器只包裹无 await 的测试函数，故它们首次 poll 就应完成。这里不用
 /// runtime，以免把 activation runtime 的实现误作为本次 provider ABI 的前提。
 fn complete_immediately<T>(mut future: Pin<Box<dyn Future<Output = T> + Send + 'static>>) -> T {
-    let waker = Waker::from(Arc::new(NoopWake));
-    let mut context = Context::from_waker(&waker);
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
 
     match future.as_mut().poll(&mut context) {
         Poll::Ready(output) => output,
@@ -175,6 +168,20 @@ fn factory_collects_common_configuration_and_parameter_injections() {
     complete_immediately(cleanup_future);
     assert!(dependencies.is_empty());
 
+    let transient = factory_provider_for::<TransientFactoryService>();
+    let Provider::Factory(FactoryProvider {
+        common,
+        dependencies,
+        invoker,
+        ..
+    }) = transient
+    else {
+        panic!("transient factory should register Provider::Factory");
+    };
+    assert_eq!(common.lifetime, Lifetime::Transient);
+    assert!(dependencies.is_empty());
+    assert!(matches!(invoker, FactoryInvoker::Sync(_)));
+
     let parameterized = factory_provider_for::<ParameterizedService>();
     let Provider::Factory(FactoryProvider { dependencies, .. }) = parameterized else {
         panic!("parameterized factory should register Provider::Factory");
@@ -191,7 +198,10 @@ fn factory_collects_common_configuration_and_parameter_injections() {
     );
     assert!(!database.optional);
     assert!(matches!(database.delivery, Delivery::Direct(_)));
-    assert!(matches!(database.provider_source, ProviderSource::Registered));
+    assert!(matches!(
+        database.provider_source,
+        ProviderSource::Registered
+    ));
 
     let cache = dependencies[1];
     assert_eq!(cache.declaration_position, 1);

@@ -1,6 +1,4 @@
-use nestrs_core::registration::{
-    service_identifier::ServiceIdentifier, service_type::ServiceType,
-};
+use nestrs_core::__private::{ServiceIdentifier, ServiceType};
 
 #[test]
 fn create_service_identifier_by_type() {
@@ -14,12 +12,9 @@ fn create_service_identifier_by_type() {
     // println!("{service_identifier}");
 }
 
-
 #[test]
 fn create_service_identifier_by_generic_type() {
-    trait Repository<T>: Send + Sync + 'static {
-        
-    }
+    trait Repository<T>: Send + Sync + 'static {}
 
     struct User;
     struct Post;
@@ -29,10 +24,12 @@ fn create_service_identifier_by_generic_type() {
 
     println!("{service_identifier1:#?}");
 
-
     let service_type2 = ServiceType::create::<dyn Repository<Post>>();
     let service_identifier2 = ServiceIdentifier::from(service_type2);
     println!("{service_identifier2:#?}");
 
-    assert_ne!(service_identifier1, service_identifier2, "service_identifier1 与 service_identifier2 服务相同");
+    assert_ne!(
+        service_identifier1, service_identifier2,
+        "service_identifier1 与 service_identifier2 服务相同"
+    );
 }

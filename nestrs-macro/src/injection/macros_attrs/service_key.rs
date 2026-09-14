@@ -4,8 +4,8 @@
 //! 与依赖请求（`#[inject(key = ...)]`）使用，因此它的可接受写法只在这里实现一次。
 
 use zyn::{
-    syn::{self, spanned::Spanned, Expr, ExprLit, Lit},
     Arg, FromArg,
+    syn::{self, Expr, ExprLit, Lit, spanned::Spanned},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

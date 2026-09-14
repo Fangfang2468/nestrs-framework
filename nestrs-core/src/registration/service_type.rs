@@ -27,7 +27,7 @@ impl ServiceType {
     /// 获取类型短名称
     ///
     /// ``` rust
-    /// use nestrs_core::registration::service_type::{ServiceType};
+    /// use nestrs_core::__private::ServiceType;
     ///
     /// struct UserService {
     ///    name: String,

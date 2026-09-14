@@ -13,11 +13,9 @@ use zyn::{syn, zyn};
 /// 校验；本 element 只生成与该 impl 同一展开位置的类型化 projector 和 linkme
 /// binding callback。
 #[zyn::element]
-pub(crate) fn emit_bound_provider(
-    service: syn::Type,
-    interface: syn::Path,
-) -> zyn::TokenStream {
+pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> zyn::TokenStream {
     zyn! {
+        #[allow(clippy::unused_unit)]
         const _: () = {
             fn __nestrs_project_bound_service(
                 service: &{{ service }}
@@ -66,10 +64,10 @@ pub(crate) fn emit_bound_provider(
                 -> ::nestrs_core::__private::TraitBinding
             {
                 ::nestrs_core::__private::TraitBinding {
-                    trait_type: ::nestrs_core::registration::service_type::ServiceType::create::<
+                    trait_type: ::nestrs_core::__private::ServiceType::create::<
                         dyn {{ interface }}
                     >(),
-                    concrete_type: ::nestrs_core::registration::service_type::ServiceType::create::<
+                    concrete_type: ::nestrs_core::__private::ServiceType::create::<
                         {{ service }}
                     >(),
                     key_policy: ::nestrs_core::__private::BoundKeyPolicy::InheritRequestedKey,
@@ -77,7 +75,7 @@ pub(crate) fn emit_bound_provider(
                         as ::nestrs_core::__private::PrepareInput,
                     prepare_optional: __nestrs_prepare_bound_optional
                         as ::nestrs_core::__private::PrepareInput,
-                    source: ::nestrs_core::registration::service_source::ServiceSource::new(
+                    source: ::nestrs_core::__private::ServiceSource::new(
                         file!(),
                         line!(),
                         column!(),

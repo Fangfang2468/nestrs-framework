@@ -4,7 +4,7 @@
 //! `resolve` 一类的 service-locator API。`#[injectable]` 与未来的同步 `#[factory]`
 //! adapter 都通过 [`Constructor`] 消费同一套 ABI。
 
-use std::{alloc::Layout, any::Any, ptr::NonNull};
+use std::{any::Any, ptr::NonNull};
 
 use thiserror::Error;
 
@@ -276,7 +276,6 @@ pub struct FactoryConstructionContext<'frame> {
 }
 
 impl<'frame> FactoryConstructionContext<'frame> {
-    #[allow(dead_code)] // 未来 core activation runtime 会通过 FactoryInvoker 调用。
     pub(crate) fn from_bound(
         bound: ConstructionContext,
         frame: &'frame FactoryActivationFrame,
@@ -456,18 +455,14 @@ where
 /// ready slot 并进行 bind projection。它没有暴露原始指针给业务代码。
 type AnyService = Box<dyn Any + Send + Sync>;
 
-/// 将尚未提交的 concrete 值移动进 Arena 已分配内存的单态化函数。
-pub(crate) type ErasedTransferFn = unsafe fn(AnyService, *mut u8);
-
-/// 析构某个已经转移至 Arena 的 concrete 值的单态化函数。
-pub(crate) type ErasedDropFn = unsafe fn(*mut u8);
-
 pub struct ErasedService {
     service_type: ServiceType,
+    /// 服务值始终由 Box 持有。
+    ///
+    /// Arena 可以移动自己的 journal entry，但不会移动这个 heap allocation；已签发的
+    /// `Inject<T>` 因而持续指向一个稳定地址。v6 的 worker lease 只需保活拥有这个
+    /// Box 的 Arena backing，而不需要把 raw allocation 或 Arena facade 跨线程发送。
     value: AnyService,
-    layout: fn() -> Layout,
-    transfer_into: ErasedTransferFn,
-    drop_value: ErasedDropFn,
 }
 
 impl ErasedService {
@@ -479,9 +474,6 @@ impl ErasedService {
         Self {
             service_type: ServiceType::create::<T>(),
             value: Box::new(value),
-            layout: Layout::new::<T>,
-            transfer_into: transfer_into::<T>,
-            drop_value: drop_value::<T>,
         }
     }
 
@@ -501,9 +493,6 @@ impl ErasedService {
         let Self {
             service_type,
             value,
-            layout,
-            transfer_into,
-            drop_value,
         } = self;
 
         match value.downcast::<T>() {
@@ -511,57 +500,18 @@ impl ErasedService {
             Err(value) => Err(Self {
                 service_type,
                 value,
-                layout,
-                transfer_into,
-                drop_value,
             }),
         }
     }
 
-    pub(crate) fn layout(&self) -> Layout {
-        (self.layout)()
-    }
-
-    pub(crate) fn drop_value(&self) -> ErasedDropFn {
-        self.drop_value
-    }
-
-    /// 将唯一拥有的服务值移动到经过 layout 验证的 Arena 存储。
+    /// 返回由此 owning Box 持有的 stable concrete allocation 的数据指针。
     ///
-    /// # Safety
-    ///
-    /// `destination` 必须是未初始化、对齐且布局精确匹配此 `ErasedService` concrete
-    /// 类型的一次性可写存储。
-    pub(crate) unsafe fn transfer_into(self, destination: NonNull<u8>) {
-        unsafe { (self.transfer_into)(self.value, destination.as_ptr()) };
+    /// 返回值只由 Arena 在把 `ErasedService` 放进其 journal 后用于建立
+    /// [`crate::arena::ArenaServiceRef`]。不能在 Arena backing 释放后使用它；activation
+    /// runtime 必须以 [`crate::arena::ArenaLease`] 保活所有跨 worker 的输入来源。
+    pub(crate) fn stable_pointer(&self) -> NonNull<u8> {
+        NonNull::from(self.value.as_ref()).cast()
     }
-}
-
-/// 把 `ErasedService::new::<T>` 保存的唯一所有权移动到已验证目标地址。
-///
-/// # Safety
-///
-/// `destination` 必须可写、正确对齐、尚未初始化且布局精确为 `T`。
-unsafe fn transfer_into<T>(value: AnyService, destination: *mut u8)
-where
-    T: Injectable,
-{
-    let value = value
-        .downcast::<T>()
-        .expect("ErasedService transfer vtable must match its concrete value type");
-    unsafe { destination.cast::<T>().write(*value) };
-}
-
-/// 析构经同一 `ErasedService` 虚表转移到 Arena 的 concrete 值。
-///
-/// # Safety
-///
-/// `destination` 必须指向恰好一个仍未析构的 `T` 值。
-unsafe fn drop_value<T>(destination: *mut u8)
-where
-    T: Injectable,
-{
-    unsafe { std::ptr::drop_in_place(destination.cast::<T>()) };
 }
 
 /// 所有同步 provider 构造 adapter 的统一函数签名。

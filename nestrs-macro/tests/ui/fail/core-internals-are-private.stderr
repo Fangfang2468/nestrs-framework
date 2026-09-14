@@ -1,0 +1,34 @@
+error[E0432]: unresolved imports `nestrs_core::ActivationError`, `nestrs_core::ArenaError`, `nestrs_core::CompileError`
+ --> tests/ui/fail/core-internals-are-private.rs:3:19
+  |
+3 | use nestrs_core::{ActivationError, ArenaError, CompileError};
+  |                   ^^^^^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^ no `CompileError` in the root
+  |                   |                |
+  |                   |                no `ArenaError` in the root
+  |                   no `ActivationError` in the root
+
+error[E0603]: module `lifetime` is private
+ --> tests/ui/fail/core-internals-are-private.rs:1:18
+  |
+1 | use nestrs_core::lifetime::Lifetime;
+  |                  ^^^^^^^^  -------- enum `Lifetime` is not publicly re-exported
+  |                  |
+  |                  private module
+  |
+note: the module `lifetime` is defined here
+ --> $WORKSPACE/nestrs-core/src/lib.rs
+  |
+  | mod lifetime;
+  | ^^^^^^^^^^^^
+
+error[E0603]: module `registration` is private
+ --> tests/ui/fail/core-internals-are-private.rs:2:18
+  |
+2 | use nestrs_core::registration::*;
+  |                  ^^^^^^^^^^^^ private module
+  |
+note: the module `registration` is defined here
+ --> $WORKSPACE/nestrs-core/src/lib.rs
+  |
+  | mod registration;
+  | ^^^^^^^^^^^^^^^^

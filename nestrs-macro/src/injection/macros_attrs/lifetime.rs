@@ -1,12 +1,12 @@
 use zyn::{
-    syn::{spanned::Spanned, Expr, ExprLit, Lit},
     Arg, FromArg,
+    syn::{Expr, ExprLit, Lit, spanned::Spanned},
 };
 
 /// 属性宏在编译期使用的生命周期配置。
 ///
 /// 它不复用 `nestrs-core` 的运行时枚举，确保过程宏实现本身不依赖 DI runtime。
-/// 宏仅在生成的 token 中引用 `::nestrs_core::Lifetime`。
+/// 宏仅在生成的 token 中引用 `::nestrs_core::__private::Lifetime`。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceLifetime {
     /// Root frame 拥有且只激活一次的服务。

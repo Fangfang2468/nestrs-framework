@@ -31,9 +31,9 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
         ::nestrs_core::__private::DependencyRequest {
             declaration_position: {{ declaration_position }},
             input_position: ::nestrs_core::__private::InputPosition({{ input_position }}),
-            token: ::nestrs_core::registration::service_identifier::ServiceIdentifier::new(
+            token: ::nestrs_core::__private::ServiceIdentifier::new(
                 @RenderServiceKey(key = key.clone()),
-                ::nestrs_core::registration::service_type::ServiceType::create::<{{ service_type.clone() }}>(),
+                ::nestrs_core::__private::ServiceType::create::<{{ service_type.clone() }}>(),
             ),
             optional: {{ optional }},
             label: @RenderFieldLabel(label = label.clone()),
@@ -124,12 +124,12 @@ pub(crate) fn render_service_key(key: Option<ServiceKey>) -> zyn::TokenStream {
         @match (key.as_ref()) {
             Some(ServiceKey::Named(name)) => {
                 ::core::option::Option::Some(
-                    ::nestrs_core::registration::service_key::ServiceKey::Named({{ name }})
+                    ::nestrs_core::__private::ServiceKey::Named({{ name }})
                 )
             }
             Some(ServiceKey::Indexed(index)) => {
                 ::core::option::Option::Some(
-                    ::nestrs_core::registration::service_key::ServiceKey::Indexed({{ index }})
+                    ::nestrs_core::__private::ServiceKey::Indexed({{ index }})
                 )
             }
             None => {
@@ -145,13 +145,13 @@ pub(crate) fn render_service_lifetime(lifetime: ServiceLifetime) -> zyn::TokenSt
     zyn! {
         @match (lifetime) {
             ServiceLifetime::Singleton => {
-                ::nestrs_core::lifetime::Lifetime::Singleton
+                ::nestrs_core::__private::Lifetime::Singleton
             }
             ServiceLifetime::Scoped => {
-                ::nestrs_core::lifetime::Lifetime::Scoped
+                ::nestrs_core::__private::Lifetime::Scoped
             }
             ServiceLifetime::Transient => {
-                ::nestrs_core::lifetime::Lifetime::Transient
+                ::nestrs_core::__private::Lifetime::Transient
             }
         }
     }

@@ -7,7 +7,7 @@
 
 use zyn::{
     meta::Args,
-    syn::{self, spanned::Spanned, Attribute, Meta},
+    syn::{self, Attribute, Meta, spanned::Spanned},
     zyn,
 };
 
@@ -150,7 +150,12 @@ pub(crate) fn take_primary_for_injectable(
 pub(crate) fn take_primary_for_factory(
     attributes: &mut Vec<Attribute>,
 ) -> syn::Result<PrimaryConfig> {
-    take_primary_for_provider(attributes, DEFERRED_FACTORY_PRIMARY_ATTRIBUTE, "factory", "函数")
+    take_primary_for_provider(
+        attributes,
+        DEFERRED_FACTORY_PRIMARY_ATTRIBUTE,
+        "factory",
+        "函数",
+    )
 }
 
 fn take_primary_for_provider(
@@ -175,9 +180,7 @@ fn take_primary_for_provider(
         if primary.replace(config).is_some() {
             return Err(syn::Error::new(
                 attribute.span(),
-                format!(
-                    "同一个 `#[{provider_macro}]` {item_kind}不能重复标注 `#[primary]`"
-                ),
+                format!("同一个 `#[{provider_macro}]` {item_kind}不能重复标注 `#[primary]`"),
             ));
         }
     }
@@ -207,7 +210,7 @@ fn primary_arguments_error(span: zyn::proc_macro2::Span) -> syn::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zyn::{syn, Render};
+    use zyn::{Render, syn};
 
     #[test]
     fn defers_primary_after_a_lower_injectable_attribute() {

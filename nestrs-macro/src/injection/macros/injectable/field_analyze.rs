@@ -192,9 +192,9 @@ pub(crate) fn collect_field_specs(fields: &Fields) -> syn::Result<Vec<FieldSpec>
 /// 结构体。
 fn remove_field_strategy_attributes(fields: &mut Fields) {
     for field in fields.iter_mut() {
-        field.attrs.retain(|attribute| {
-            !inject::is_marker(attribute) && !value::is_marker(attribute)
-        });
+        field
+            .attrs
+            .retain(|attribute| !inject::is_marker(attribute) && !value::is_marker(attribute));
     }
 }
 
@@ -205,7 +205,6 @@ fn field_label(field: &Field, index: usize) -> String {
         .map(ToString::to_string)
         .unwrap_or_else(|| index.to_string())
 }
-
 
 #[cfg(test)]
 mod tests {

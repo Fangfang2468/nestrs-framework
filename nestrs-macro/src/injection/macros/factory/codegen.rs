@@ -44,6 +44,7 @@ pub(crate) fn emit_factory_provider(
 
     zyn! {
         #[doc(hidden)]
+        #[allow(clippy::unused_unit)]
         const {{ provider_const }}: () = {
             @GenerateFactoryAdapter(
                 analysis = analysis.clone(),
@@ -56,14 +57,14 @@ pub(crate) fn emit_factory_provider(
             fn __nestrs_reflected_factory() -> ::nestrs_core::__private::Provider {
                 ::nestrs_core::__private::Provider::Factory(
                     ::nestrs_core::__private::FactoryProvider {
-                        provide: ::nestrs_core::registration::service_identifier::ServiceIdentifier::new(
+                        provide: ::nestrs_core::__private::ServiceIdentifier::new(
                             @RenderServiceKey(key = config.key.clone()),
-                            ::nestrs_core::registration::service_type::ServiceType::create::<{{ analysis.output.success_type.clone() }}>(),
+                            ::nestrs_core::__private::ServiceType::create::<{{ analysis.output.success_type.clone() }}>(),
                         ),
                         common: ::nestrs_core::__private::ProviderCommon {
                             lifetime: @RenderServiceLifetime(lifetime = config.lifetime),
                             primary: {{ primary }},
-                            source: ::nestrs_core::registration::service_source::ServiceSource::new(
+                            source: ::nestrs_core::__private::ServiceSource::new(
                                 file!(),
                                 line!(),
                                 column!(),
@@ -92,7 +93,7 @@ pub(crate) fn emit_factory_provider(
 fn generate_factory_adapter(analysis: FactoryAnalysis) -> zyn::TokenStream {
     let invocation = analysis.output.invocation;
     let is_async = matches!(invocation, FactoryInvocation::Async);
-    let context_binding = factory_context_binding(&analysis);
+    let context_binding = factory_context_binding(analysis);
 
     zyn! {
         @if (is_async) {
@@ -171,7 +172,7 @@ fn invoke_sync_factory(
                     ::core::result::Result::Err(
                         ::nestrs_core::__private::ActivationError::FactoryFailed {
                             provider: stringify!({{ function }}),
-                            provider_source: ::nestrs_core::registration::service_source::ServiceSource::new(
+                            provider_source: ::nestrs_core::__private::ServiceSource::new(
                                 file!(),
                                 line!(),
                                 column!(),
@@ -229,7 +230,7 @@ fn invoke_async_factory(
                     ::core::result::Result::Err(
                         ::nestrs_core::__private::ActivationError::FactoryFailed {
                             provider: stringify!({{ function }}),
-                            provider_source: ::nestrs_core::registration::service_source::ServiceSource::new(
+                            provider_source: ::nestrs_core::__private::ServiceSource::new(
                                 file!(),
                                 line!(),
                                 column!(),
@@ -299,8 +300,8 @@ fn render_factory_invoker(invocation: FactoryInvocation) -> zyn::TokenStream {
 mod tests {
     use super::*;
     use crate::injection::{
-        macros_attrs::{lifetime::ServiceLifetime, service_key::ServiceKey},
         macros::factory::analyze::analyze_factory,
+        macros_attrs::{lifetime::ServiceLifetime, service_key::ServiceKey},
     };
     use zyn::{Render, syn};
 

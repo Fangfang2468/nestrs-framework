@@ -1,13 +1,8 @@
 use std::marker::PhantomData;
 
-use nestrs_core::{
-    __private::{
-        ClassProvider, ConstructionContext, Delivery, Provider, ProviderDefinition,
-        ProviderSource, REFLECTED_PROVIDERS,
-    },
-    registration::{
-        service_identifier::ServiceIdentifier, service_type::ServiceType,
-    },
+use nestrs_core::__private::{
+    ClassProvider, ConstructionContext, Lifetime, Provider, ProviderDefinition, ProviderSource,
+    REFLECTED_PROVIDERS, ServiceIdentifier, ServiceType,
 };
 use nestrs_macro::injectable;
 
@@ -18,7 +13,7 @@ async fn cleanup_repository() {}
 
 /// 泛型 injectable 本身不应向 linkme 写入一个开放类型的 provider；具体类型的
 /// provider 由 `ProviderDefinition` 在依赖使用处按需物化。
-#[injectable(cleanup = "cleanup_repository")]
+#[injectable(lifetime = Transient, cleanup = "cleanup_repository")]
 struct Repository<T> {
     #[value("generic-repository")]
     label: String,
@@ -49,6 +44,7 @@ fn generic_injectable_materializes_concrete_provider_definitions() {
         provide,
         ServiceIdentifier::from(ServiceType::create::<Repository<Entity>>())
     );
+    assert_eq!(common.lifetime, Lifetime::Transient);
     assert!(dependencies.is_empty());
     let cleanup = common
         .cleanup

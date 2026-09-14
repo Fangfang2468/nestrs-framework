@@ -10,11 +10,13 @@ use zyn::zyn;
 /// 输出一个封装 children 的匿名注册作用域。
 ///
 /// 构造 adapter 与 provider 分别由独立 element 生成；调用方把它们作为 children
-/// 传入，以显式表达二者必须处在同一个词法作用域的关系。尾部的 `()` 既是 const
-/// block 的自然 unit 值，也避免 zyn 将只含 `{{ children }}` 的花括号识别成插值。
+/// 传入，以显式表达二者必须处在同一个词法作用域的关系。尾部 `()` 使 zyn 将包含
+/// children 的 block 解析为 item scope；它对 const 的值是必要的自然 unit，因此由
+/// 生成 const 的局部 lint allow 屏蔽，而不会泄漏到调用方。
 #[zyn::element]
 pub(crate) fn emit_injectable_registration(children: zyn::TokenStream) -> zyn::TokenStream {
     zyn! {
+        #[allow(clippy::unused_unit)]
         const _: () = {
             {{ children }}
             ()
@@ -25,7 +27,7 @@ pub(crate) fn emit_injectable_registration(children: zyn::TokenStream) -> zyn::T
 #[cfg(test)]
 mod tests {
     use super::EmitInjectableRegistration;
-    use zyn::{quote::quote, syn, Render};
+    use zyn::{Render, quote::quote, syn};
 
     #[test]
     fn keeps_supplied_constructor_and_provider_in_one_lexical_scope() {

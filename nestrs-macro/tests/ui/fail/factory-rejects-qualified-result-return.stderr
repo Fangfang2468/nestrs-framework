@@ -1,0 +1,5 @@
+error: `#[factory]` 仅支持裸 `Result`、`std::result::Result` 或 `core::result::Result`；不支持限定路径的 `Result` 或类型别名，请改用 `std::result::Result<T, E>`
+  --> tests/ui/fail/factory-rejects-qualified-result-return.rs:10:14
+   |
+10 | fn make() -> external::Result<Service> {
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^

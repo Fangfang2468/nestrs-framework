@@ -1,16 +1,10 @@
 use std::marker::PhantomData;
 
-use nestrs_core::{
-    __private::{
-        ActivationError, ClassProvider, ClosedProviderCallback, ConstructionContext,
-        DependencyRequest, Delivery, ErasedService, InputPosition, Provider, ProviderCommon,
-        ProviderDefinition, ProviderSource, prepare_required, provider_definition,
-    },
-    lifetime::Lifetime,
-    registration::{
-        service_identifier::ServiceIdentifier, service_source::ServiceSource,
-        service_type::ServiceType,
-    },
+use nestrs_core::__private::{
+    ActivationError, ClassProvider, ClosedProviderCallback, ConstructionContext, Delivery,
+    DependencyRequest, ErasedService, InputPosition, Lifetime, Provider, ProviderCommon,
+    ProviderDefinition, ProviderSource, ServiceIdentifier, ServiceSource, ServiceType,
+    prepare_required, provider_definition,
 };
 
 struct Entity;
@@ -81,5 +75,5 @@ fn closed_provider_callback_is_specialized_for_the_closed_dependency_type() {
 
     let erased = constructor(ConstructionContext::new())
         .expect("closed generic provider should construct its concrete type");
-    assert!(matches!(erased.downcast::<Repository<Entity>>(), Ok(_)));
+    assert!(erased.downcast::<Repository<Entity>>().is_ok());
 }

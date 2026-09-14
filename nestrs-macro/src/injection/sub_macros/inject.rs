@@ -20,7 +20,7 @@ use zyn::syn::{
 
 /// 一个依赖请求的宏期事实。
 ///
-/// 它与 `nestrs_core::registration::dependency::DependencyRequest` 一一对应：这里是
+/// 它与 `nestrs_core::__private::DependencyRequest` 一一对应：这里是
 /// 语法层事实，后者是写进 provider 注册 ABI 的运行时描述。`#[inject]` 字段与 factory
 /// 参数都先归一到这个形状，再共享同一套渲染逻辑。
 #[derive(Clone, Debug)]
@@ -408,7 +408,11 @@ mod tests {
         assert!(empty_name.to_string().contains("key 字符串不可为空"));
 
         let float = key_of(parse_quote!(#[inject(key = 1.5)])).expect_err("float key");
-        assert!(float.to_string().contains("key 必须是字符串或非负整数值字面量"));
+        assert!(
+            float
+                .to_string()
+                .contains("key 必须是字符串或非负整数值字面量")
+        );
 
         let unknown = key_of(parse_quote!(#[inject(name = "x")])).expect_err("unknown key name");
         assert!(unknown.to_string().contains("只支持 key 参数"));
@@ -423,7 +427,10 @@ mod tests {
     #[test]
     fn classifies_concrete_closed_generic_and_trait_requests() {
         assert_eq!(classify(&parse_quote!(Database)), DependencyShape::Concrete);
-        assert_eq!(classify(&parse_quote!((Database))), DependencyShape::Concrete);
+        assert_eq!(
+            classify(&parse_quote!((Database))),
+            DependencyShape::Concrete
+        );
         assert_eq!(
             classify(&parse_quote!(Repository<User>)),
             DependencyShape::ClosedGeneric

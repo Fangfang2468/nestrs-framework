@@ -26,7 +26,7 @@ pub(crate) fn rewrite_value_field(field_type: Type, strategy: FieldStrategy) -> 
     };
     let uses_into_conversion = expression
         .as_ref()
-        .map(|expression| should_use_into_conversion(expression))
+        .map(should_use_into_conversion)
         .unwrap_or(false);
 
     zyn! {
@@ -58,7 +58,7 @@ fn should_use_into_conversion(expression: &Expr) -> bool {
 mod tests {
     use super::*;
     use crate::injection::macros::injectable::field_analyze::collect_field_specs;
-    use zyn::{syn, Render};
+    use zyn::{Render, syn};
 
     fn render_initializer(field_type: Type, strategy: FieldStrategy) -> String {
         RewriteValueField {
