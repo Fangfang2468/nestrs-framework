@@ -1,7 +1,7 @@
 //! Nestrs 的 proc macro 集。
 //!
-//! 与 `nestrs-core` 配套使用的宏（`injectable`、`factory`、`constructor`、
-//! `primary`、`bind`）通过 `injection` feature 控制编译开关：
+//! 与 `nestrs-core` 配套使用的宏（`injectable`、`factory`、`primary`、`bind`）
+//! 通过 `injection` feature 控制编译开关：
 //!
 //! ```toml
 //! [dependencies]
@@ -21,10 +21,6 @@ use zyn::{
 
 #[cfg(feature = "injection")]
 use crate::injection::{
-    macros_attrs::primary::{
-        DeferPrimaryToFactory, DeferPrimaryToInjectable, PrimaryConfig,
-        take_primary_for_factory, take_primary_for_injectable,
-    },
     macros::{
         bind::EmitBoundProvider,
         factory::{
@@ -36,12 +32,16 @@ use crate::injection::{
             config::InjectableConfig,
         },
     },
+    macros_attrs::primary::{
+        DeferPrimaryToFactory, DeferPrimaryToInjectable, PrimaryConfig, take_primary_for_factory,
+        take_primary_for_injectable,
+    },
 };
 #[cfg(feature = "injection")]
 use crate::utility::{
-    CheckInterfaceType, MustBePrivateFn, RejectUnsafeAndExternFn,
-    RejectUnsafeImpl, RequireModuleScope, RequireNonUnitFutureOutputType,
-    RequireNonUnitResultOkType, RequireNonUnitReturnType, impl_self_ident,
+    CheckInterfaceType, MustBePrivateFn, RejectUnsafeAndExternFn, RejectUnsafeImpl,
+    RequireModuleScope, RequireNonUnitFutureOutputType, RequireNonUnitResultOkType,
+    RequireNonUnitReturnType, impl_self_ident,
 };
 
 #[cfg(feature = "injection")]
