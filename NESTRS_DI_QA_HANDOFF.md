@@ -93,30 +93,17 @@ SqlUserService + key = "replica"
 
 ---
 
-## 二、`#[constructor]`、静态反射与自定义构造
+## 二、静态反射与自定义构造
 
-### Q6：属性宏能从 `impl UserController` 的 `#[constructor] fn new(...) -> Self` 得到 `UserController` 吗？
+### Q6：为什么不支持 `#[constructor]`？
 
-**A：** 一个函数级 attribute macro 只会得到 `ItemFn`，看不到其外层 `impl UserController`。如果返回类型写 `Self`，它在函数 token 中也不是可直接生成 `TypeId::<UserController>` 的 concrete 类型。
+**A：** `#[constructor]` 已被移除，不提供 deprecated 兼容入口。函数级 attribute macro 只能得到 `ItemFn`，看不到外层 `impl UserController`；若返回类型写成 `Self`，函数 token 也不能可靠地产生 `TypeId::<UserController>`。因此它会迫使系统实现没有额外价值的 impl 所属类型静态反射。
 
-Rust 编译器当然能验证构造函数本身是否正确，但 proc macro 不具有静态反射能力，无法可靠地将任意 impl 方法与对应 `#[injectable]` struct 关联成一个全局 ConstructorMeta。
+自定义构造统一由模块级私有 `#[factory] fn ... -> Result<Concrete, Error>` 表达；宏可从返回类型取得 concrete service identity。factory 仅识别裸 `Result`、`std::result::Result` 与 `core::result::Result`；请不要使用 `anyhow::Result` 等限定路径或类型别名表达该返回契约。
 
 ### Q7：宏展开时能读取 linkme 收集到的数据吗？
 
 **A：** 不能。proc macro 在编译期运行；`linkme` 分布式切片是最终二进制中的运行时静态收集结果。宏只能生成新的 slice item，不能在展开时枚举其他 crate 的 linkme 项。
-
-### Q8：为什么不继续设计 `#[constructor]`？
-
-**A：** 它会迫使系统解决“函数宏如何可靠取得 impl 所属 concrete 类型”的问题，却没有比 `#[factory]` 带来额外能力。当前结论是保留 deprecated 口子：
-
-```rust
-#[deprecated(
-    since = "0.1.0",
-    note = "`#[constructor]` Rust暂不支持静态反射，还无法实现该功能，先留下口子，需要自定义构造请先使用 `#[factory]`"
-)]
-```
-
-自定义构造统一由模块级私有 `#[factory] fn ... -> Result<Concrete, Error>` 表达；宏可以直接从返回类型得到 concrete service identity。
 
 ### Q9：若 `#[injectable]` 自动构造与同类型 `#[factory]` 同时存在，如何选择？
 
@@ -171,7 +158,7 @@ Rust 可以概念上实现“先构造、后字段填充”，但会遇到私有
 - 需要阻止对象在半初始化状态逃逸；
 - 注入 token 的来源生命周期仍必须被 runtime 持有。
 
-因此不应把“先 None 再补写”作为 `#[constructor]` 与字段注入协同的主方案。
+因此不应把“先 None 再补写”作为自定义构造与字段注入协同的主方案。
 
 ---
 
@@ -515,16 +502,20 @@ Empty
 
 ---
 
-## 八、当前源码快照（生成本文件时）
+## 八、生成时的历史源码快照
 
-### Q30：当前仓库已经实现到哪里？
+> 本节记录的是 2026-09-03 的交接基线，不反映后续已落地的 core runtime。
+> 当前运行时以 `nestrs-core::ServiceProvider::<Root>::build()` 为入口；Registry、
+> Compiler、同步 Singleton 激活与 Arena 生命周期边界均在 `nestrs-core` 内部。
+
+### Q30：生成本文档时，仓库实现到哪里？
 
 **A：** 当前仍是 metadata 与宏校验骨架，尚无完整 DI runtime。
 
 - `nestrs-macro/src/lib.rs`
   - `#[injectable]` 目前主要解析配置并校验 module scope/cleanup；尚未分析 `#[inject]` 字段或生成 adapter。
   - `#[factory]` 目前主要校验普通私有函数、非 `unsafe`/`extern`、无 `self`；尚未生成 metadata 或调用 adapter。
-  - `#[constructor]` 已 deprecated。
+  - `#[constructor]` 已移除；自定义构造应使用模块级私有 `#[factory]`。
   - `#[bind]` 已拒绝参数、负 impl、泛型 impl，并生成 basic bind metadata。
 - `nestrs-macro/src/injection/injectable/field_analyze.rs` 与 `field_rewrite.rs` 已存在但当前为空，适合作为共享输入分析/改写的落点之一。
 - `nestrs-core/src/inject_wrapper.rs` 只有 `Inject<T: ?Sized>` 的指针 token 骨架。
