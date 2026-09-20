@@ -5,8 +5,8 @@ use std::{
 };
 
 use nestrs_core::__private::{
-    CleanupFuture, Delivery, FactoryInvoker, FactoryProvider, Lifetime, Provider, ProviderSource,
-    REFLECTED_PROVIDERS, ServiceIdentifier, ServiceKey, ServiceType,
+    CleanupFuture, Delivery, FactoryInvoker, FactoryProvider, Provider, ProviderSource,
+    REFLECTED_PROVIDERS, ServiceIdentifier, ServiceKey, ServiceLifetime, ServiceType,
 };
 use nestrs_macro::{factory, primary};
 
@@ -152,11 +152,11 @@ fn factory_collects_common_configuration_and_parameter_injections() {
     assert_eq!(
         provide,
         ServiceIdentifier::new(
-            Some(ServiceKey::Named("configured")),
+            Some(ServiceKey::Named("configured".to_owned())),
             ServiceType::create::<ConfiguredService>(),
         )
     );
-    assert_eq!(common.lifetime, Lifetime::Scoped);
+    assert_eq!(common.lifetime, ServiceLifetime::Scoped);
     assert!(!common.primary);
     assert!(common.source.file.ends_with("factory_provider.rs"));
     assert!(matches!(invoker, FactoryInvoker::Sync(_)));
@@ -178,7 +178,7 @@ fn factory_collects_common_configuration_and_parameter_injections() {
     else {
         panic!("transient factory should register Provider::Factory");
     };
-    assert_eq!(common.lifetime, Lifetime::Transient);
+    assert_eq!(common.lifetime, ServiceLifetime::Transient);
     assert!(dependencies.is_empty());
     assert!(matches!(invoker, FactoryInvoker::Sync(_)));
 
@@ -188,7 +188,7 @@ fn factory_collects_common_configuration_and_parameter_injections() {
     };
     assert_eq!(dependencies.len(), 3);
 
-    let database = dependencies[0];
+    let database = &dependencies[0];
     assert_eq!(database.declaration_position, 0);
     assert_eq!(database.input_position.0, 0);
     assert_eq!(database.label, Some("database"));
@@ -203,7 +203,7 @@ fn factory_collects_common_configuration_and_parameter_injections() {
         ProviderSource::Registered
     ));
 
-    let cache = dependencies[1];
+    let cache = &dependencies[1];
     assert_eq!(cache.declaration_position, 1);
     assert_eq!(cache.input_position.0, 1);
     assert_eq!(cache.label, Some("cache"));
@@ -214,14 +214,14 @@ fn factory_collects_common_configuration_and_parameter_injections() {
     assert!(!cache.optional);
     assert!(matches!(cache.delivery, Delivery::Direct(_)));
 
-    let audit = dependencies[2];
+    let audit = &dependencies[2];
     assert_eq!(audit.declaration_position, 2);
     assert_eq!(audit.input_position.0, 2);
     assert_eq!(audit.label, Some("audit"));
     assert_eq!(
         audit.token,
         ServiceIdentifier::new(
-            Some(ServiceKey::Named("audit")),
+            Some(ServiceKey::Named("audit".to_owned())),
             ServiceType::create::<Audit>(),
         )
     );

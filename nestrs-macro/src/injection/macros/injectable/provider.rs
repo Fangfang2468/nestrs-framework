@@ -92,7 +92,7 @@ mod tests {
     use super::*;
     use crate::injection::{
         macros::injectable::field_analyze::{AnalyzedFields, FieldSpec, collect_field_specs},
-        macros_attrs::{lifetime::ServiceLifetime, service_key::ServiceKey},
+        macros_attrs::{lifetime::ServiceLifetime, service_key::ServiceKeySpec},
     };
     use zyn::{Render, syn};
 
@@ -130,7 +130,7 @@ mod tests {
         let specs = collect_field_specs(&item.fields).expect("fields should be valid");
         let config = InjectableConfig {
             lifetime: ServiceLifetime::Scoped,
-            key: Some(ServiceKey::Named("controller".to_owned())),
+            key: Some(ServiceKeySpec::Named("controller".to_owned())),
             cleanup: None,
         };
 
@@ -139,8 +139,10 @@ mod tests {
         assert!(output.contains("REFLECTED_PROVIDERS"));
         assert!(output.contains("Provider :: Class"));
         assert!(output.contains("constructor : __nestrs_construct"));
-        assert!(output.contains("Lifetime :: Scoped"));
-        assert!(output.contains("ServiceKey :: Named (\"controller\")"));
+        assert!(output.contains("ServiceLifetime :: Scoped"));
+        assert!(output.contains("ServiceKey :: Named"));
+        assert!(output.contains("String :: from"));
+        assert!(output.contains("\"controller\""));
         assert!(output.contains("declaration_position : 0usize"));
         assert!(
             output

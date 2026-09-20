@@ -1,5 +1,5 @@
 use crate::injection::macros_attrs::{
-    cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKey,
+    cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKeySpec,
 };
 
 use zyn::Attribute;
@@ -15,7 +15,7 @@ pub struct InjectableConfig {
 
     /// 服务输出使用的静态限定符。
     #[zyn(default)]
-    pub key: Option<ServiceKey>,
+    pub key: Option<ServiceKeySpec>,
 
     /// 输出服务的异步 cleanup 回调路径。
     #[zyn(default)]

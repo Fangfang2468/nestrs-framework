@@ -1,12 +1,13 @@
 mod arena;
 mod construction;
-mod inject_wrapper;
+mod facade;
+mod injection;
 mod lifetime;
 mod registration;
-mod runtime;
-pub mod scope;
 
-pub use runtime::{BuildError, ServiceProvider};
+pub use facade::{BuildError, ResolveError, ServiceProvider, ServiceScope, ShutdownError};
+pub use lifetime::ServiceLifetime;
+pub use registration::service_key::ServiceKey;
 
 #[doc(hidden)]
 pub mod __private {
@@ -15,18 +16,18 @@ pub mod __private {
     /// 下游应用无需也不应为了 DI 注册而直接依赖此名称。
     pub use linkme;
 
-    /// 宏生成字段输入 adapter 所使用的稳定 Arena 引用类型。
+    /// 宏生成字段输入 adapter 所使用的稳定服务引用类型。
     pub use crate::arena::ArenaServiceRef;
-    /// 仅供宏生成构造 adapter 与 core activation runtime 共用的隐藏 ABI。
+    /// 仅供宏生成构造 adapter 使用的隐藏 ABI。
     pub use crate::construction::{
         ActivationError, ConstructionContext, Constructor, ErasedService,
         FactoryConstructionContext, InputPosition, PrepareInput, prepare_bound_optional,
         prepare_bound_required, prepare_optional, prepare_optional_absent, prepare_required,
     };
-    /// 仅供宏展开引用的依赖令牌及其访问来源标记。
-    pub use crate::inject_wrapper::{FactoryParameter, FieldInject, Inject};
-    /// 宏生成 provider metadata 所需的生命周期枚举。
-    pub use crate::lifetime::Lifetime;
+    /// 仅供宏展开引用的只读字段注入 token。
+    pub use crate::injection::Injection;
+    /// 宏生成 provider metadata 所需的服务生命周期枚举。
+    pub use crate::lifetime::ServiceLifetime;
     /// 仅供宏写入和读取的 trait 绑定注册 ABI。
     pub use crate::registration::binding::{BoundKeyPolicy, REFLECTED_BINDINGS, TraitBinding};
     /// 仅供宏写入和读取的依赖请求 ABI。

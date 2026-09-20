@@ -1,6 +1,6 @@
 use nestrs_core::__private::{
-    ClassProvider, ConstructionContext, Delivery, Lifetime, Provider, ProviderSource,
-    REFLECTED_PROVIDERS, ServiceIdentifier, ServiceKey, ServiceType,
+    ClassProvider, ConstructionContext, Delivery, Provider, ProviderSource, REFLECTED_PROVIDERS,
+    ServiceIdentifier, ServiceKey, ServiceLifetime, ServiceType,
 };
 use nestrs_macro::{injectable, primary};
 
@@ -71,9 +71,9 @@ fn injectable_collects_class_providers_and_dependency_specs() {
             matches!(
                 provider,
                 Provider::Class(ClassProvider { provide, .. })
-                    if *provide
-                        == ServiceIdentifier::new(
-                            Some(ServiceKey::Named("controller")),
+                    if provide
+                        == &ServiceIdentifier::new(
+                            Some(ServiceKey::Named("controller".to_owned())),
                             ServiceType::create::<Controller>(),
                         )
             )
@@ -88,7 +88,7 @@ fn injectable_collects_class_providers_and_dependency_specs() {
         panic!("Controller should be a class provider");
     };
 
-    assert_eq!(common.lifetime, Lifetime::Scoped);
+    assert_eq!(common.lifetime, ServiceLifetime::Scoped);
     assert!(!common.primary);
     assert!(common.source.file.ends_with("injectable_provider.rs"));
     assert!(common.cleanup.is_none());
@@ -107,7 +107,7 @@ fn injectable_collects_class_providers_and_dependency_specs() {
     let Provider::Class(ClassProvider { common, .. }) = transient else {
         panic!("TransientController should be a class provider");
     };
-    assert_eq!(common.lifetime, Lifetime::Transient);
+    assert_eq!(common.lifetime, ServiceLifetime::Transient);
 
     let database = &dependencies[0];
     assert_eq!(database.declaration_position, 0);
@@ -131,7 +131,7 @@ fn injectable_collects_class_providers_and_dependency_specs() {
     assert_eq!(
         audit.token,
         ServiceIdentifier::new(
-            Some(ServiceKey::Named("audit")),
+            Some(ServiceKey::Named("audit".to_owned())),
             ServiceType::create::<dyn Audit>(),
         )
     );

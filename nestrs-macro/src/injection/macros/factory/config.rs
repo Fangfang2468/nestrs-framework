@@ -6,7 +6,7 @@
 //! 传入已经确定的布尔值。
 
 use crate::injection::macros_attrs::{
-    cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKey,
+    cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKeySpec,
 };
 
 use zyn::{Attribute, meta::Args, syn::spanned::Spanned};
@@ -21,7 +21,7 @@ pub(crate) struct FactoryConfig {
 
     /// factory 成功输出使用的可选静态 key。
     #[zyn(default)]
-    pub(crate) key: Option<ServiceKey>,
+    pub(crate) key: Option<ServiceKeySpec>,
 
     /// provider 生命周期结束时的可选异步 cleanup 函数路径。
     #[zyn(default)]
@@ -70,7 +70,10 @@ mod tests {
         let config = parse_factory_config(&args).expect("factory configuration should parse");
 
         assert_eq!(config.lifetime, ServiceLifetime::Scoped);
-        assert_eq!(config.key, Some(ServiceKey::Named("replica".to_owned())));
+        assert_eq!(
+            config.key,
+            Some(ServiceKeySpec::Named("replica".to_owned()))
+        );
         assert_eq!(
             config
                 .cleanup

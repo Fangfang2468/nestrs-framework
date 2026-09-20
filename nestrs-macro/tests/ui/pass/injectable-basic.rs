@@ -11,7 +11,7 @@ pub struct UserController {
     db: String,
 }
 
-#[injectable(lifetime = Lifetime::Transient, key = "1")]
+#[injectable(lifetime = ServiceLifetime::Transient, key = "1")]
 pub struct UserRepository {
     db: String,
 }

@@ -58,7 +58,7 @@ fn linkme_collects_providers_and_trait_bindings_separately() {
     assert_eq!(repository.label, "registry");
 
     let greeter = ServiceIdentifier::new(
-        Some(ServiceKey::Named("greeting")),
+        Some(ServiceKey::Named("greeting".to_owned())),
         ServiceType::create::<GreeterService>(),
     );
     let factory = providers

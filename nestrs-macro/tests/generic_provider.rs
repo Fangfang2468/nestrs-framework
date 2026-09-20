@@ -1,13 +1,34 @@
 use std::marker::PhantomData;
 
 use nestrs_core::__private::{
-    ClassProvider, ConstructionContext, Lifetime, Provider, ProviderDefinition, ProviderSource,
-    REFLECTED_PROVIDERS, ServiceIdentifier, ServiceType,
+    ClassProvider, ConstructionContext, Provider, ProviderDefinition, ProviderSource,
+    REFLECTED_PROVIDERS, ServiceIdentifier, ServiceLifetime, ServiceType,
 };
 use nestrs_macro::injectable;
 
 struct User;
 struct Entity;
+
+// 这三个类型对应嵌套闭合泛型链：C -> B<u32> -> A<u32>。
+// 它们刻意都使用本 crate 的类型，以便 #[injectable] 可以为开放泛型生成
+// ProviderDefinition；当前分支尚无 ServiceProvider runtime，本测试只验证可递归
+// 物化的 provider metadata。
+#[injectable]
+struct A<T> {
+    marker: PhantomData<T>,
+}
+
+#[injectable]
+struct B<T> {
+    #[inject]
+    a: A<T>,
+}
+
+#[injectable]
+struct C {
+    #[inject]
+    b: B<u32>,
+}
 
 async fn cleanup_repository() {}
 
@@ -44,7 +65,7 @@ fn generic_injectable_materializes_concrete_provider_definitions() {
         provide,
         ServiceIdentifier::from(ServiceType::create::<Repository<Entity>>())
     );
-    assert_eq!(common.lifetime, Lifetime::Transient);
+    assert_eq!(common.lifetime, ServiceLifetime::Transient);
     assert!(dependencies.is_empty());
     let cleanup = common
         .cleanup
@@ -127,4 +148,101 @@ fn injected_generic_repository_exposes_a_closed_provider_callback() {
         Err(_) => panic!("generic dependency callback should retain Repository<User>"),
     };
     assert_eq!(repository.label, "generic-repository");
+}
+
+#[test]
+fn nested_closed_generics_materialize_a_complete_descriptor_chain() {
+    let providers: Vec<_> = REFLECTED_PROVIDERS
+        .iter()
+        .map(|provider| provider())
+        .collect();
+
+    println!(
+        "--------------------------------   nested_closed_generics_materialize_a_complete_descriptor_chain   --------------------------------"
+    );
+    println!("{providers:#?}");
+
+    let c_provider = providers
+        .iter()
+        .find(|provider| {
+            matches!(
+                provider,
+                Provider::Class(ClassProvider { provide, .. })
+                    if provide.service_type == ServiceType::create::<C>()
+            )
+        })
+        .expect("C should be registered through linkme");
+
+    assert!(!providers.iter().any(|provider| {
+        matches!(
+            provider,
+            Provider::Class(ClassProvider { provide, .. })
+                if provide.service_type == ServiceType::create::<B<u32>>()
+                    || provide.service_type == ServiceType::create::<A<u32>>()
+        )
+    }));
+
+    let Provider::Class(ClassProvider { dependencies, .. }) = c_provider else {
+        panic!("C should be described by a class provider")
+    };
+    assert_eq!(dependencies.len(), 1);
+    let b_dependency = dependencies
+        .first()
+        .expect("C should declare its B<u32> dependency");
+    assert_eq!(
+        b_dependency.token,
+        ServiceIdentifier::from(ServiceType::create::<B<u32>>())
+    );
+    let b_provider = match b_dependency.provider_source {
+        ProviderSource::Materialize(definition) => definition(),
+        ProviderSource::Registered => {
+            panic!("B<u32> should carry a closed generic provider callback")
+        }
+    };
+
+    let Provider::Class(ClassProvider {
+        provide,
+        dependencies,
+        ..
+    }) = &b_provider
+    else {
+        panic!("B<u32> callback should produce a class provider")
+    };
+    assert_eq!(
+        *provide,
+        ServiceIdentifier::from(ServiceType::create::<B<u32>>())
+    );
+    assert_eq!(dependencies.len(), 1);
+    let a_dependency = dependencies
+        .first()
+        .expect("B<u32> should declare its A<u32> dependency");
+    assert_eq!(
+        a_dependency.token,
+        ServiceIdentifier::from(ServiceType::create::<A<u32>>())
+    );
+    let a_provider = match a_dependency.provider_source {
+        ProviderSource::Materialize(definition) => definition(),
+        ProviderSource::Registered => {
+            panic!("A<u32> should carry a closed generic provider callback")
+        }
+    };
+
+    let Provider::Class(ClassProvider {
+        provide,
+        dependencies,
+        constructor,
+        ..
+    }) = a_provider
+    else {
+        panic!("A<u32> callback should produce a class provider")
+    };
+    assert_eq!(
+        provide,
+        ServiceIdentifier::from(ServiceType::create::<A<u32>>())
+    );
+    assert!(dependencies.is_empty());
+
+    let erased_a = constructor(ConstructionContext::new())
+        .expect("the leaf closed generic should construct without dependencies");
+    assert!(erased_a.downcast::<A<u32>>().is_ok());
 }

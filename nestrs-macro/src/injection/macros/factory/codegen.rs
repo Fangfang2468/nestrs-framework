@@ -259,8 +259,8 @@ fn invoke_async_factory(
 /// 从 frame-bound `FactoryConstructionContext` 取出一个 factory 依赖参数。
 ///
 /// 这里直接把 `take` 表达式作为 factory 调用实参，避免生成固定局部变量名与用户的
-/// 简单参数标识符发生碰撞。返回 token 的 `FactoryParameter<'frame>` 会沿着 adapter
-/// future 保持到 factory 完成，从而不能逃逸至输出服务或后台任务。
+/// 简单参数标识符发生碰撞。返回的 `&'frame T` 会沿着 adapter future 保持到 factory
+/// 完成，从而不能逃逸至输出服务或后台任务。
 #[zyn::element]
 fn take_factory_parameter(
     parameter: FactoryParameterSpec,
@@ -301,7 +301,7 @@ mod tests {
     use super::*;
     use crate::injection::{
         macros::factory::analyze::analyze_factory,
-        macros_attrs::{lifetime::ServiceLifetime, service_key::ServiceKey},
+        macros_attrs::{lifetime::ServiceLifetime, service_key::ServiceKeySpec},
     };
     use zyn::{Render, syn};
 
@@ -312,7 +312,7 @@ mod tests {
             analysis,
             config: FactoryConfig {
                 lifetime: ServiceLifetime::Scoped,
-                key: Some(ServiceKey::Named("writer".to_owned())),
+                key: Some(ServiceKeySpec::Named("writer".to_owned())),
                 cleanup: None,
             },
             primary: true,
@@ -341,7 +341,9 @@ mod tests {
         assert!(output.contains("FactoryConstructionContext < 'frame >"));
         assert!(output.contains("take :: < Database >"));
         assert!(output.contains("take_optional :: < dyn Audit >"));
-        assert!(output.contains("ServiceKey :: Named (\"audit\")"));
+        assert!(output.contains("ServiceKey :: Named"));
+        assert!(output.contains("String :: from"));
+        assert!(output.contains("\"audit\""));
         assert!(output.contains("declaration_position : 1usize"));
         assert!(output.contains("primary : true"));
         assert!(output.contains("FactoryFailed"));

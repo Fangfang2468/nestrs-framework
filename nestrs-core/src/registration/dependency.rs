@@ -13,7 +13,7 @@ use crate::{
 ///
 /// 字段与函数参数都通过该结构描述，因此 token、可选性、构造输入位置与交付方式在
 /// class provider 和 factory provider 之间完全一致。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct DependencyRequest {
     /// 依赖在原始字段或参数声明中的零基位置。
     ///

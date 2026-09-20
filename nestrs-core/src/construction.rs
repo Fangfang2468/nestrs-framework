@@ -1,8 +1,7 @@
-//! 宏生成构造 adapter 使用的隐藏 activation ABI。
+//! 宏生成构造 adapter 使用的隐藏 ABI。
 //!
-//! [`ConstructionContext`] 只保存 compile 阶段已经绑定到固定位置的输入，不提供
-//! `resolve` 一类的 service-locator API。`#[injectable]` 与未来的同步 `#[factory]`
-//! adapter 都通过 [`Constructor`] 消费同一套 ABI。
+//! 本模块只描述已经绑定好的输入如何交给 class 或 factory adapter，不负责选择
+//! provider、管理实例、调度 future 或暴露 resolve API。
 
 use std::{any::Any, ptr::NonNull};
 
@@ -10,21 +9,18 @@ use thiserror::Error;
 
 use crate::{
     arena::ArenaServiceRef,
-    inject_wrapper::{FactoryParameter, Inject},
+    injection::Injection,
     registration::{
         injectable::Injectable, service_source::ServiceSource, service_type::ServiceType,
     },
 };
 
-/// 构造输入在已编译 provider 中的位置。
-///
-/// 宏分析阶段已经使用 `usize` 为 `#[inject]` 字段编号，因此这里保持同一表示，避免
-/// 引入额外的上限或隐式截断。
+/// 构造输入在 provider adapter 中的位置。
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InputPosition(pub usize);
 
-/// 构造 adapter 消费预绑定输入时可能发生的受控错误。
+/// 宏生成构造 adapter 可能返回的受控错误。
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ActivationError {
     #[error("构造输入位置 {position:?} 不存在")]
@@ -60,18 +56,12 @@ pub enum ActivationError {
 
     #[error("factory provider {provider}（{provider_source:?}）执行失败")]
     FactoryFailed {
-        /// 发生错误的 factory 函数名。
         provider: &'static str,
-
-        /// 对应 Provider 声明的静态来源。
         provider_source: ServiceSource,
     },
 }
 
-/// 由 runtime 在 adapter 调用前准备的一个输入。
-///
-/// `Inject<T>` 本身是 Sized，即使 `T` 是 `dyn Trait`，因此可以保存在 `Any` 擦除
-/// 容器中，并在宏生成的 `take::<T>` 调用时恢复为准确的 token 类型。
+/// 由未来容器在 adapter 调用前准备的一个输入。
 enum PreparedInput {
     Required {
         value: Box<dyn Any + Send + Sync>,
@@ -85,25 +75,24 @@ enum PreparedInput {
 
 /// 一个 provider 的已绑定构造输入。
 ///
-/// 此类型按值传给 [`Constructor`]，从而每个输入槽只能被一个字段/参数消费一次。
-/// 运行时负责根据已编译依赖图填充它；`insert_*` 也保留在隐藏 ABI 中，以供 core
-/// 测试及将来的激活器构造输入。
+/// 宏生成的 class adapter 按固定位置取走输入；此类型没有服务定位能力。
 #[derive(Default)]
 pub struct ConstructionContext {
     inputs: Vec<Option<PreparedInput>>,
 }
 
 impl ConstructionContext {
-    /// 创建没有任何构造输入的上下文。
+    /// 创建没有构造输入的上下文。
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// 将 Arena 中已验证的必选服务地址封装为字段令牌。
+    /// 将已验证的稳定地址包装成必选字段注入 token。
     ///
-    /// 该入口只能由同 crate 的 [`prepare_required`] 调用。传入地址必须指向当前
-    /// Arena 中已提交且精确为 `T` 的服务，并且生成的 context 必须立刻交给同一次
-    /// 宏构造 adapter；这样 `Inject<T>` 不会逃离拥有该地址的 Arena。
+    /// # Safety
+    ///
+    /// pointer 必须指向当前容器拥有的精确 T，并且其有效期必须覆盖由该 adapter
+    /// 构造出的消费者。
     pub(crate) unsafe fn insert_required_ptr<T>(
         &mut self,
         position: InputPosition,
@@ -113,7 +102,7 @@ impl ConstructionContext {
         T: Injectable + ?Sized,
     {
         let value: Box<dyn Any + Send + Sync> =
-            Box::new(unsafe { Inject::from_field_ptr(pointer) });
+            Box::new(unsafe { Injection::from_service_ptr(pointer) });
 
         self.insert(
             position,
@@ -124,10 +113,11 @@ impl ConstructionContext {
         )
     }
 
-    /// 将 Arena 中已验证的可选服务地址封装为字段令牌。
+    /// 将已验证的稳定地址包装成可选字段注入 token。
     ///
-    /// `None` 仍会保留 `T` 的类型信息，因此宏生成的 `take_optional::<T>` 可以验证
-    /// 自己消费的是正确的输入槽。
+    /// # Safety
+    ///
+    /// present pointer 必须满足与 insert_required_ptr 相同的生命周期和类型前提。
     pub(crate) unsafe fn insert_optional_ptr<T>(
         &mut self,
         position: InputPosition,
@@ -136,8 +126,8 @@ impl ConstructionContext {
     where
         T: Injectable + ?Sized,
     {
-        let token: Option<Inject<T>> =
-            pointer.map(|pointer| unsafe { Inject::from_field_ptr(pointer) });
+        let token: Option<Injection<T>> =
+            pointer.map(|pointer| unsafe { Injection::from_service_ptr(pointer) });
         let value: Box<dyn Any + Send + Sync> = Box::new(token);
 
         self.insert(
@@ -149,13 +139,8 @@ impl ConstructionContext {
         )
     }
 
-    /// 取走一个必选 `Inject<T>` 输入。
-    ///
-    /// 宏生成的构造 adapter 用它取得固定位置的必选输入。
-    ///
-    /// slot 的存在性、可选性与类型均会在这里校验；位置错误只会返回
-    /// [`ActivationError`]，不会要求调用方维持额外的内存安全前提。
-    pub fn take<T>(&mut self, position: InputPosition) -> Result<Inject<T>, ActivationError>
+    /// 取走一个必选字段注入 token。
+    pub fn take<T>(&mut self, position: InputPosition) -> Result<Injection<T>, ActivationError>
     where
         T: Injectable + ?Sized,
     {
@@ -164,7 +149,7 @@ impl ConstructionContext {
                 value,
                 service_type_name,
             } => value
-                .downcast::<Inject<T>>()
+                .downcast::<Injection<T>>()
                 .map(|value| *value)
                 .map_err(|_| ActivationError::InputTypeMismatch {
                     position,
@@ -177,15 +162,11 @@ impl ConstructionContext {
         }
     }
 
-    /// 取走一个可选 `Inject<T>` 输入。
-    ///
-    /// 宏生成的构造 adapter 用它取得固定位置的可选输入。
-    ///
-    /// 与 [`Self::take`] 一样，slot 的存在性、可选性与类型均由此方法验证。
+    /// 取走一个可选注入 token。
     pub fn take_optional<T>(
         &mut self,
         position: InputPosition,
-    ) -> Result<Option<Inject<T>>, ActivationError>
+    ) -> Result<Option<Injection<T>>, ActivationError>
     where
         T: Injectable + ?Sized,
     {
@@ -194,7 +175,7 @@ impl ConstructionContext {
                 value,
                 service_type_name,
             } => value
-                .downcast::<Option<Inject<T>>>()
+                .downcast::<Option<Injection<T>>>()
                 .map(|value| *value)
                 .map_err(|_| ActivationError::InputTypeMismatch {
                     position,
@@ -244,31 +225,15 @@ impl ConstructionContext {
     }
 }
 
-/// factory 调用期间由 core activation runtime 持有的不可伪造 frame。
+/// factory 调用期间由 core 持有的私有 activation frame。
 ///
-/// 它目前只是 factory 参数逃逸边界的最小 runtime token：未来的 activation / lease
-/// runtime 可以把自己的 frame 语义放在这里，但不能以无来源的 `PhantomData` 代替真实
-/// 借用。该类型不向下游暴露构造入口，避免调用方自行制造 `'static` factory frame。
+/// 未来 runtime 必须让此 frame 借用或持有所有 factory 输入服务的 owner lease。它不是
+/// 单纯的生命周期标记：在 frame 结束前，所有已绑定输入都必须保持地址稳定且不可释放。
 pub(crate) struct FactoryActivationFrame {
     _private: (),
 }
 
-impl FactoryActivationFrame {
-    #[allow(dead_code)] // provider 执行 runtime 接线后由其持有。
-    pub(crate) fn new() -> Self {
-        Self { _private: () }
-    }
-}
-
 /// 仅供 factory adapter 消费的 frame-bound 构造输入。
-///
-/// 与 [`ConstructionContext`] 不同，它从当前 activation frame 借用，因此
-/// [`Self::take`] 返回的 token 是 `Inject<T, FactoryParameter<'frame>>`，而不是可以
-/// 被长期保存在 injectable 字段中的 `Inject<T>`。这使 Rust 在 factory 试图把参数放进
-/// `'static` provider 输出、future 或后台任务时拒绝编译。
-///
-/// 宏生成的 adapter 可以调用 `take` / `take_optional`，但不能构造此上下文；只有 core
-/// runtime 能够把已绑定 [`ConstructionContext`] 与真实 activation frame 组合起来。
 #[doc(hidden)]
 pub struct FactoryConstructionContext<'frame> {
     bound: ConstructionContext,
@@ -276,7 +241,15 @@ pub struct FactoryConstructionContext<'frame> {
 }
 
 impl<'frame> FactoryConstructionContext<'frame> {
-    pub(crate) fn from_bound(
+    /// 从已绑定输入与实际 activation frame 建立 factory context。
+    ///
+    /// # Safety
+    ///
+    /// 调用方必须保证 `frame` 在 `'frame` 内持有或借用每个 `bound` 输入所指向服务的
+    /// owner lease。任何输入 owner 都不得在 factory future 完成前释放、迁移或替换；
+    /// 否则 [`Self::take`] 签发的 `&'frame T` 会失效。
+    #[allow(dead_code)] // activation runtime 接线后由其调用。
+    pub(crate) unsafe fn from_bound(
         bound: ConstructionContext,
         frame: &'frame FactoryActivationFrame,
     ) -> Self {
@@ -286,43 +259,42 @@ impl<'frame> FactoryConstructionContext<'frame> {
         }
     }
 
-    /// 取走一个必选的、仅在本次 factory activation 内有效的注入参数。
-    pub fn take<T>(
-        &mut self,
-        position: InputPosition,
-    ) -> Result<Inject<T, FactoryParameter<'frame>>, ActivationError>
+    /// 取走一个只在当前 factory 调用期间有效的必选服务借用。
+    ///
+    /// 与存入服务字段的 [`Injection`] 不同，factory 参数不获得可长期保存的 token。
+    /// 返回值绑定到这个私有 activation frame，因此无法安全地放进 `'static` 输出或
+    /// detached task。
+    pub fn take<T>(&mut self, position: InputPosition) -> Result<&'frame T, ActivationError>
     where
         T: Injectable + ?Sized,
     {
         let token = self.bound.take::<T>(position)?;
 
-        // SAFETY: `ConstructionContext::take` 只返回由 core 以 Arena 稳定地址构造的
-        // `FieldInject` token；`self._frame` 把新 token 的 access marker 绑定到当前
-        // factory invocation，且该 marker 不会向业务代码暴露重绑入口。
-        Ok(unsafe { Inject::from_factory_ptr(token.into_ptr()) })
+        // SAFETY: ConstructionContext only issues tokens from an already-validated stable
+        // address, and from_bound's Safety contract keeps its owner alive for 'frame.
+        Ok(unsafe { token.into_ptr().as_ref() })
     }
 
-    /// 取走一个可选的、仅在本次 factory activation 内有效的注入参数。
+    /// 取走一个只在当前 factory 调用期间有效的可选服务借用。
     pub fn take_optional<T>(
         &mut self,
         position: InputPosition,
-    ) -> Result<Option<Inject<T, FactoryParameter<'frame>>>, ActivationError>
+    ) -> Result<Option<&'frame T>, ActivationError>
     where
         T: Injectable + ?Sized,
     {
         let token = self.bound.take_optional::<T>(position)?;
 
-        Ok(token.map(|token| {
-            // SAFETY: see `Self::take`; `None` carries no address and needs no conversion.
-            unsafe { Inject::from_factory_ptr(token.into_ptr()) }
-        }))
+        token
+            .map(|token| {
+                // SAFETY: see take; None contains no address.
+                unsafe { Ok(token.into_ptr().as_ref()) }
+            })
+            .transpose()
     }
 }
 
 /// 宏为一个字段单态化生成的输入准备函数。
-///
-/// runtime 只把目标服务身份查为 [`ArenaServiceRef`]；此函数项保留 `T`，因此无须、
-/// 也不能从 `TypeId` 反推字段的精确类型。
 #[doc(hidden)]
 pub type PrepareInput = fn(
     &mut ConstructionContext,
@@ -330,7 +302,7 @@ pub type PrepareInput = fn(
     Option<ArenaServiceRef>,
 ) -> Result<(), ActivationError>;
 
-/// 为一个必选 concrete 字段将 Arena 地址写入构造 context。
+/// 将必选 concrete 输入写入构造上下文。
 #[doc(hidden)]
 pub fn prepare_required<T>(
     context: &mut ConstructionContext,
@@ -343,12 +315,11 @@ where
     let input = input.ok_or(ActivationError::MissingInput { position })?;
     let pointer = input.cast::<T>(position)?;
 
-    // SAFETY: `ArenaServiceRef::cast` verified the precise type and the reference can only
-    // originate from a committed, stable Arena allocation.
+    // SAFETY: cast verified T and the future container must keep the source storage alive.
     unsafe { context.insert_required_ptr(position, pointer) }
 }
 
-/// 为一个可选 concrete 字段将 Arena 地址或 `None` 写入构造 context。
+/// 将可选 concrete 输入写入构造上下文。
 #[doc(hidden)]
 pub fn prepare_optional<T>(
     context: &mut ConstructionContext,
@@ -360,14 +331,11 @@ where
 {
     let pointer = input.map(|input| input.cast::<T>(position)).transpose()?;
 
-    // SAFETY: if present, `pointer` was type-checked from a committed stable Arena entry.
+    // SAFETY: every present pointer passed type validation above.
     unsafe { context.insert_optional_ptr(position, pointer) }
 }
 
-/// 为没有 bind provider 的可选 trait 字段写入 `None`。
-///
-/// 这个函数不尝试把 thin concrete pointer 伪造成 `dyn Trait`。它只允许 `None`，因此
-/// `Option<Inject<dyn Trait>>` 在没有匹配 `#[bind]` 时仍可安全地表示缺失依赖。
+/// 为没有 bind 的可选 trait 输入写入 None。
 #[doc(hidden)]
 pub fn prepare_optional_absent<T>(
     context: &mut ConstructionContext,
@@ -384,15 +352,11 @@ where
         });
     }
 
-    // SAFETY: no pointer is stored for the absent case, so no trait-object projection or Arena
-    // address interpretation is required.
+    // SAFETY: no pointer is stored for an absent optional trait input.
     unsafe { context.insert_optional_ptr::<T>(position, None) }
 }
 
-/// 用 `#[bind]` 生成的 concrete-to-trait projector 准备一个必选 trait 字段输入。
-///
-/// `Concrete` 和 `Trait` 由 bind 宏的单态化 wrapper 同时保留。首先校验 Arena 地址确实
-/// 是 `Concrete`，然后调用 Rust 类型系统验证过的投影函数获得真实 trait-object vtable。
+/// 用 bind 宏生成的 projector 准备必选 trait 输入。
 #[doc(hidden)]
 pub fn prepare_bound_required<Concrete, Trait>(
     context: &mut ConstructionContext,
@@ -408,12 +372,11 @@ where
     let concrete = input.cast::<Concrete>(position)?;
     let trait_pointer = project_bound_pointer(concrete, project);
 
-    // SAFETY: `project_bound_pointer` created this fat pointer through a Rust-typed reference
-    // projection from a committed `Concrete` Arena allocation.
+    // SAFETY: the projector creates a valid trait-object pointer from the checked concrete ref.
     unsafe { context.insert_required_ptr(position, trait_pointer) }
 }
 
-/// 用 `#[bind]` 生成的 concrete-to-trait projector 准备一个可选 trait 字段输入。
+/// 用 bind 宏生成的 projector 准备可选 trait 输入。
 #[doc(hidden)]
 pub fn prepare_bound_optional<Concrete, Trait>(
     context: &mut ConstructionContext,
@@ -430,8 +393,7 @@ where
         .transpose()
         .map(|concrete| concrete.map(|concrete| project_bound_pointer(concrete, project)))?;
 
-    // SAFETY: `Some` pointers originate from the same typed projection as the required path;
-    // `None` contains no pointer and is safe for an absent optional dependency.
+    // SAFETY: present pointers originate from the typed projector; absent inputs carry no ptr.
     unsafe { context.insert_optional_ptr(position, trait_pointer) }
 }
 
@@ -443,25 +405,16 @@ where
     Concrete: Injectable,
     Trait: Injectable + ?Sized,
 {
-    // SAFETY: `ArenaServiceRef::cast::<Concrete>` has already verified the exact concrete type
-    // and Arena allocations remain stable until all consumers are dropped.
+    // SAFETY: the concrete pointer was checked against Concrete by ArenaServiceRef::cast.
     let concrete = unsafe { concrete.as_ref() };
     NonNull::from(project(concrete))
 }
 
-/// 由构造 adapter 返回的具体服务的 owning type-erased 表示。
-///
-/// 它保留 concrete [`ServiceType`]，并拥有实际分配；后续 runtime 可以据此存入
-/// ready slot 并进行 bind projection。它没有暴露原始指针给业务代码。
+/// 由构造 adapter 返回的 owning type-erased service。
 type AnyService = Box<dyn Any + Send + Sync>;
 
 pub struct ErasedService {
     service_type: ServiceType,
-    /// 服务值始终由 Box 持有。
-    ///
-    /// Arena 可以移动自己的 journal entry，但不会移动这个 heap allocation；已签发的
-    /// `Inject<T>` 因而持续指向一个稳定地址。v6 的 worker lease 只需保活拥有这个
-    /// Box 的 Arena backing，而不需要把 raw allocation 或 Arena facade 跨线程发送。
     value: AnyService,
 }
 
@@ -483,9 +436,6 @@ impl ErasedService {
     }
 
     /// 消费 type-erased service 并恢复其 concrete 类型。
-    ///
-    /// 这是隐藏 ABI 的受控边界，主要供 runtime 和聚焦测试验证 adapter 输出；常规
-    /// 业务解析路径不应把 concrete value 从 container 中取走。
     pub fn downcast<T>(self) -> Result<T, Self>
     where
         T: Injectable,
@@ -503,136 +453,7 @@ impl ErasedService {
             }),
         }
     }
-
-    /// 返回由此 owning Box 持有的 stable concrete allocation 的数据指针。
-    ///
-    /// 返回值只由 Arena 在把 `ErasedService` 放进其 journal 后用于建立
-    /// [`crate::arena::ArenaServiceRef`]。不能在 Arena backing 释放后使用它；activation
-    /// runtime 必须以 [`crate::arena::ArenaLease`] 保活所有跨 worker 的输入来源。
-    pub(crate) fn stable_pointer(&self) -> NonNull<u8> {
-        NonNull::from(self.value.as_ref()).cast()
-    }
 }
 
-/// 所有同步 provider 构造 adapter 的统一函数签名。
-///
-/// `#[injectable]` 的结构体字段构造和未来同步 `#[factory]` 都从同一个
-/// [`ConstructionContext`] 取得预绑定的 `Inject<T>` 输入，并返回 owning
-/// [`ErasedService`]。
+/// 所有 class provider 构造 adapter 的统一函数签名。
 pub type Constructor = fn(ConstructionContext) -> Result<ErasedService, ActivationError>;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        arena::Arena,
-        registration::{service_identifier::ServiceIdentifier, service_type::ServiceType},
-    };
-
-    struct RequiredDependency;
-    struct OptionalDependency;
-
-    struct Consumer {
-        required: Inject<RequiredDependency>,
-        optional: Option<Inject<OptionalDependency>>,
-    }
-
-    fn construct_consumer(
-        mut context: ConstructionContext,
-    ) -> Result<ErasedService, ActivationError> {
-        let required = context.take::<RequiredDependency>(InputPosition(0))?;
-        let optional = context.take_optional::<OptionalDependency>(InputPosition(1))?;
-
-        Ok(ErasedService::new(Consumer { required, optional }))
-    }
-
-    #[test]
-    fn constructor_consumes_required_and_optional_tokens_and_erases_the_result() {
-        let required_identifier =
-            ServiceIdentifier::from(ServiceType::create::<RequiredDependency>());
-        let optional_identifier =
-            ServiceIdentifier::from(ServiceType::create::<OptionalDependency>());
-        let mut arena = Arena::new();
-        arena
-            .insert(required_identifier, RequiredDependency)
-            .expect("required dependency should commit to the arena");
-        arena
-            .insert(optional_identifier, OptionalDependency)
-            .expect("optional dependency should commit to the arena");
-
-        let mut context = ConstructionContext::new();
-        prepare_required::<RequiredDependency>(
-            &mut context,
-            InputPosition(0),
-            arena.lookup(required_identifier),
-        )
-        .expect("required input should be prepared from the arena");
-        prepare_optional::<OptionalDependency>(
-            &mut context,
-            InputPosition(1),
-            arena.lookup(optional_identifier),
-        )
-        .expect("optional input should be prepared from the arena");
-
-        let constructor: Constructor = construct_consumer;
-        let erased = constructor(context).expect("adapter should receive its bound inputs");
-
-        assert_eq!(erased.service_type(), ServiceType::create::<Consumer>());
-
-        let consumer = match erased.downcast::<Consumer>() {
-            Ok(consumer) => consumer,
-            Err(_) => panic!("adapter output should retain the concrete service"),
-        };
-        let Consumer { required, optional } = consumer;
-
-        assert!(std::ptr::eq(
-            &*required,
-            arena.get::<RequiredDependency>().unwrap()
-        ));
-        assert!(optional.is_some());
-    }
-
-    #[test]
-    fn factory_context_rebinds_inputs_to_the_activation_frame() {
-        let required_identifier =
-            ServiceIdentifier::from(ServiceType::create::<RequiredDependency>());
-        let optional_identifier =
-            ServiceIdentifier::from(ServiceType::create::<OptionalDependency>());
-        let mut arena = Arena::new();
-        arena
-            .insert(required_identifier, RequiredDependency)
-            .expect("required dependency should commit to the arena");
-        arena
-            .insert(optional_identifier, OptionalDependency)
-            .expect("optional dependency should commit to the arena");
-
-        let mut bound = ConstructionContext::new();
-        prepare_required::<RequiredDependency>(
-            &mut bound,
-            InputPosition(0),
-            arena.lookup(required_identifier),
-        )
-        .expect("required input should be prepared from the arena");
-        prepare_optional::<OptionalDependency>(
-            &mut bound,
-            InputPosition(1),
-            arena.lookup(optional_identifier),
-        )
-        .expect("optional input should be prepared from the arena");
-
-        let frame = FactoryActivationFrame::new();
-        let mut context = FactoryConstructionContext::from_bound(bound, &frame);
-        let required: Inject<RequiredDependency, FactoryParameter<'_>> = context
-            .take(InputPosition(0))
-            .expect("factory required input should be frame-bound");
-        let optional: Option<Inject<OptionalDependency, FactoryParameter<'_>>> = context
-            .take_optional(InputPosition(1))
-            .expect("factory optional input should be frame-bound");
-
-        assert!(std::ptr::eq(
-            &*required,
-            arena.get::<RequiredDependency>().unwrap()
-        ));
-        assert!(optional.is_some());
-    }
-}

@@ -5,7 +5,7 @@
 //! 多处重新解析 `#[inject]` 而产生漂移。
 
 use crate::injection::{
-    macros_attrs::service_key::ServiceKey,
+    macros_attrs::service_key::ServiceKeySpec,
     sub_macros::{
         inject::{self, DependencyRequest, INJECTABLE_MESSAGES, inject_key, split_optional},
         value,
@@ -26,7 +26,7 @@ pub(crate) enum FieldStrategy {
         /// 请求服务的实际类型；对 `Option<T>` 字段已经剥离最外层 `Option`。
         service_type: Type,
         /// 可选的静态服务限定符。
-        key: Option<ServiceKey>,
+        key: Option<ServiceKeySpec>,
         /// 缺失服务时是否允许交付 `None`。
         optional: bool,
     },
@@ -38,7 +38,7 @@ pub(crate) enum FieldStrategy {
 
 /// 一个字段的稳定宏期事实。
 ///
-/// `dependency_position` 只为 `Inject` 分配，因而 `#[value(...)]` 与未标注字段
+/// `dependency_position` 只为 `#[inject]` 字段分配，因而 `#[value(...)]` 与未标注字段
 /// 不会影响容器输入的顺序。
 #[derive(Clone, Debug)]
 pub(crate) struct FieldSpec {
@@ -256,7 +256,7 @@ mod tests {
         match &specs[1].strategy {
             FieldStrategy::Inject {
                 service_type,
-                key: Some(ServiceKey::Named(key)),
+                key: Some(ServiceKeySpec::Named(key)),
                 optional,
             } => {
                 assert_eq!(service_type.to_token_stream().to_string(), "dyn Audit");
@@ -294,7 +294,7 @@ mod tests {
         assert!(matches!(
             specs[0].strategy,
             FieldStrategy::Inject {
-                key: Some(ServiceKey::Named(ref key)),
+                key: Some(ServiceKeySpec::Named(ref key)),
                 optional: false,
                 ..
             } if key == "named"
@@ -302,7 +302,7 @@ mod tests {
         assert!(matches!(
             specs[1].strategy,
             FieldStrategy::Inject {
-                key: Some(ServiceKey::Indexed(7)),
+                key: Some(ServiceKeySpec::Indexed(7)),
                 optional: false,
                 ..
             }

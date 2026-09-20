@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 
-use nestrs_core::__private::{Inject, ProviderDefinition};
+use nestrs_core::__private::{Injection, ProviderDefinition};
 use nestrs_macro::injectable;
 
 struct User;
@@ -18,7 +18,7 @@ struct UserService {
     repository: Repository<User>,
 }
 
-fn accepts_injected_repository(_: Inject<Repository<User>>) {}
+fn accepts_injected_repository(_: Injection<Repository<User>>) {}
 
 fn verifies_macro_contract(service: UserService) {
     accepts_injected_repository(service.repository);

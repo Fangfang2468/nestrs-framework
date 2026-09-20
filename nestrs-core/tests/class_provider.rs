@@ -1,7 +1,7 @@
 use nestrs_core::__private::{
     ActivationError, ClassProvider, ConstructionContext, Delivery, DependencyRequest,
-    ErasedService, InputPosition, Lifetime, Provider, ProviderCommon, ProviderSource,
-    REFLECTED_PROVIDERS, ServiceIdentifier, ServiceKey, ServiceSource, ServiceType,
+    ErasedService, InputPosition, Provider, ProviderCommon, ProviderSource, REFLECTED_PROVIDERS,
+    ServiceIdentifier, ServiceKey, ServiceLifetime, ServiceSource, ServiceType,
 };
 
 struct Component;
@@ -19,11 +19,11 @@ fn construct_component(_context: ConstructionContext) -> Result<ErasedService, A
 fn component_provider() -> Provider {
     Provider::Class(ClassProvider {
         provide: ServiceIdentifier::new(
-            Some(ServiceKey::Named("controller")),
+            Some(ServiceKey::Named("controller".to_owned())),
             ServiceType::create::<Component>(),
         ),
         common: ProviderCommon {
-            lifetime: Lifetime::Scoped,
+            lifetime: ServiceLifetime::Scoped,
             primary: true,
             source: ServiceSource::new("class_provider.rs", 30, 1),
             cleanup: None,
@@ -87,11 +87,11 @@ fn class_provider_keeps_provider_identity_and_dependency_input_layout() {
     assert_eq!(
         *provide,
         ServiceIdentifier::new(
-            Some(ServiceKey::Named("controller")),
+            Some(ServiceKey::Named("controller".to_owned())),
             ServiceType::create::<Component>(),
         )
     );
-    assert_eq!(common.lifetime, Lifetime::Scoped);
+    assert_eq!(common.lifetime, ServiceLifetime::Scoped);
     assert!(common.primary);
     assert!(common.cleanup.is_none());
     assert_eq!(dependencies.len(), 2);

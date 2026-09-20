@@ -6,7 +6,7 @@ use zyn::{
 /// 属性宏在编译期使用的生命周期配置。
 ///
 /// 它不复用 `nestrs-core` 的运行时枚举，确保过程宏实现本身不依赖 DI runtime。
-/// 宏仅在生成的 token 中引用 `::nestrs_core::__private::Lifetime`。
+/// 宏仅在生成的 token 中引用 `::nestrs_core::__private::ServiceLifetime`。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceLifetime {
     /// Root frame 拥有且只激活一次的服务。
@@ -35,7 +35,7 @@ impl FromArg for ServiceLifetime {
 
             _ => {
                 return Err(
-                    zyn::mark::error("期望的格式 lifetime = \"scoped\" 或 lifetime = Scoped 或 lifetime = Lifetime::Scoped")
+                    zyn::mark::error("期望的格式 lifetime = \"scoped\" 或 lifetime = Scoped 或 lifetime = ServiceLifetime::Scoped")
                         .span(arg.span())
                         .build(),
                 );

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use nestrs_core::__private::{FactoryParameter, FieldInject, Inject};
+use nestrs_core::__private::Injection;
 use nestrs_macro::injectable;
 
 trait Database: Send + Sync {
@@ -27,13 +27,9 @@ struct Consumer {
     indexed: Indexed,
 }
 
-fn accepts_required<T: ?Sized>(_: Inject<T>) {}
+fn accepts_required<T: ?Sized>(_: Injection<T>) {}
 
-fn accepts_optional<T: ?Sized>(_: Option<Inject<T>>) {}
-
-fn accepts_field_token<T: ?Sized>(_: Inject<T, FieldInject>) {}
-
-fn accepts_factory_parameter<'frame, T: ?Sized>(_: Inject<T, FactoryParameter<'frame>>) {}
+fn accepts_optional<T: ?Sized>(_: Option<Injection<T>>) {}
 
 fn checks_rewritten_field_types(consumer: Consumer) {
     let Consumer {

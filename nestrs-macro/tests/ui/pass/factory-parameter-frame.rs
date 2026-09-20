@@ -9,8 +9,11 @@ impl Database {
 struct Service;
 struct FutureService;
 
+fn accepts_copy<T: Copy>(_: T) {}
+
 #[factory]
 async fn create(database: Database) -> Service {
+    accepts_copy(database);
     database.ping();
     async {}.await;
     database.ping();

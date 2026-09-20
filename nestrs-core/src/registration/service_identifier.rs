@@ -1,6 +1,6 @@
-use crate::registration::{service_key::ServiceKey, service_type::ServiceType};
+use crate::{ServiceKey, registration::service_type::ServiceType};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ServiceIdentifier {
     /// 服务的 Key
     pub service_key: Option<ServiceKey>,

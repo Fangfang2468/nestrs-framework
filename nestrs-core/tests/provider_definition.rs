@@ -2,8 +2,8 @@ use std::marker::PhantomData;
 
 use nestrs_core::__private::{
     ActivationError, ClassProvider, ClosedProviderCallback, ConstructionContext, Delivery,
-    DependencyRequest, ErasedService, InputPosition, Lifetime, Provider, ProviderCommon,
-    ProviderDefinition, ProviderSource, ServiceIdentifier, ServiceSource, ServiceType,
+    DependencyRequest, ErasedService, InputPosition, Provider, ProviderCommon, ProviderDefinition,
+    ProviderSource, ServiceIdentifier, ServiceLifetime, ServiceSource, ServiceType,
     prepare_required, provider_definition,
 };
 
@@ -25,7 +25,7 @@ where
         Provider::Class(ClassProvider {
             provide: ServiceIdentifier::from(ServiceType::create::<Self>()),
             common: ProviderCommon {
-                lifetime: Lifetime::Singleton,
+                lifetime: ServiceLifetime::Singleton,
                 primary: false,
                 source: ServiceSource::new("provider_definition.rs", 1, 1),
                 cleanup: None,
@@ -69,7 +69,7 @@ fn closed_provider_callback_is_specialized_for_the_closed_dependency_type() {
         provide,
         ServiceIdentifier::from(ServiceType::create::<Repository<Entity>>())
     );
-    assert_eq!(common.lifetime, Lifetime::Singleton);
+    assert_eq!(common.lifetime, ServiceLifetime::Singleton);
     assert!(!common.primary);
     assert!(dependencies.is_empty());
 

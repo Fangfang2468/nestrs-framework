@@ -6,7 +6,7 @@ use zyn::{
     zyn,
 };
 
-/// 将已分析的 `#[inject]` 字段改写为稳定的 `Inject<T>` 宏 ABI。
+/// 将已分析的 `#[inject]` 字段改写为稳定的 `Injection<T>` 宏 ABI。
 ///
 /// 仅依据 [`FieldSpec`] 改写，绝不再次读取字段属性，从而保持 provider 依赖、构造输入
 /// 和字段形状最终都来自同一份分析结果。
@@ -28,11 +28,11 @@ pub(crate) fn rewrite_injection_fields(specs: &[FieldSpec], fields: &mut Fields)
 
         field.ty = if *optional {
             syn::parse_quote! {
-                ::core::option::Option<::nestrs_core::__private::Inject<#service_type>>
+                ::core::option::Option<::nestrs_core::__private::Injection<#service_type>>
             }
         } else {
             syn::parse_quote! {
-                ::nestrs_core::__private::Inject<#service_type>
+                ::nestrs_core::__private::Injection<#service_type>
             }
         };
     }
@@ -86,11 +86,11 @@ mod tests {
         let fields: Vec<_> = item.fields.iter().collect();
         assert_eq!(
             fields[0].ty.to_token_stream().to_string(),
-            ":: nestrs_core :: __private :: Inject < Database >"
+            ":: nestrs_core :: __private :: Injection < Database >"
         );
         assert_eq!(
             fields[1].ty.to_token_stream().to_string(),
-            ":: core :: option :: Option < :: nestrs_core :: __private :: Inject < dyn Audit > >"
+            ":: core :: option :: Option < :: nestrs_core :: __private :: Injection < dyn Audit > >"
         );
         assert_eq!(fields[0].attrs.len(), 1);
         assert_eq!(fields[1].attrs.len(), 1);
@@ -120,7 +120,7 @@ mod tests {
 
         assert_eq!(
             fields[0].ty.to_token_stream().to_string(),
-            ":: nestrs_core :: __private :: Inject < Database >"
+            ":: nestrs_core :: __private :: Injection < Database >"
         );
         assert_eq!(fields[1].ty.to_token_stream().to_string(), "String");
         assert!(fields.iter().all(|field| {

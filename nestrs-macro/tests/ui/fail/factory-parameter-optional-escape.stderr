@@ -1,8 +1,8 @@
 error: lifetime may not live long enough
-  --> tests/ui/fail/factory-parameter-optional-escape.rs:12:22
+  --> tests/ui/fail/factory-parameter-optional-escape.rs:11:22
    |
-10 | #[factory]
+ 9 | #[factory]
    | ---------- lifetime `'__nestrs_factory_frame` defined here
-11 | fn create(database: Option<Database>) -> EscapedService {
-12 |     EscapedService { database }
+10 | fn create(database: Option<Database>) -> EscapedService {
+11 |     EscapedService { database }
    |                      ^^^^^^^^ this usage requires that `'__nestrs_factory_frame` must outlive `'static`

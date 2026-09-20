@@ -10,8 +10,8 @@ error[E0432]: unresolved imports `nestrs_core::ActivationError`, `nestrs_core::A
 error[E0603]: module `lifetime` is private
  --> tests/ui/fail/core-internals-are-private.rs:1:18
   |
-1 | use nestrs_core::lifetime::Lifetime;
-  |                  ^^^^^^^^  -------- enum `Lifetime` is not publicly re-exported
+1 | use nestrs_core::lifetime::ServiceLifetime;
+  |                  ^^^^^^^^  --------------- enum `ServiceLifetime` is not publicly re-exported
   |                  |
   |                  private module
   |

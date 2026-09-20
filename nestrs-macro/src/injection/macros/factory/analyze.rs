@@ -6,7 +6,7 @@
 //! 不重新解析已经从最终函数项移除的 marker。
 
 use crate::injection::{
-    macros_attrs::service_key::ServiceKey,
+    macros_attrs::service_key::ServiceKeySpec,
     sub_macros::{
         inject::{
             self, DependencyRequest, FACTORY_MESSAGES, inject_key, split_optional,
@@ -64,7 +64,7 @@ pub(crate) struct FactoryParameterSpec {
     /// 已剥离最外层 `Option` 的服务请求类型。
     pub(crate) service_type: Type,
     /// 参数请求的静态 key；`None` 即默认 key。
-    pub(crate) key: Option<ServiceKey>,
+    pub(crate) key: Option<ServiceKeySpec>,
     /// 原参数是否为 `Option<T>`，即缺失时可以交付 `None`。
     pub(crate) optional: bool,
 }
@@ -89,10 +89,10 @@ impl FactoryParameterSpec {
 /// factory 宏的共享分析结果。
 ///
 /// `item` 已经移除了参数上的 `#[inject]` marker，并把参数类型改写为
-/// `Inject<T, FactoryParameter<'frame>>` / `Option<...>`。`'frame` 是宏生成的隐藏
-/// 生命周期，并由 factory adapter 的真实 activation frame 绑定；因此最终用户函数不能
-/// 把参数安全地保存到长期服务或后台任务。所有 provider metadata 与 adapter 取参继续
-/// 读取 `parameters`，避免二次解析。
+/// `&'frame T` / `Option<&'frame T>`。`'frame` 是宏生成的隐藏生命周期，并由 factory
+/// adapter 的真实 activation frame 绑定；因此最终用户函数不能把参数安全地保存到长期
+/// 服务或后台任务。所有 provider metadata 与 adapter 取参继续读取 `parameters`，避免
+/// 二次解析。
 #[derive(Clone, Debug)]
 pub(crate) struct FactoryAnalysis {
     pub(crate) item: ItemFn,
@@ -208,7 +208,7 @@ fn simple_parameter_ident(pattern: &Pat) -> syn::Result<syn::Ident> {
 ///
 /// `#[inject]` 的省略形式和没有属性的参数具有同一语义。`#[value]` 对结构体字段
 /// 才有初始化意义，函数参数没有默认构造阶段，必须在这里明确拒绝。
-fn take_parameter_key(attributes: &mut Vec<Attribute>) -> syn::Result<Option<ServiceKey>> {
+fn take_parameter_key(attributes: &mut Vec<Attribute>) -> syn::Result<Option<ServiceKeySpec>> {
     for attribute in attributes.iter() {
         if inject::is_marker(attribute) {
             continue;
@@ -236,19 +236,11 @@ fn take_parameter_key(attributes: &mut Vec<Attribute>) -> syn::Result<Option<Ser
 fn injected_parameter_type(service_type: &Type, optional: bool, lifetime: &syn::Lifetime) -> Type {
     if optional {
         syn::parse_quote!(
-            ::core::option::Option<
-                ::nestrs_core::__private::Inject<
-                    #service_type,
-                    ::nestrs_core::__private::FactoryParameter<#lifetime>
-                >
-            >
+            ::core::option::Option<& #lifetime #service_type>
         )
     } else {
         syn::parse_quote!(
-            ::nestrs_core::__private::Inject<
-                #service_type,
-                ::nestrs_core::__private::FactoryParameter<#lifetime>
-            >
+            & #lifetime #service_type
         )
     }
 }
@@ -453,21 +445,15 @@ mod tests {
         assert_eq!(analysis.parameters[1].key, None);
         assert_eq!(
             analysis.parameters[2].key,
-            Some(ServiceKey::Named("audit".to_owned()))
+            Some(ServiceKeySpec::Named("audit".to_owned()))
         );
         assert!(analysis.parameters[2].optional);
         let rewritten = analysis.item.to_token_stream().to_string();
         assert!(rewritten.contains("fn make < '__nestrs_factory_frame >"));
-        assert!(
-            rewritten.contains(
-                "database : :: nestrs_core :: __private :: Inject < Database , :: nestrs_core :: __private :: FactoryParameter < '__nestrs_factory_frame > >"
-            )
-        );
+        assert!(rewritten.contains("database : & '__nestrs_factory_frame Database"));
+        assert!(rewritten.contains("cache : & '__nestrs_factory_frame Cache"));
         assert!(rewritten.contains(
-            "cache : :: nestrs_core :: __private :: Inject < Cache , :: nestrs_core :: __private :: FactoryParameter < '__nestrs_factory_frame > >"
-        ));
-        assert!(rewritten.contains(
-            "audit : :: core :: option :: Option < :: nestrs_core :: __private :: Inject < dyn Audit , :: nestrs_core :: __private :: FactoryParameter < '__nestrs_factory_frame > > >"
+            "audit : :: core :: option :: Option < & '__nestrs_factory_frame dyn Audit >"
         ));
         assert!(!rewritten.contains("# [ inject"));
     }

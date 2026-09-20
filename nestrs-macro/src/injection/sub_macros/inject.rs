@@ -8,7 +8,7 @@
 //! ABI。key 值的字面量规则定义在 [`crate::injection::macros_attrs::service_key`]，注册 ABI
 //! 的渲染在 `crate::injection::render`。
 
-use crate::injection::macros_attrs::service_key::{self, ServiceKey};
+use crate::injection::macros_attrs::service_key::{self, ServiceKeySpec};
 use zyn::syn::{
     self, Attribute, GenericArgument, Lit, Meta, PathArguments, Type, parse::Parser,
     punctuated::Punctuated,
@@ -38,7 +38,7 @@ pub(crate) struct DependencyRequest {
     pub(crate) service_type: Type,
 
     /// 静态服务限定符。
-    pub(crate) key: Option<ServiceKey>,
+    pub(crate) key: Option<ServiceKeySpec>,
 
     /// 缺失依赖时是否允许交付 `None`。
     pub(crate) optional: bool,
@@ -55,7 +55,7 @@ pub(crate) struct DependencyRequest {
 ///
 /// 未标注 `#[inject]` 与裸 `#[inject]` 都返回 `Ok(None)`（默认 key）；重复标注与
 /// 非法参数形态返回错误。属性本身不由这里移除，调用方按自己的 AST 改写职责处理。
-pub(crate) fn inject_key(attributes: &[Attribute]) -> syn::Result<Option<ServiceKey>> {
+pub(crate) fn inject_key(attributes: &[Attribute]) -> syn::Result<Option<ServiceKeySpec>> {
     let mut found: Option<&Attribute> = None;
 
     for attribute in attributes {
@@ -81,7 +81,7 @@ pub(crate) fn is_marker(attribute: &Attribute) -> bool {
 }
 
 /// 解析单个 `#[inject]` / `#[inject(...)]` 属性。
-fn parse_inject_attribute(attribute: &Attribute) -> syn::Result<Option<ServiceKey>> {
+fn parse_inject_attribute(attribute: &Attribute) -> syn::Result<Option<ServiceKeySpec>> {
     match &attribute.meta {
         Meta::Path(_) => Ok(None),
         Meta::List(list) => {
@@ -360,7 +360,7 @@ mod tests {
     use super::*;
     use zyn::syn::parse_quote;
 
-    fn key_of(attribute: Attribute) -> syn::Result<Option<ServiceKey>> {
+    fn key_of(attribute: Attribute) -> syn::Result<Option<ServiceKeySpec>> {
         inject_key(&[attribute])
     }
 
@@ -369,19 +369,19 @@ mod tests {
         assert_eq!(key_of(parse_quote!(#[inject])).expect("bare"), None);
         assert_eq!(
             key_of(parse_quote!(#[inject("named")])).expect("positional string"),
-            Some(ServiceKey::Named("named".to_owned()))
+            Some(ServiceKeySpec::Named("named".to_owned()))
         );
         assert_eq!(
             key_of(parse_quote!(#[inject(7)])).expect("positional integer"),
-            Some(ServiceKey::Indexed(7))
+            Some(ServiceKeySpec::Indexed(7))
         );
         assert_eq!(
             key_of(parse_quote!(#[inject(key = "named")])).expect("named string"),
-            Some(ServiceKey::Named("named".to_owned()))
+            Some(ServiceKeySpec::Named("named".to_owned()))
         );
         assert_eq!(
             key_of(parse_quote!(#[inject(key = 3)])).expect("named integer"),
-            Some(ServiceKey::Indexed(3))
+            Some(ServiceKeySpec::Indexed(3))
         );
     }
 

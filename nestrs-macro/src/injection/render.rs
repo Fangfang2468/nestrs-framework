@@ -5,7 +5,7 @@
 //! 各自的宏期事实，避免同一份 ABI 出现两套实现。
 
 use crate::injection::{
-    macros_attrs::{cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKey},
+    macros_attrs::{cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKeySpec},
     sub_macros::inject::{DependencyRequest, DependencyShape, classify},
 };
 use zyn::{syn, zyn};
@@ -117,17 +117,19 @@ fn render_field_label(label: Option<syn::Ident>) -> zyn::TokenStream {
     }
 }
 
-/// 将宏期 `ServiceKey` 渲染为 core 的运行时 key 表达式。
+/// 将宏期 `ServiceKeySpec` 渲染为 core 的唯一运行时 key 表达式。
 #[zyn::element]
-pub(crate) fn render_service_key(key: Option<ServiceKey>) -> zyn::TokenStream {
+pub(crate) fn render_service_key(key: Option<ServiceKeySpec>) -> zyn::TokenStream {
     zyn! {
         @match (key.as_ref()) {
-            Some(ServiceKey::Named(name)) => {
+            Some(ServiceKeySpec::Named(name)) => {
                 ::core::option::Option::Some(
-                    ::nestrs_core::__private::ServiceKey::Named({{ name }})
+                    ::nestrs_core::__private::ServiceKey::Named(
+                        ::std::string::String::from({{ name }})
+                    )
                 )
             }
-            Some(ServiceKey::Indexed(index)) => {
+            Some(ServiceKeySpec::Indexed(index)) => {
                 ::core::option::Option::Some(
                     ::nestrs_core::__private::ServiceKey::Indexed({{ index }})
                 )
@@ -145,13 +147,13 @@ pub(crate) fn render_service_lifetime(lifetime: ServiceLifetime) -> zyn::TokenSt
     zyn! {
         @match (lifetime) {
             ServiceLifetime::Singleton => {
-                ::nestrs_core::__private::Lifetime::Singleton
+                ::nestrs_core::__private::ServiceLifetime::Singleton
             }
             ServiceLifetime::Scoped => {
-                ::nestrs_core::__private::Lifetime::Scoped
+                ::nestrs_core::__private::ServiceLifetime::Scoped
             }
             ServiceLifetime::Transient => {
-                ::nestrs_core::__private::Lifetime::Transient
+                ::nestrs_core::__private::ServiceLifetime::Transient
             }
         }
     }
