@@ -1,7 +1,7 @@
 //! `#[bind]` 的 `TraitBinding` 注册生成。
 //!
 //! bind 的语义不是注册一份 trait-object 实例，也不是注册 provider：它只将具体服务的
-//! Arena 地址通过 Rust 类型系统投影为 `dyn Trait`，从而保存正确的 vtable，因此进入
+//! 具体服务地址通过 Rust 类型系统投影为 `dyn Trait`，从而保存正确的 vtable，因此进入
 //! 独立的绑定切片。请求 key 在未来的 provider 选择阶段按 `InheritRequestedKey`
 //! 继承到 concrete 服务 token。
 
@@ -27,7 +27,7 @@ pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> z
             fn __nestrs_prepare_bound_required(
                 context: &mut ::nestrs_core::__private::ConstructionContext,
                 position: ::nestrs_core::__private::InputPosition,
-                input: ::core::option::Option<::nestrs_core::__private::ArenaServiceRef>,
+                input: ::core::option::Option<::nestrs_core::__private::ErasedServiceRef>,
             ) -> ::core::result::Result<(), ::nestrs_core::__private::ActivationError> {
                 ::nestrs_core::__private::prepare_bound_required::<
                     {{ service }},
@@ -43,7 +43,7 @@ pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> z
             fn __nestrs_prepare_bound_optional(
                 context: &mut ::nestrs_core::__private::ConstructionContext,
                 position: ::nestrs_core::__private::InputPosition,
-                input: ::core::option::Option<::nestrs_core::__private::ArenaServiceRef>,
+                input: ::core::option::Option<::nestrs_core::__private::ErasedServiceRef>,
             ) -> ::core::result::Result<(), ::nestrs_core::__private::ActivationError> {
                 ::nestrs_core::__private::prepare_bound_optional::<
                     {{ service }},
@@ -108,6 +108,7 @@ mod tests {
         assert!(rendered.contains("BoundKeyPolicy :: InheritRequestedKey"));
         assert!(rendered.contains("prepare_bound_required"));
         assert!(rendered.contains("prepare_bound_optional"));
+        assert!(rendered.contains("ErasedServiceRef"));
         assert!(rendered.contains("ConcreteService"));
         assert!(rendered.contains("dyn Port"));
     }

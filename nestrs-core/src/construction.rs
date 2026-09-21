@@ -8,10 +8,9 @@ use std::{any::Any, ptr::NonNull};
 use thiserror::Error;
 
 use crate::{
-    arena::ArenaServiceRef,
     injection::Injection,
     registration::{
-        injectable::Injectable, service_source::ServiceSource, service_type::ServiceType,
+        erased_service::ErasedServiceRef, injectable::Injectable, service_source::ServiceSource,
     },
 };
 
@@ -299,7 +298,7 @@ impl<'frame> FactoryConstructionContext<'frame> {
 pub type PrepareInput = fn(
     &mut ConstructionContext,
     InputPosition,
-    Option<ArenaServiceRef>,
+    Option<ErasedServiceRef>,
 ) -> Result<(), ActivationError>;
 
 /// 将必选 concrete 输入写入构造上下文。
@@ -307,7 +306,7 @@ pub type PrepareInput = fn(
 pub fn prepare_required<T>(
     context: &mut ConstructionContext,
     position: InputPosition,
-    input: Option<ArenaServiceRef>,
+    input: Option<ErasedServiceRef>,
 ) -> Result<(), ActivationError>
 where
     T: Injectable,
@@ -324,7 +323,7 @@ where
 pub fn prepare_optional<T>(
     context: &mut ConstructionContext,
     position: InputPosition,
-    input: Option<ArenaServiceRef>,
+    input: Option<ErasedServiceRef>,
 ) -> Result<(), ActivationError>
 where
     T: Injectable,
@@ -340,7 +339,7 @@ where
 pub fn prepare_optional_absent<T>(
     context: &mut ConstructionContext,
     position: InputPosition,
-    input: Option<ArenaServiceRef>,
+    input: Option<ErasedServiceRef>,
 ) -> Result<(), ActivationError>
 where
     T: Injectable + ?Sized,
@@ -361,7 +360,7 @@ where
 pub fn prepare_bound_required<Concrete, Trait>(
     context: &mut ConstructionContext,
     position: InputPosition,
-    input: Option<ArenaServiceRef>,
+    input: Option<ErasedServiceRef>,
     project: for<'a> fn(&'a Concrete) -> &'a Trait,
 ) -> Result<(), ActivationError>
 where
@@ -381,7 +380,7 @@ where
 pub fn prepare_bound_optional<Concrete, Trait>(
     context: &mut ConstructionContext,
     position: InputPosition,
-    input: Option<ArenaServiceRef>,
+    input: Option<ErasedServiceRef>,
     project: for<'a> fn(&'a Concrete) -> &'a Trait,
 ) -> Result<(), ActivationError>
 where
@@ -405,55 +404,7 @@ where
     Concrete: Injectable,
     Trait: Injectable + ?Sized,
 {
-    // SAFETY: the concrete pointer was checked against Concrete by ArenaServiceRef::cast.
+    // SAFETY: the concrete pointer was checked against Concrete by ErasedServiceRef::cast.
     let concrete = unsafe { concrete.as_ref() };
     NonNull::from(project(concrete))
 }
-
-/// 由构造 adapter 返回的 owning type-erased service。
-type AnyService = Box<dyn Any + Send + Sync>;
-
-pub struct ErasedService {
-    service_type: ServiceType,
-    value: AnyService,
-}
-
-impl ErasedService {
-    /// 擦除一个成功构造的 concrete service。
-    pub fn new<T>(value: T) -> Self
-    where
-        T: Injectable,
-    {
-        Self {
-            service_type: ServiceType::create::<T>(),
-            value: Box::new(value),
-        }
-    }
-
-    /// 返回实际持有的 concrete service 类型。
-    pub fn service_type(&self) -> ServiceType {
-        self.service_type
-    }
-
-    /// 消费 type-erased service 并恢复其 concrete 类型。
-    pub fn downcast<T>(self) -> Result<T, Self>
-    where
-        T: Injectable,
-    {
-        let Self {
-            service_type,
-            value,
-        } = self;
-
-        match value.downcast::<T>() {
-            Ok(value) => Ok(*value),
-            Err(value) => Err(Self {
-                service_type,
-                value,
-            }),
-        }
-    }
-}
-
-/// 所有 class provider 构造 adapter 的统一函数签名。
-pub type Constructor = fn(ConstructionContext) -> Result<ErasedService, ActivationError>;

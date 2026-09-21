@@ -1,5 +1,6 @@
 pub mod binding;
 pub mod dependency;
+pub mod erased_service;
 pub mod injectable;
 pub mod provider;
 pub mod service_identifier;

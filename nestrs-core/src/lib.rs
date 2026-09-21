@@ -1,4 +1,3 @@
-mod arena;
 mod construction;
 mod facade;
 mod injection;
@@ -16,13 +15,11 @@ pub mod __private {
     /// 下游应用无需也不应为了 DI 注册而直接依赖此名称。
     pub use linkme;
 
-    /// 宏生成字段输入 adapter 所使用的稳定服务引用类型。
-    pub use crate::arena::ArenaServiceRef;
     /// 仅供宏生成构造 adapter 使用的隐藏 ABI。
     pub use crate::construction::{
-        ActivationError, ConstructionContext, Constructor, ErasedService,
-        FactoryConstructionContext, InputPosition, PrepareInput, prepare_bound_optional,
-        prepare_bound_required, prepare_optional, prepare_optional_absent, prepare_required,
+        ActivationError, ConstructionContext, FactoryConstructionContext, InputPosition,
+        PrepareInput, prepare_bound_optional, prepare_bound_required, prepare_optional,
+        prepare_optional_absent, prepare_required,
     };
     /// 仅供宏展开引用的只读字段注入 token。
     pub use crate::injection::Injection;
@@ -34,6 +31,8 @@ pub mod __private {
     pub use crate::registration::dependency::{
         ClosedProviderCallback, Delivery, DependencyRequest, ProviderSource,
     };
+    /// 仅供宏生成构造 adapter 使用的 type-erased service ABI。
+    pub use crate::registration::erased_service::{Constructor, ErasedService, ErasedServiceRef};
     /// 仅供宏为泛型 provider definition 声明其必要的服务约束。
     pub use crate::registration::injectable::Injectable;
     /// 仅供宏写入和读取的实例 provider 注册 ABI。

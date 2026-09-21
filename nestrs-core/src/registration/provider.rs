@@ -8,11 +8,14 @@ use std::{future::Future, pin::Pin};
 use linkme::distributed_slice;
 
 use crate::{
-    construction::{ActivationError, Constructor, ErasedService, FactoryConstructionContext},
+    construction::{ActivationError, FactoryConstructionContext},
     lifetime::ServiceLifetime,
     registration::{
-        dependency::DependencyRequest, injectable::Injectable,
-        service_identifier::ServiceIdentifier, service_source::ServiceSource,
+        dependency::DependencyRequest,
+        erased_service::{Constructor, ErasedService},
+        injectable::Injectable,
+        service_identifier::ServiceIdentifier,
+        service_source::ServiceSource,
     },
 };
 
