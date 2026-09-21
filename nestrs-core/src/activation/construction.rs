@@ -3,6 +3,15 @@
 //! 本模块只描述已经绑定好的输入如何交给 class 或 factory adapter，不负责选择
 //! provider、管理实例、调度 future 或暴露 resolve API。
 
+// 新构造 ABI 的底层状态机先独立落地。旧 ABI 仍由本文件余下的定义承载，直到
+// 下一单元同步迁移 macro 与 registration；因此本单元不会让两套 ABI 混用。
+#[allow(dead_code)] // Unit 1: the state machine is intentionally not wired into the old ABI yet.
+mod error;
+#[allow(dead_code)] // Unit 1: the state machine is intentionally not wired into the old ABI yet.
+mod inputs;
+#[allow(dead_code)] // Unit 1: the state machine is intentionally not wired into the old ABI yet.
+mod slot;
+
 use std::{any::Any, ptr::NonNull};
 
 use thiserror::Error;
