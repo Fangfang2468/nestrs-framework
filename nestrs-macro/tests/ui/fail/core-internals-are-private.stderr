@@ -1,16 +1,28 @@
 error[E0432]: unresolved imports `nestrs_core::ActivationError`, `nestrs_core::ArenaError`, `nestrs_core::CompileError`
- --> tests/ui/fail/core-internals-are-private.rs:3:19
+ --> tests/ui/fail/core-internals-are-private.rs:5:19
   |
-3 | use nestrs_core::{ActivationError, ArenaError, CompileError};
+5 | use nestrs_core::{ActivationError, ArenaError, CompileError};
   |                   ^^^^^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^ no `CompileError` in the root
   |                   |                |
   |                   |                no `ArenaError` in the root
   |                   no `ActivationError` in the root
 
-error[E0603]: module `lifetime` is private
+error[E0603]: module `activation` is private
  --> tests/ui/fail/core-internals-are-private.rs:1:18
   |
-1 | use nestrs_core::lifetime::ServiceLifetime;
+1 | use nestrs_core::activation::*;
+  |                  ^^^^^^^^^^ private module
+  |
+note: the module `activation` is defined here
+ --> $WORKSPACE/nestrs-core/src/lib.rs
+  |
+  | mod activation;
+  | ^^^^^^^^^^^^^^
+
+error[E0603]: module `lifetime` is private
+ --> tests/ui/fail/core-internals-are-private.rs:2:18
+  |
+2 | use nestrs_core::lifetime::ServiceLifetime;
   |                  ^^^^^^^^  --------------- enum `ServiceLifetime` is not publicly re-exported
   |                  |
   |                  private module
@@ -22,9 +34,9 @@ note: the module `lifetime` is defined here
   | ^^^^^^^^^^^^
 
 error[E0603]: module `registration` is private
- --> tests/ui/fail/core-internals-are-private.rs:2:18
+ --> tests/ui/fail/core-internals-are-private.rs:3:18
   |
-2 | use nestrs_core::registration::*;
+3 | use nestrs_core::registration::*;
   |                  ^^^^^^^^^^^^ private module
   |
 note: the module `registration` is defined here
@@ -32,3 +44,15 @@ note: the module `registration` is defined here
   |
   | mod registration;
   | ^^^^^^^^^^^^^^^^
+
+error[E0603]: module `service` is private
+ --> tests/ui/fail/core-internals-are-private.rs:4:18
+  |
+4 | use nestrs_core::service::*;
+  |                  ^^^^^^^ private module
+  |
+note: the module `service` is defined here
+ --> $WORKSPACE/nestrs-core/src/lib.rs
+  |
+  | mod service;
+  | ^^^^^^^^^^^

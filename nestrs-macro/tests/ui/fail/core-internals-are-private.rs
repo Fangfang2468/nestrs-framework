@@ -1,5 +1,7 @@
+use nestrs_core::activation::*;
 use nestrs_core::lifetime::ServiceLifetime;
 use nestrs_core::registration::*;
+use nestrs_core::service::*;
 use nestrs_core::{ActivationError, ArenaError, CompileError};
 
 fn main() {

@@ -1,6 +1,6 @@
 use std::any::{TypeId, type_name};
 
-use crate::registration::injectable::Injectable;
+use crate::service::Injectable;
 
 /// 宏注册元数据中的 Rust 类型 token。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

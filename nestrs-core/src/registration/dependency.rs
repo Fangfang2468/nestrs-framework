@@ -5,8 +5,9 @@
 //! 分属这两个轴，因此不再混在同一组可选字段里，也不存在无法表达的非法组合。
 
 use crate::{
-    construction::{InputPosition, PrepareInput},
-    registration::{provider::Provider, service_identifier::ServiceIdentifier},
+    activation::{InputPosition, PrepareInput},
+    registration::provider::Provider,
+    service::ServiceIdentifier,
 };
 
 /// 一次字段或 factory 参数的依赖请求。

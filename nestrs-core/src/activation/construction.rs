@@ -7,12 +7,9 @@ use std::{any::Any, ptr::NonNull};
 
 use thiserror::Error;
 
-use crate::{
-    injection::Injection,
-    registration::{
-        erased_service::ErasedServiceRef, injectable::Injectable, service_source::ServiceSource,
-    },
-};
+use crate::service::{Injectable, ServiceSource};
+
+use super::{erased_service::ErasedServiceRef, injection::Injection};
 
 /// 构造输入在 provider adapter 中的位置。
 #[repr(transparent)]

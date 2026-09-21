@@ -3,8 +3,8 @@
 use linkme::distributed_slice;
 
 use crate::{
-    construction::PrepareInput,
-    registration::{service_source::ServiceSource, service_type::ServiceType},
+    activation::PrepareInput,
+    service::{ServiceSource, ServiceType},
 };
 
 /// 将一个 concrete provider 的稳定地址投影为 trait-object 输入的规则。

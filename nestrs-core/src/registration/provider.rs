@@ -8,15 +8,10 @@ use std::{future::Future, pin::Pin};
 use linkme::distributed_slice;
 
 use crate::{
-    construction::{ActivationError, FactoryConstructionContext},
+    activation::{ActivationError, Constructor, ErasedService, FactoryConstructionContext},
     lifetime::ServiceLifetime,
-    registration::{
-        dependency::DependencyRequest,
-        erased_service::{Constructor, ErasedService},
-        injectable::Injectable,
-        service_identifier::ServiceIdentifier,
-        service_source::ServiceSource,
-    },
+    registration::dependency::DependencyRequest,
+    service::{Injectable, ServiceIdentifier, ServiceSource},
 };
 
 /// 异步 factory adapter 返回的 frame-bound future。

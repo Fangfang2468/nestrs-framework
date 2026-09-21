@@ -5,10 +5,9 @@
 
 use std::{any::Any, ptr::NonNull};
 
-use crate::{
-    construction::{ActivationError, ConstructionContext, InputPosition},
-    registration::{injectable::Injectable, service_type::ServiceType},
-};
+use crate::service::{Injectable, ServiceType};
+
+use super::construction::{ActivationError, ConstructionContext, InputPosition};
 
 /// 由构造 adapter 返回的 owning type-erased service。
 type AnyService = Box<dyn Any + Send + Sync>;
@@ -115,8 +114,8 @@ mod tests {
 
     use super::ErasedServiceRef;
     use crate::{
-        construction::{ActivationError, InputPosition},
-        registration::service_type::ServiceType,
+        activation::{ActivationError, InputPosition},
+        service::ServiceType,
     };
 
     #[test]

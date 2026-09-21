@@ -6,7 +6,7 @@
 
 use std::{marker::PhantomData, ops::Deref, ptr::NonNull};
 
-use crate::registration::injectable::Injectable;
+use crate::service::Injectable;
 
 /// 宏 ABI 的只读字段注入 token。
 ///
