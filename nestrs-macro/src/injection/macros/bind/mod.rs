@@ -24,38 +24,6 @@ pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> z
                 projected
             }
 
-            fn __nestrs_prepare_bound_required(
-                context: &mut ::nestrs_core::__private::ConstructionContext,
-                position: ::nestrs_core::__private::InputPosition,
-                input: ::core::option::Option<::nestrs_core::__private::ErasedServiceRef>,
-            ) -> ::core::result::Result<(), ::nestrs_core::__private::ActivationError> {
-                ::nestrs_core::__private::prepare_bound_required::<
-                    {{ service }},
-                    dyn {{ interface }},
-                >(
-                    context,
-                    position,
-                    input,
-                    __nestrs_project_bound_service,
-                )
-            }
-
-            fn __nestrs_prepare_bound_optional(
-                context: &mut ::nestrs_core::__private::ConstructionContext,
-                position: ::nestrs_core::__private::InputPosition,
-                input: ::core::option::Option<::nestrs_core::__private::ErasedServiceRef>,
-            ) -> ::core::result::Result<(), ::nestrs_core::__private::ActivationError> {
-                ::nestrs_core::__private::prepare_bound_optional::<
-                    {{ service }},
-                    dyn {{ interface }},
-                >(
-                    context,
-                    position,
-                    input,
-                    __nestrs_project_bound_service,
-                )
-            }
-
             #[::nestrs_core::__private::linkme::distributed_slice(
                 ::nestrs_core::__private::REFLECTED_BINDINGS
             )]
@@ -71,10 +39,32 @@ pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> z
                         {{ service }}
                     >(),
                     key_policy: ::nestrs_core::__private::BoundKeyPolicy::InheritRequestedKey,
-                    prepare_required: __nestrs_prepare_bound_required
-                        as ::nestrs_core::__private::PrepareInput,
-                    prepare_optional: __nestrs_prepare_bound_optional
-                        as ::nestrs_core::__private::PrepareInput,
+                    prepare_required: (|
+                        slot: ::nestrs_core::__private::InputSlot,
+                        input: ::core::option::Option<::nestrs_core::__private::ErasedServiceRef>,
+                    | {
+                        ::nestrs_core::__private::prepare_bound_required::<
+                            {{ service }},
+                            dyn {{ interface }},
+                        >(
+                            slot,
+                            input,
+                            __nestrs_project_bound_service,
+                        )
+                    }) as ::nestrs_core::__private::InputPreparer,
+                    prepare_optional: (|
+                        slot: ::nestrs_core::__private::InputSlot,
+                        input: ::core::option::Option<::nestrs_core::__private::ErasedServiceRef>,
+                    | {
+                        ::nestrs_core::__private::prepare_bound_optional::<
+                            {{ service }},
+                            dyn {{ interface }},
+                        >(
+                            slot,
+                            input,
+                            __nestrs_project_bound_service,
+                        )
+                    }) as ::nestrs_core::__private::InputPreparer,
                     source: ::nestrs_core::__private::ServiceSource::new(
                         file!(),
                         line!(),
@@ -109,6 +99,8 @@ mod tests {
         assert!(rendered.contains("prepare_bound_required"));
         assert!(rendered.contains("prepare_bound_optional"));
         assert!(rendered.contains("ErasedServiceRef"));
+        assert!(rendered.contains("InputSlot"));
+        assert!(rendered.contains("InputPreparer"));
         assert!(rendered.contains("ConcreteService"));
         assert!(rendered.contains("dyn Port"));
     }

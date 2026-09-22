@@ -14,7 +14,7 @@ use zyn::{
 ///
 /// 这是一个 expression-level element，而非 `pipe`：它同时需要字段类型和
 /// `FieldStrategy`，并且在模板中直接表达 `#[value]` 与 `Default` 的两个输出形态。
-/// 注入字段由构造 adapter 从 `ConstructionContext` 取得，不能也不应到达这里。
+/// 注入字段由构造 adapter 从 `ConstructionInputs` 取得，不能也不应到达这里。
 #[zyn::element]
 pub(crate) fn rewrite_value_field(field_type: Type, strategy: FieldStrategy) -> zyn::TokenStream {
     let expression = match &strategy {

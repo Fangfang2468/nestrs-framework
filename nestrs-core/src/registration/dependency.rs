@@ -1,11 +1,11 @@
 //! 依赖请求的注册 ABI。
 //!
-//! 一个依赖请求由两个正交的事实组成：值如何写入构造输入槽位（[`Delivery`]），以及
+//! 一个依赖请求由两个正交的事实组成：值如何准备为构造输入槽位的载荷（[`Delivery`]），以及
 //! provider 在解析期从哪里来（[`ProviderSource`]）。trait 投影与闭合泛型的按需物化
 //! 分属这两个轴，因此不再混在同一组可选字段里，也不存在无法表达的非法组合。
 
 use crate::{
-    activation::{InputPosition, PrepareInput},
+    activation::{InputPreparer, InputSlot},
     registration::provider::Provider,
     service::ServiceIdentifier,
 };
@@ -23,7 +23,7 @@ pub struct DependencyRequest {
     pub declaration_position: usize,
 
     /// 依赖在构造输入中的位置。
-    pub input_position: InputPosition,
+    pub input_slot: InputSlot,
 
     /// 查找依赖服务的 token。
     pub token: ServiceIdentifier,
@@ -34,21 +34,21 @@ pub struct DependencyRequest {
     /// 依赖诊断或元数据使用的可读标签。
     pub label: Option<&'static str>,
 
-    /// 依赖值如何写入构造输入槽位。
+    /// 依赖值如何准备为构造输入槽位的载荷。
     pub delivery: Delivery,
 
     /// provider 在解析期的来源。
     pub provider_source: ProviderSource,
 }
 
-/// 依赖值写入构造输入槽位的方式。
+/// 依赖值准备为构造输入槽位载荷的方式。
 #[derive(Debug, Clone, Copy)]
 pub enum Delivery {
     /// 消费点自己单态化的输入准备函数。
     ///
     /// concrete 依赖与闭合泛型服务都使用它；两者的差别只在
     /// [`ProviderSource`]，不在值的交付方式。
-    Direct(PrepareInput),
+    Direct(InputPreparer),
 
     /// 必选 trait object：输入准备函数必须由匹配到的 `#[bind]` 提供。
     ///
@@ -60,7 +60,7 @@ pub enum Delivery {
     ///
     /// 携带的函数项只接受「依赖确实不存在」，拒绝把 concrete 薄指针伪造成
     /// trait-object 胖指针。
-    RequiresBindingOrAbsent(PrepareInput),
+    RequiresBindingOrAbsent(InputPreparer),
 }
 
 /// 解析期为依赖寻找 provider 的方式。

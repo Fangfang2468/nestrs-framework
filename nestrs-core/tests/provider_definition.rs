@@ -1,8 +1,8 @@
 use std::marker::PhantomData;
 
 use nestrs_core::__private::{
-    ActivationError, ClassProvider, ClosedProviderCallback, ConstructionContext, Delivery,
-    DependencyRequest, ErasedService, InputPosition, Provider, ProviderCommon, ProviderDefinition,
+    ClassProvider, ClosedProviderCallback, ConstructionError, ConstructionInputs, Delivery,
+    DependencyRequest, ErasedService, InputSlot, Provider, ProviderCommon, ProviderDefinition,
     ProviderSource, ServiceIdentifier, ServiceLifetime, ServiceSource, ServiceType,
     prepare_required, provider_definition,
 };
@@ -10,10 +10,11 @@ use nestrs_core::__private::{
 struct Entity;
 struct Repository<T>(PhantomData<T>);
 
-fn construct_repository<T>(_context: ConstructionContext) -> Result<ErasedService, ActivationError>
+fn construct_repository<T>(context: ConstructionInputs) -> Result<ErasedService, ConstructionError>
 where
     T: Send + Sync + 'static,
 {
+    context.ensure_all_consumed()?;
     Ok(ErasedService::new(Repository::<T>(PhantomData)))
 }
 
@@ -41,7 +42,7 @@ fn closed_provider_callback_is_specialized_for_the_closed_dependency_type() {
     let callback: ClosedProviderCallback = provider_definition::<Repository<Entity>>;
     let injection = DependencyRequest {
         declaration_position: 0,
-        input_position: InputPosition(0),
+        input_slot: InputSlot::new(0),
         label: Some("repository"),
         token: ServiceIdentifier::from(ServiceType::create::<Repository<Entity>>()),
         optional: false,
@@ -73,7 +74,7 @@ fn closed_provider_callback_is_specialized_for_the_closed_dependency_type() {
     assert!(!common.primary);
     assert!(dependencies.is_empty());
 
-    let erased = constructor(ConstructionContext::new())
+    let erased = constructor(ConstructionInputs::empty())
         .expect("closed generic provider should construct its concrete type");
     assert!(erased.downcast::<Repository<Entity>>().is_ok());
 }

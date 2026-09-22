@@ -7,8 +7,6 @@ use std::{any::Any, ptr::NonNull};
 
 use crate::service::{Injectable, ServiceType};
 
-use super::construction::{ActivationError, ConstructionContext, InputPosition};
-
 /// 由构造 adapter 返回的 owning type-erased service。
 type AnyService = Box<dyn Any + Send + Sync>;
 
@@ -89,34 +87,24 @@ impl ErasedServiceRef {
     ///
     /// `T` 来自 `prepare_required::<T>` 等单态化 adapter，而不是由运行时根据
     /// `TypeId` 猜测出来。
-    pub(crate) fn cast<T>(self, position: InputPosition) -> Result<NonNull<T>, ActivationError>
+    pub(crate) fn cast<T>(self) -> Result<NonNull<T>, ServiceType>
     where
         T: Injectable,
     {
         if self.service_type != ServiceType::create::<T>() {
-            return Err(ActivationError::InputTypeMismatch {
-                position,
-                expected: std::any::type_name::<T>(),
-                actual: self.service_type.name,
-            });
+            return Err(self.service_type);
         }
 
         Ok(self.pointer.cast())
     }
 }
 
-/// 所有 class provider 构造 adapter 的统一函数签名。
-pub type Constructor = fn(ConstructionContext) -> Result<ErasedService, ActivationError>;
-
 #[cfg(test)]
 mod tests {
     use std::ptr::NonNull;
 
     use super::ErasedServiceRef;
-    use crate::{
-        activation::{ActivationError, InputPosition},
-        service::ServiceType,
-    };
+    use crate::service::ServiceType;
 
     #[test]
     fn erased_service_ref_validates_the_concrete_type_before_casting() {
@@ -130,18 +118,13 @@ mod tests {
 
         assert_eq!(
             reference
-                .cast::<u32>(InputPosition(0))
+                .cast::<u32>()
                 .expect("matching concrete type should cast"),
             NonNull::from(&mut value)
         );
         assert!(matches!(
-            reference.cast::<u64>(InputPosition(1)),
-            Err(ActivationError::InputTypeMismatch {
-                position: InputPosition(1),
-                expected,
-                actual,
-            }) if expected == std::any::type_name::<u64>()
-                && actual == std::any::type_name::<u32>()
+            reference.cast::<u64>(),
+            Err(actual) if actual == ServiceType::create::<u32>()
         ));
     }
 }

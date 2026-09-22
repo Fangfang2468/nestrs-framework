@@ -9,9 +9,9 @@ pub(crate) mod erased_service;
 pub(crate) mod injection;
 
 pub use construction::{
-    ActivationError, ConstructionContext, FactoryConstructionContext, InputPosition, PrepareInput,
-    prepare_bound_optional, prepare_bound_required, prepare_optional, prepare_optional_absent,
-    prepare_required,
+    AsyncConstructor, ClassConstructor, ConstructionError, ConstructionInputs, FactoryConstructor,
+    FactoryFuture, FactoryInputs, InputPreparer, InputSlot, PreparedInput, prepare_bound_optional,
+    prepare_bound_required, prepare_optional, prepare_optional_absent, prepare_required,
 };
-pub use erased_service::{Constructor, ErasedService, ErasedServiceRef};
+pub use erased_service::{ErasedService, ErasedServiceRef};
 pub use injection::Injection;

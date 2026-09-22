@@ -1,0 +1,179 @@
+//! 将解析好的稳定服务地址转换为构造输入。
+
+use std::ptr::NonNull;
+
+use super::{ConstructionError, InputSlot, PreparedInput};
+use crate::{activation::erased_service::ErasedServiceRef, service::Injectable};
+
+/// 宏为一个字段或 factory 参数单态化生成的输入准备函数。
+///
+/// preparer 不直接改写共享 buffer。它必须先完整验证并返回一个 [`PreparedInput`]；未来
+/// `ActivationPreparation` 只有在成功后才会把该值写入槽位并收纳对应 dependency lease。
+pub type InputPreparer =
+    fn(InputSlot, Option<ErasedServiceRef>) -> Result<PreparedInput, ConstructionError>;
+
+/// 将必选 concrete 输入准备为不可变载荷。
+#[doc(hidden)]
+pub fn prepare_required<T>(
+    slot: InputSlot,
+    input: Option<ErasedServiceRef>,
+) -> Result<PreparedInput, ConstructionError>
+where
+    T: Injectable,
+{
+    let input = input.ok_or(ConstructionError::RequiredDependencyAbsent { slot })?;
+    let pointer = cast_input::<T>(slot, input)?;
+
+    // SAFETY: `cast_input` verified the exact concrete type.
+    Ok(unsafe { PreparedInput::required(pointer) })
+}
+
+/// 将可选 concrete 输入准备为不可变载荷。
+#[doc(hidden)]
+pub fn prepare_optional<T>(
+    slot: InputSlot,
+    input: Option<ErasedServiceRef>,
+) -> Result<PreparedInput, ConstructionError>
+where
+    T: Injectable,
+{
+    let pointer = input
+        .map(|input| cast_input::<T>(slot, input))
+        .transpose()?;
+
+    // SAFETY: every present pointer passed exact-type validation above.
+    Ok(unsafe { PreparedInput::optional(pointer) })
+}
+
+/// 为没有 bind 的可选 trait 输入准备 `None`。
+#[doc(hidden)]
+pub fn prepare_optional_absent<T>(
+    slot: InputSlot,
+    input: Option<ErasedServiceRef>,
+) -> Result<PreparedInput, ConstructionError>
+where
+    T: Injectable + ?Sized,
+{
+    if input.is_some() {
+        return Err(ConstructionError::UnprojectedTraitInput {
+            slot,
+            trait_type: std::any::type_name::<T>(),
+        });
+    }
+
+    // SAFETY: no pointer is stored for an absent optional trait input.
+    Ok(unsafe { PreparedInput::optional::<T>(None) })
+}
+
+/// 用 bind 宏生成的 projector 准备必选 trait 输入。
+#[doc(hidden)]
+pub fn prepare_bound_required<Concrete, Trait>(
+    slot: InputSlot,
+    input: Option<ErasedServiceRef>,
+    project: for<'a> fn(&'a Concrete) -> &'a Trait,
+) -> Result<PreparedInput, ConstructionError>
+where
+    Concrete: Injectable,
+    Trait: Injectable + ?Sized,
+{
+    let input = input.ok_or(ConstructionError::RequiredDependencyAbsent { slot })?;
+    let concrete = cast_input::<Concrete>(slot, input)?;
+    let trait_pointer = project_bound_pointer(concrete, project);
+
+    // SAFETY: the typed projector creates a valid trait-object pointer.
+    Ok(unsafe { PreparedInput::required(trait_pointer) })
+}
+
+/// 用 bind 宏生成的 projector 准备可选 trait 输入。
+#[doc(hidden)]
+pub fn prepare_bound_optional<Concrete, Trait>(
+    slot: InputSlot,
+    input: Option<ErasedServiceRef>,
+    project: for<'a> fn(&'a Concrete) -> &'a Trait,
+) -> Result<PreparedInput, ConstructionError>
+where
+    Concrete: Injectable,
+    Trait: Injectable + ?Sized,
+{
+    let trait_pointer = input
+        .map(|input| cast_input::<Concrete>(slot, input))
+        .transpose()?
+        .map(|concrete| project_bound_pointer(concrete, project));
+
+    // SAFETY: present pointers originate from the typed projector; absent inputs carry no ptr.
+    Ok(unsafe { PreparedInput::optional(trait_pointer) })
+}
+
+fn cast_input<T>(slot: InputSlot, input: ErasedServiceRef) -> Result<NonNull<T>, ConstructionError>
+where
+    T: Injectable,
+{
+    input
+        .cast::<T>()
+        .map_err(|actual| ConstructionError::InputTypeMismatch {
+            slot,
+            expected: std::any::type_name::<T>(),
+            actual: actual.name,
+        })
+}
+
+fn project_bound_pointer<Concrete, Trait>(
+    concrete: NonNull<Concrete>,
+    project: for<'a> fn(&'a Concrete) -> &'a Trait,
+) -> NonNull<Trait>
+where
+    Concrete: Injectable,
+    Trait: Injectable + ?Sized,
+{
+    // SAFETY: `cast_input` checked the concrete pointer before this projector runs.
+    let concrete = unsafe { concrete.as_ref() };
+    NonNull::from(project(concrete))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ptr::NonNull;
+
+    use super::{prepare_optional, prepare_required};
+    use crate::{
+        activation::{ConstructionError, ErasedServiceRef, InputSlot},
+        service::ServiceType,
+    };
+
+    struct Alpha;
+    struct Beta;
+
+    fn erased<T>(value: &mut T) -> ErasedServiceRef
+    where
+        T: Send + Sync + 'static,
+    {
+        // SAFETY: the test keeps `value` alive through every use of this reference.
+        unsafe {
+            ErasedServiceRef::from_stable_erased_parts(
+                NonNull::from(value).cast(),
+                ServiceType::create::<T>(),
+            )
+        }
+    }
+
+    #[test]
+    fn required_preparer_reports_a_missing_dependency_without_a_buffer() {
+        assert!(matches!(
+            prepare_required::<Alpha>(InputSlot::new(0), None),
+            Err(ConstructionError::RequiredDependencyAbsent { slot }) if slot == InputSlot::new(0)
+        ));
+    }
+
+    #[test]
+    fn preparer_maps_erased_type_mismatch_to_the_request_slot() {
+        let mut alpha = Alpha;
+
+        assert!(matches!(
+            prepare_optional::<Beta>(InputSlot::new(3), Some(erased(&mut alpha))),
+            Err(ConstructionError::InputTypeMismatch { slot, expected, actual })
+                if slot == InputSlot::new(3)
+                    && expected == std::any::type_name::<Beta>()
+                    && actual == std::any::type_name::<Alpha>()
+        ));
+    }
+}

@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use nestrs_core::__private::{
-    ClassProvider, ConstructionContext, Provider, ProviderDefinition, ProviderSource,
+    ClassProvider, ConstructionInputs, Provider, ProviderDefinition, ProviderSource,
     REFLECTED_PROVIDERS, ServiceIdentifier, ServiceType,
 };
 use nestrs_macro::injectable;
@@ -77,7 +77,7 @@ fn open_generic_chain_is_not_eagerly_registered_without_a_closed_root() {
     );
     assert!(dependencies.is_empty());
 
-    let erased_a = constructor(ConstructionContext::new())
+    let erased_a = constructor(ConstructionInputs::empty())
         .expect("A<u32> should construct without injected dependencies");
     assert!(erased_a.downcast::<A<u32>>().is_ok());
 }

@@ -30,9 +30,9 @@ pub(crate) enum FactoryInvocation {
     Async,
 }
 
-/// factory 调用结果是否需要把用户错误归一化为 [`ActivationError`][1]。
+/// factory 调用结果是否需要把用户错误归一化为 [`ConstructionError`][1]。
 ///
-/// [1]: ::nestrs_core::__private::ActivationError
+/// [1]: ::nestrs_core::__private::ConstructionError
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FactoryResultKind {
     /// 直接成功输出。
@@ -48,7 +48,7 @@ pub(crate) struct FactoryReturn {
     pub(crate) success_type: Type,
     /// adapter 是同步还是异步调用器。
     pub(crate) invocation: FactoryInvocation,
-    /// 是否需要把原始 `Err(E)` 映射到 `ActivationError::FactoryFailed`。
+    /// 是否需要把原始 `Err(E)` 映射到 `ConstructionError::FactoryFailed`。
     pub(crate) result_kind: FactoryResultKind,
 }
 
@@ -57,8 +57,8 @@ pub(crate) struct FactoryReturn {
 pub(crate) struct FactoryParameterSpec {
     /// 参数在原函数签名中的零基位置。
     pub(crate) declaration_position: usize,
-    /// 在 `ConstructionContext` 中的连续输入槽位。
-    pub(crate) input_position: usize,
+    /// 在 `FactoryInputs` 中的连续输入槽位。
+    pub(crate) input_slot: usize,
     /// 参数的简单标识符，用于 adapter 调用、label 和诊断。
     pub(crate) ident: syn::Ident,
     /// 已剥离最外层 `Option` 的服务请求类型。
@@ -77,7 +77,7 @@ impl FactoryParameterSpec {
     pub(crate) fn dependency_request(&self) -> DependencyRequest {
         DependencyRequest {
             declaration_position: self.declaration_position,
-            input_position: self.input_position,
+            input_slot: self.input_slot,
             service_type: self.service_type.clone(),
             key: self.key.clone(),
             optional: self.optional,
@@ -170,7 +170,7 @@ pub(crate) fn analyze_factory(mut item: ItemFn) -> syn::Result<FactoryAnalysis> 
         *parameter.ty = injected_parameter_type(&service_type, optional, parameter_lifetime);
         parameters.push(FactoryParameterSpec {
             declaration_position: position,
-            input_position: position,
+            input_slot: position,
             ident,
             service_type,
             key,
@@ -441,7 +441,7 @@ mod tests {
         .expect("factory should analyze");
 
         assert_eq!(analysis.parameters.len(), 3);
-        assert_eq!(analysis.parameters[0].input_position, 0);
+        assert_eq!(analysis.parameters[0].input_slot, 0);
         assert_eq!(analysis.parameters[1].key, None);
         assert_eq!(
             analysis.parameters[2].key,

@@ -12,10 +12,15 @@ use super::{error::ConstructionError, slot::InputSlot};
 /// 由 activation runtime 集中完成，因此 preparer 无法留下半写入状态。
 #[doc(hidden)]
 pub struct PreparedInput {
-    kind: PreparedInputKind,
+    form: InputForm,
 }
 
-enum PreparedInputKind {
+/// 一个已准备输入的交付形态。
+///
+/// 这只是 [`PreparedInput`] 的私有表示细节，不是第二种“输入对象”。保留为独立的
+/// 私有枚举是为了让对外的 `PreparedInput` 维持不透明，外部代码无法伪造已验证的
+/// 构造载荷。
+enum InputForm {
     Required {
         value: Box<dyn Any + Send + Sync>,
         service_type_name: &'static str,
@@ -33,12 +38,12 @@ impl PreparedInput {
     ///
     /// `pointer` 必须指向精确的 `T`，并且实例 owner 必须在所有消费该 token 的对象
     /// 销毁前保持地址有效。
-    pub(in crate::activation::construction) unsafe fn required<T>(pointer: NonNull<T>) -> Self
+    pub(super) unsafe fn required<T>(pointer: NonNull<T>) -> Self
     where
         T: Injectable + ?Sized,
     {
         Self {
-            kind: PreparedInputKind::Required {
+            form: InputForm::Required {
                 value: Box::new(unsafe { Injection::from_service_ptr(pointer) }),
                 service_type_name: std::any::type_name::<T>(),
             },
@@ -51,16 +56,14 @@ impl PreparedInput {
     ///
     /// `Some(pointer)` 的安全前提与 [`Self::required`] 相同；`None` 表示一个已经准备
     /// 完成的可选缺席输入，而不是未填充的槽位。
-    pub(in crate::activation::construction) unsafe fn optional<T>(
-        pointer: Option<NonNull<T>>,
-    ) -> Self
+    pub(super) unsafe fn optional<T>(pointer: Option<NonNull<T>>) -> Self
     where
         T: Injectable + ?Sized,
     {
         let token = pointer.map(|pointer| unsafe { Injection::from_service_ptr(pointer) });
 
         Self {
-            kind: PreparedInputKind::Optional {
+            form: InputForm::Optional {
                 value: Box::new(token),
                 service_type_name: std::any::type_name::<T>(),
             },
@@ -75,6 +78,7 @@ pub(super) struct InputBuffer {
     slots: Vec<BufferSlot>,
 }
 
+#[allow(dead_code)] // The runtime wires prepared inputs in the following activation unit.
 enum BufferSlot {
     Empty,
     Ready(PreparedInput),
@@ -92,6 +96,7 @@ impl InputBuffer {
     /// 写入一个已经准备好的输入。
     ///
     /// 写入失败时 `input` 会直接被销毁，buffer 本身不发生变化。
+    #[allow(dead_code)] // The runtime owns buffer writes; unit tests exercise this invariant.
     pub(super) fn insert(
         &mut self,
         slot: InputSlot,
@@ -128,10 +133,12 @@ impl InputBuffer {
     }
 }
 
-/// 已完成绑定、仅供 class adapter 消费的构造输入。
+/// 已完成绑定的构造输入。
 ///
-/// 该类型不提供写入 API；adapter 只能按 slot 取得匹配的 required 或 optional token，
-/// 并在构造完成前通过 [`Self::ensure_all_consumed`] 验证 descriptor 与 adapter 一致。
+/// class adapter 直接消费它；factory adapter 仅通过持有真实 lease 的
+/// [`super::FactoryInputs`] 消费它。该类型不提供写入 API；adapter 只能按 slot 取得
+/// 匹配的 required 或 optional token，并在构造完成前通过
+/// [`Self::ensure_all_consumed`] 验证 descriptor 与 adapter 一致。
 #[doc(hidden)]
 pub struct ConstructionInputs {
     slots: Vec<ConsumptionSlot>,
@@ -158,8 +165,8 @@ impl ConstructionInputs {
         self.ensure_required_type::<T>(slot)?;
 
         let PreparedInput {
-            kind:
-                PreparedInputKind::Required {
+            form:
+                InputForm::Required {
                     value,
                     service_type_name: _,
                 },
@@ -184,8 +191,8 @@ impl ConstructionInputs {
         self.ensure_optional_type::<T>(slot)?;
 
         let PreparedInput {
-            kind:
-                PreparedInputKind::Optional {
+            form:
+                InputForm::Optional {
                     value,
                     service_type_name: _,
                 },
@@ -219,8 +226,8 @@ impl ConstructionInputs {
         T: Injectable + ?Sized,
     {
         let input = self.available(slot)?;
-        match &input.kind {
-            PreparedInputKind::Required {
+        match &input.form {
+            InputForm::Required {
                 value,
                 service_type_name,
             } => {
@@ -234,9 +241,7 @@ impl ConstructionInputs {
                     })
                 }
             }
-            PreparedInputKind::Optional { .. } => {
-                Err(ConstructionError::RequiredInputExpected { slot })
-            }
+            InputForm::Optional { .. } => Err(ConstructionError::RequiredInputExpected { slot }),
         }
     }
 
@@ -245,8 +250,8 @@ impl ConstructionInputs {
         T: Injectable + ?Sized,
     {
         let input = self.available(slot)?;
-        match &input.kind {
-            PreparedInputKind::Optional {
+        match &input.form {
+            InputForm::Optional {
                 value,
                 service_type_name,
             } => {
@@ -260,9 +265,7 @@ impl ConstructionInputs {
                     })
                 }
             }
-            PreparedInputKind::Required { .. } => {
-                Err(ConstructionError::OptionalInputExpected { slot })
-            }
+            InputForm::Required { .. } => Err(ConstructionError::OptionalInputExpected { slot }),
         }
     }
 

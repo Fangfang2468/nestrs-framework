@@ -3,7 +3,7 @@
 use linkme::distributed_slice;
 
 use crate::{
-    activation::PrepareInput,
+    activation::InputPreparer,
     service::{ServiceSource, ServiceType},
 };
 
@@ -13,8 +13,8 @@ pub struct TraitBinding {
     pub trait_type: ServiceType,
     pub concrete_type: ServiceType,
     pub key_policy: BoundKeyPolicy,
-    pub prepare_required: PrepareInput,
-    pub prepare_optional: PrepareInput,
+    pub prepare_required: InputPreparer,
+    pub prepare_optional: InputPreparer,
     pub source: ServiceSource,
 }
 

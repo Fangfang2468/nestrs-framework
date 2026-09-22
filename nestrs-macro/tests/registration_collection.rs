@@ -49,7 +49,7 @@ fn linkme_collects_providers_and_trait_bindings_separately() {
     assert!(class.common.cleanup.is_none());
 
     let constructed_repository =
-        (class.constructor)(nestrs_core::__private::ConstructionContext::new())
+        (class.constructor)(nestrs_core::__private::ConstructionInputs::empty())
             .expect("Repository constructor should succeed without dependencies");
     let repository = match constructed_repository.downcast::<Repository>() {
         Ok(repository) => repository,

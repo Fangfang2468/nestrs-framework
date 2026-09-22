@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use nestrs_core::__private::{
-    ClassProvider, ConstructionContext, Provider, ProviderDefinition, ProviderSource,
+    ClassProvider, ConstructionInputs, InputSlot, Provider, ProviderDefinition, ProviderSource,
     REFLECTED_PROVIDERS, ServiceIdentifier, ServiceLifetime, ServiceType,
 };
 use nestrs_macro::injectable;
@@ -72,7 +72,7 @@ fn generic_injectable_materializes_concrete_provider_definitions() {
         .expect("generic provider should retain its cleanup hook");
     drop(cleanup());
 
-    let erased_direct_repository = constructor(ConstructionContext::new())
+    let erased_direct_repository = constructor(ConstructionInputs::empty())
         .expect("generic Repository<Entity> constructor should not need dependencies");
     let direct_repository = match erased_direct_repository.downcast::<Repository<Entity>>() {
         Ok(repository) => repository,
@@ -116,7 +116,7 @@ fn injected_generic_repository_exposes_a_closed_provider_callback() {
         .first()
         .expect("UserService should describe its Repository<User> dependency");
     assert_eq!(dependency.declaration_position, 0);
-    assert_eq!(dependency.input_position.0, 0);
+    assert_eq!(dependency.input_slot, InputSlot::new(0));
     assert_eq!(
         dependency.token,
         ServiceIdentifier::from(ServiceType::create::<Repository<User>>())
@@ -141,7 +141,7 @@ fn injected_generic_repository_exposes_a_closed_provider_callback() {
         ServiceIdentifier::from(ServiceType::create::<Repository<User>>())
     );
 
-    let erased_repository = constructor(ConstructionContext::new())
+    let erased_repository = constructor(ConstructionInputs::empty())
         .expect("Repository<User> callback should construct the concrete service");
     let repository = match erased_repository.downcast::<Repository<User>>() {
         Ok(repository) => repository,
@@ -242,7 +242,7 @@ fn nested_closed_generics_materialize_a_complete_descriptor_chain() {
     );
     assert!(dependencies.is_empty());
 
-    let erased_a = constructor(ConstructionContext::new())
+    let erased_a = constructor(ConstructionInputs::empty())
         .expect("the leaf closed generic should construct without dependencies");
     assert!(erased_a.downcast::<A<u32>>().is_ok());
 }

@@ -1,6 +1,6 @@
 use nestrs_core::__private::{
-    ActivationError, ClassProvider, ConstructionContext, Delivery, DependencyRequest,
-    ErasedService, InputPosition, Provider, ProviderCommon, ProviderSource, REFLECTED_PROVIDERS,
+    ClassProvider, ConstructionError, ConstructionInputs, Delivery, DependencyRequest,
+    ErasedService, InputSlot, Provider, ProviderCommon, ProviderSource, REFLECTED_PROVIDERS,
     ServiceIdentifier, ServiceKey, ServiceLifetime, ServiceSource, ServiceType,
 };
 
@@ -8,7 +8,8 @@ struct Component;
 struct Database;
 trait Audit: Send + Sync {}
 
-fn construct_component(_context: ConstructionContext) -> Result<ErasedService, ActivationError> {
+fn construct_component(context: ConstructionInputs) -> Result<ErasedService, ConstructionError> {
+    context.ensure_all_consumed()?;
     Ok(ErasedService::new(Component))
 }
 
@@ -31,7 +32,7 @@ fn component_provider() -> Provider {
         dependencies: vec![
             DependencyRequest {
                 declaration_position: 0,
-                input_position: InputPosition(0),
+                input_slot: InputSlot::new(0),
                 label: Some("database"),
                 token: ServiceIdentifier::from(ServiceType::create::<Database>()),
                 optional: false,
@@ -40,7 +41,7 @@ fn component_provider() -> Provider {
             },
             DependencyRequest {
                 declaration_position: 2,
-                input_position: InputPosition(1),
+                input_slot: InputSlot::new(1),
                 label: None,
                 token: ServiceIdentifier::new(
                     Some(ServiceKey::Indexed(7)),
@@ -98,7 +99,7 @@ fn class_provider_keeps_provider_identity_and_dependency_input_layout() {
 
     let required = &dependencies[0];
     assert_eq!(required.declaration_position, 0);
-    assert_eq!(required.input_position, InputPosition(0));
+    assert_eq!(required.input_slot, InputSlot::new(0));
     assert_eq!(required.label, Some("database"));
     assert!(!required.optional);
     assert!(matches!(required.delivery, Delivery::Direct(_)));
@@ -109,7 +110,7 @@ fn class_provider_keeps_provider_identity_and_dependency_input_layout() {
 
     let optional_tuple = &dependencies[1];
     assert_eq!(optional_tuple.declaration_position, 2);
-    assert_eq!(optional_tuple.input_position, InputPosition(1));
+    assert_eq!(optional_tuple.input_slot, InputSlot::new(1));
     assert_eq!(optional_tuple.label, None);
     assert!(optional_tuple.optional);
     assert!(matches!(

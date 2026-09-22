@@ -17,8 +17,8 @@ use zyn::syn::{self, Expr, Field, Fields, Type, spanned::Spanned};
 /// 一个字段在自动构造时的来源。
 ///
 /// `Value` 会在宏生成的词法隔离构造 adapter 被调用时求值；`Default` 则由同一
-/// adapter 调用 `Default::default()`。注入令牌按 `dependency_position` 从 activation
-/// context 取得，三种策略始终复用这份分析结果。
+/// adapter 调用 `Default::default()`。注入令牌按 `input_slot` 从
+/// `ConstructionInputs` 取得，三种策略始终复用这份分析结果。
 #[derive(Clone, Debug)]
 pub(crate) enum FieldStrategy {
     /// 从容器输入槽取得依赖。
@@ -38,7 +38,7 @@ pub(crate) enum FieldStrategy {
 
 /// 一个字段的稳定宏期事实。
 ///
-/// `dependency_position` 只为 `#[inject]` 字段分配，因而 `#[value(...)]` 与未标注字段
+/// `input_slot` 只为 `#[inject]` 字段分配，因而 `#[value(...)]` 与未标注字段
 /// 不会影响容器输入的顺序。
 #[derive(Clone, Debug)]
 pub(crate) struct FieldSpec {
@@ -48,12 +48,12 @@ pub(crate) struct FieldSpec {
     pub field_name: Option<syn::Ident>,
     /// 已解析的构造策略。
     pub strategy: FieldStrategy,
-    /// 在生成构造 adapter 及 activation context 中的注入输入位置。
-    pub dependency_position: Option<usize>,
+    /// 在生成构造 adapter 与 `ConstructionInputs` 中的注入输入位置。
+    pub input_slot: Option<usize>,
 }
 
 impl FieldSpec {
-    /// 此字段是否由 activation context 提供。
+    /// 此字段是否由构造输入提供。
     ///
     /// 输出 element 可以直接用这个语义谓词组织 `@if`，无需各自重复解构
     /// `FieldStrategy`；实际的类型、key 和可选性仍只在消费该字段的 element 中
@@ -78,9 +78,9 @@ impl FieldSpec {
 
         DependencyRequest {
             declaration_position: self.index,
-            input_position: self
-                .dependency_position
-                .expect("inject field must have a dependency position"),
+            input_slot: self
+                .input_slot
+                .expect("inject field must have an input slot"),
             service_type: service_type.clone(),
             key: key.clone(),
             optional: *optional,
@@ -103,7 +103,7 @@ pub(crate) struct AnalyzedFields {
 }
 
 impl AnalyzedFields {
-    /// 是否存在需要从 [`ConstructionContext`](::nestrs_core::__private::ConstructionContext)
+    /// 是否存在需要从 [`ConstructionInputs`](::nestrs_core::__private::ConstructionInputs)
     /// 消费的字段。
     pub(crate) fn has_injected_fields(&self) -> bool {
         self.specs.iter().any(FieldSpec::is_injected)
@@ -161,24 +161,23 @@ pub(crate) fn collect_field_specs(fields: &Fields) -> syn::Result<Vec<FieldSpec>
             index,
             field_name: field.ident.clone(),
             strategy,
-            dependency_position: None,
+            input_slot: None,
         });
     }
 
-    let mut next_dependency_position = 0usize;
+    let mut next_input_slot = 0usize;
     for spec in &mut specs {
         if matches!(spec.strategy, FieldStrategy::Inject { .. }) {
-            spec.dependency_position = Some(next_dependency_position);
-            next_dependency_position =
-                next_dependency_position.checked_add(1).ok_or_else(|| {
-                    syn::Error::new(
-                        spec.field_name
-                            .as_ref()
-                            .map(Spanned::span)
-                            .unwrap_or_else(zyn::proc_macro2::Span::call_site),
-                        "单个 #[injectable] 的 #[inject] 字段数量过多",
-                    )
-                })?;
+            spec.input_slot = Some(next_input_slot);
+            next_input_slot = next_input_slot.checked_add(1).ok_or_else(|| {
+                syn::Error::new(
+                    spec.field_name
+                        .as_ref()
+                        .map(Spanned::span)
+                        .unwrap_or_else(zyn::proc_macro2::Span::call_site),
+                    "单个 #[injectable] 的 #[inject] 字段数量过多",
+                )
+            })?;
         }
     }
 
@@ -235,10 +234,10 @@ mod tests {
         .expect("fields should be valid");
 
         assert_eq!(specs.len(), 4);
-        assert_eq!(specs[0].dependency_position, Some(0));
-        assert_eq!(specs[1].dependency_position, Some(1));
-        assert_eq!(specs[2].dependency_position, None);
-        assert_eq!(specs[3].dependency_position, None);
+        assert_eq!(specs[0].input_slot, Some(0));
+        assert_eq!(specs[1].input_slot, Some(1));
+        assert_eq!(specs[2].input_slot, None);
+        assert_eq!(specs[3].input_slot, None);
 
         match &specs[0].strategy {
             FieldStrategy::Inject {

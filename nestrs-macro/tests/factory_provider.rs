@@ -5,7 +5,7 @@ use std::{
 };
 
 use nestrs_core::__private::{
-    CleanupFuture, Delivery, FactoryInvoker, FactoryProvider, Provider, ProviderSource,
+    CleanupFuture, Delivery, FactoryInvoker, FactoryProvider, InputSlot, Provider, ProviderSource,
     REFLECTED_PROVIDERS, ServiceIdentifier, ServiceKey, ServiceLifetime, ServiceType,
 };
 use nestrs_macro::{factory, primary};
@@ -190,7 +190,7 @@ fn factory_collects_common_configuration_and_parameter_injections() {
 
     let database = &dependencies[0];
     assert_eq!(database.declaration_position, 0);
-    assert_eq!(database.input_position.0, 0);
+    assert_eq!(database.input_slot, InputSlot::new(0));
     assert_eq!(database.label, Some("database"));
     assert_eq!(
         database.token,
@@ -205,7 +205,7 @@ fn factory_collects_common_configuration_and_parameter_injections() {
 
     let cache = &dependencies[1];
     assert_eq!(cache.declaration_position, 1);
-    assert_eq!(cache.input_position.0, 1);
+    assert_eq!(cache.input_slot, InputSlot::new(1));
     assert_eq!(cache.label, Some("cache"));
     assert_eq!(
         cache.token,
@@ -216,7 +216,7 @@ fn factory_collects_common_configuration_and_parameter_injections() {
 
     let audit = &dependencies[2];
     assert_eq!(audit.declaration_position, 2);
-    assert_eq!(audit.input_position.0, 2);
+    assert_eq!(audit.input_slot, InputSlot::new(2));
     assert_eq!(audit.label, Some("audit"));
     assert_eq!(
         audit.token,

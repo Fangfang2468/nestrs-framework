@@ -130,8 +130,9 @@ mod tests {
         );
         assert!(output.contains("for Repository < Entity > where Repository < Entity > : :: nestrs_core :: __private :: Injectable"));
         assert!(output.contains("ServiceType :: create :: < Self >"));
-        assert!(output.contains("constructor : | _nestrs_injectable_context_for_Repository"));
-        assert!(output.contains("ErasedService :: new (Self"));
+        assert!(output.contains("constructor : | __nestrs_injectable_context_for_Repository"));
+        assert!(output.contains("let __nestrs_injectable_instance = Self"));
+        assert!(output.contains("ensure_all_consumed ()"));
         assert!(!output.contains("REFLECTED_PROVIDERS"));
         assert!(!output.contains("fn __nestrs_construct"));
     }
@@ -173,6 +174,6 @@ mod tests {
 
         assert!(output.contains("| mut __nestrs_injectable_context_for_Repository"));
         assert!(output.contains("take :: < Storage >"));
-        assert!(output.contains("InputPosition (0usize)"));
+        assert!(output.contains("InputSlot :: new (0usize)"));
     }
 }

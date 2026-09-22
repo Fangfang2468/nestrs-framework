@@ -17,14 +17,16 @@ pub mod __private {
 
     /// 仅供宏展开引用的只读字段注入 token。
     pub use crate::activation::Injection;
+    /// 仅供宏生成 factory adapter 使用的隐藏 ABI。
+    pub use crate::activation::{AsyncConstructor, FactoryConstructor, FactoryFuture};
+    /// 仅供宏生成构造 adapter 使用的 type-erased service ABI。
+    pub use crate::activation::{ClassConstructor, ErasedService, ErasedServiceRef};
     /// 仅供宏生成构造 adapter 使用的隐藏 ABI。
     pub use crate::activation::{
-        ActivationError, ConstructionContext, FactoryConstructionContext, InputPosition,
-        PrepareInput, prepare_bound_optional, prepare_bound_required, prepare_optional,
+        ConstructionError, ConstructionInputs, FactoryInputs, InputPreparer, InputSlot,
+        PreparedInput, prepare_bound_optional, prepare_bound_required, prepare_optional,
         prepare_optional_absent, prepare_required,
     };
-    /// 仅供宏生成构造 adapter 使用的 type-erased service ABI。
-    pub use crate::activation::{Constructor, ErasedService, ErasedServiceRef};
     /// 宏生成 provider metadata 所需的服务生命周期枚举。
     pub use crate::lifetime::ServiceLifetime;
     /// 仅供宏写入和读取的 trait 绑定注册 ABI。
@@ -35,9 +37,8 @@ pub mod __private {
     };
     /// 仅供宏写入和读取的实例 provider 注册 ABI。
     pub use crate::registration::provider::{
-        AsyncConstructor, ClassProvider, CleanupFuture, CleanupHook, FactoryConstructor,
-        FactoryFuture, FactoryInvoker, FactoryProvider, Provider, ProviderCommon,
-        ProviderDefinition, REFLECTED_PROVIDERS, provider_definition,
+        ClassProvider, CleanupFuture, CleanupHook, FactoryInvoker, FactoryProvider, Provider,
+        ProviderCommon, ProviderDefinition, REFLECTED_PROVIDERS, provider_definition,
     };
     /// 仅供宏为泛型 provider definition 声明其必要的服务约束。
     pub use crate::service::Injectable;

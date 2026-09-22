@@ -1,6 +1,6 @@
 use nestrs_core::__private::{
-    ClassProvider, ConstructionContext, Delivery, Provider, ProviderSource, REFLECTED_PROVIDERS,
-    ServiceIdentifier, ServiceKey, ServiceLifetime, ServiceType,
+    ClassProvider, ConstructionInputs, Delivery, InputSlot, Provider, ProviderSource,
+    REFLECTED_PROVIDERS, ServiceIdentifier, ServiceKey, ServiceLifetime, ServiceType,
 };
 use nestrs_macro::{injectable, primary};
 
@@ -112,7 +112,7 @@ fn injectable_collects_class_providers_and_dependency_specs() {
     let database = &dependencies[0];
     assert_eq!(database.declaration_position, 0);
     assert_eq!(database.label, Some("database"));
-    assert_eq!(database.input_position.0, 0);
+    assert_eq!(database.input_slot, InputSlot::new(0));
     assert_eq!(
         database.token,
         ServiceIdentifier::from(ServiceType::create::<Database>())
@@ -127,7 +127,7 @@ fn injectable_collects_class_providers_and_dependency_specs() {
     let audit = &dependencies[1];
     assert_eq!(audit.declaration_position, 3);
     assert_eq!(audit.label, Some("audit"));
-    assert_eq!(audit.input_position.0, 1);
+    assert_eq!(audit.input_slot, InputSlot::new(1));
     assert_eq!(
         audit.token,
         ServiceIdentifier::new(
@@ -157,7 +157,7 @@ fn injectable_collects_class_providers_and_dependency_specs() {
     };
     assert_eq!(dependencies[0].declaration_position, 0);
     assert_eq!(dependencies[0].label, None);
-    assert_eq!(dependencies[0].input_position.0, 0);
+    assert_eq!(dependencies[0].input_slot, InputSlot::new(0));
     assert_eq!(
         dependencies[0].token,
         ServiceIdentifier::new(
@@ -179,7 +179,7 @@ fn injectable_collects_class_providers_and_dependency_specs() {
     let Provider::Class(ClassProvider { constructor, .. }) = values else {
         panic!("FieldValues should be a class provider");
     };
-    let erased_values = constructor(ConstructionContext::new())
+    let erased_values = constructor(ConstructionInputs::empty())
         .expect("value-only constructor should not need dependency inputs");
     let values = match erased_values.downcast::<FieldValues>() {
         Ok(values) => values,

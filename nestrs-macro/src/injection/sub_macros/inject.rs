@@ -32,7 +32,7 @@ pub(crate) struct DependencyRequest {
     pub(crate) declaration_position: usize,
 
     /// 依赖在构造输入中的位置。
-    pub(crate) input_position: usize,
+    pub(crate) input_slot: usize,
 
     /// 请求的服务类型；已剥离最外层 `Option` 与多余括号。
     pub(crate) service_type: Type,

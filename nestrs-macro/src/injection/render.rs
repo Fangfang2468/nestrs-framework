@@ -24,13 +24,13 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
     let key = request.key.clone();
     let optional = request.optional;
     let declaration_position = request.declaration_position;
-    let input_position = request.input_position;
+    let input_slot = request.input_slot;
     let label = request.label.clone();
 
     zyn! {
         ::nestrs_core::__private::DependencyRequest {
             declaration_position: {{ declaration_position }},
-            input_position: ::nestrs_core::__private::InputPosition({{ input_position }}),
+            input_slot: ::nestrs_core::__private::InputSlot::new({{ input_slot }}),
             token: ::nestrs_core::__private::ServiceIdentifier::new(
                 @RenderServiceKey(key = key.clone()),
                 ::nestrs_core::__private::ServiceType::create::<{{ service_type.clone() }}>(),
@@ -50,7 +50,7 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
     }
 }
 
-/// 渲染依赖值写入构造输入槽位的方式。
+/// 渲染依赖值准备为构造输入槽位载荷的方式。
 ///
 /// concrete 与闭合泛型都由消费点自己单态化 preparer；trait object 的 projector 只能
 /// 由匹配到的 `#[bind]` 提供，因此必选形态不携带 preparer，可选形态只携带一个
@@ -66,7 +66,7 @@ fn render_delivery(
             @if (*optional) {
                 ::nestrs_core::__private::Delivery::RequiresBindingOrAbsent(
                     ::nestrs_core::__private::prepare_optional_absent::<{{ service_type }}>
-                        as ::nestrs_core::__private::PrepareInput
+                        as ::nestrs_core::__private::InputPreparer
                 )
             } @else {
                 ::nestrs_core::__private::Delivery::RequiresBinding
@@ -78,7 +78,7 @@ fn render_delivery(
                 } @else {
                     ::nestrs_core::__private::prepare_required::<{{ service_type }}>
                 }
-                as ::nestrs_core::__private::PrepareInput
+                as ::nestrs_core::__private::InputPreparer
             )
         }
     }

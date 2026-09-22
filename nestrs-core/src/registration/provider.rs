@@ -8,15 +8,11 @@ use std::{future::Future, pin::Pin};
 use linkme::distributed_slice;
 
 use crate::{
-    activation::{ActivationError, Constructor, ErasedService, FactoryConstructionContext},
+    activation::{AsyncConstructor, ClassConstructor, FactoryConstructor},
     lifetime::ServiceLifetime,
     registration::dependency::DependencyRequest,
     service::{Injectable, ServiceIdentifier, ServiceSource},
 };
-
-/// 异步 factory adapter 返回的 frame-bound future。
-pub type FactoryFuture<'frame> =
-    Pin<Box<dyn Future<Output = Result<ErasedService, ActivationError>> + Send + 'frame>>;
 
 /// cleanup hook 的 owning future。
 pub type CleanupFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
@@ -30,14 +26,6 @@ pub enum FactoryInvoker {
     Sync(FactoryConstructor),
     Async(AsyncConstructor),
 }
-
-/// 同步 factory adapter 的单态化签名。
-pub type FactoryConstructor =
-    for<'frame> fn(FactoryConstructionContext<'frame>) -> Result<ErasedService, ActivationError>;
-
-/// 异步 factory adapter 的单态化签名。
-pub type AsyncConstructor =
-    for<'frame> fn(FactoryConstructionContext<'frame>) -> FactoryFuture<'frame>;
 
 /// 所有可激活 provider 共享的声明属性。
 #[derive(Debug, Clone, Copy)]
@@ -74,7 +62,7 @@ pub struct ClassProvider {
     pub provide: ServiceIdentifier,
     pub common: ProviderCommon,
     pub dependencies: Vec<DependencyRequest>,
-    pub constructor: Constructor,
+    pub constructor: ClassConstructor,
 }
 
 /// factory 宏注册的 factory provider。

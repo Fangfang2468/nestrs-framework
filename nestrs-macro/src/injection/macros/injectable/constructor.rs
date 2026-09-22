@@ -22,28 +22,25 @@ use zyn::{
 pub(crate) fn generate_injectable_constructor(analysis: AnalyzedFields) -> zyn::TokenStream {
     let service = analysis.item.ident.clone();
     let context = context_identifier(&analysis.item);
-    let unused_context = unused_context_identifier(&analysis.item);
-    let has_injected_fields = analysis.has_injected_fields();
+    let context_binding = context_binding(&analysis, &context);
     let service = quote!(#service);
 
     zyn! {
         fn __nestrs_construct(
-            @if (has_injected_fields) {
-                mut {{ context }}: ::nestrs_core::__private::ConstructionContext
-            } @else {
-                {{ unused_context }}: ::nestrs_core::__private::ConstructionContext
-            }
+            {{ context_binding }}
         ) -> ::core::result::Result<
             ::nestrs_core::__private::ErasedService,
-            ::nestrs_core::__private::ActivationError,
+            ::nestrs_core::__private::ConstructionError,
         > {
+            let __nestrs_injectable_instance = @ConstructInjectableInstance(
+                analysis = analysis.clone(),
+                service = service.clone(),
+                context = context.clone(),
+            );
+            {{ context }}.ensure_all_consumed()?;
             ::core::result::Result::Ok(
                 ::nestrs_core::__private::ErasedService::new(
-                    @ConstructInjectableInstance(
-                        analysis = analysis.clone(),
-                        service = service.clone(),
-                        context = context.clone(),
-                    )
+                    __nestrs_injectable_instance
                 )
             )
         }
@@ -60,27 +57,23 @@ pub(crate) fn generate_generic_injectable_constructor(
     analysis: AnalyzedFields,
 ) -> zyn::TokenStream {
     let context = context_identifier(&analysis.item);
-    let unused_context = unused_context_identifier(&analysis.item);
-    let has_injected_fields = analysis.has_injected_fields();
-    let context_binding = if has_injected_fields {
-        quote!(mut #context: ::nestrs_core::__private::ConstructionContext)
-    } else {
-        quote!(#unused_context: ::nestrs_core::__private::ConstructionContext)
-    };
+    let context_binding = context_binding(&analysis, &context);
     let service = quote!(Self);
 
     zyn! {
         |{{ context_binding }}| -> ::core::result::Result<
             ::nestrs_core::__private::ErasedService,
-            ::nestrs_core::__private::ActivationError,
+            ::nestrs_core::__private::ConstructionError,
         > {
+            let __nestrs_injectable_instance = @ConstructInjectableInstance(
+                analysis = analysis.clone(),
+                service = service.clone(),
+                context = context.clone(),
+            );
+            {{ context }}.ensure_all_consumed()?;
             ::core::result::Result::Ok(
                 ::nestrs_core::__private::ErasedService::new(
-                    @ConstructInjectableInstance(
-                        analysis = analysis.clone(),
-                        service = service.clone(),
-                        context = context.clone(),
-                    )
+                    __nestrs_injectable_instance
                 )
             )
         }
@@ -154,7 +147,7 @@ fn construct_injectable_field(
     }
 }
 
-/// 从预绑定的 construction context 取出一个注入字段。
+/// 从预绑定的 `ConstructionInputs` 取出一个注入字段。
 #[zyn::element]
 fn take_injected_field_value(spec: FieldSpec, context: syn::Ident) -> zyn::TokenStream {
     let FieldStrategy::Inject {
@@ -168,30 +161,33 @@ fn take_injected_field_value(spec: FieldSpec, context: syn::Ident) -> zyn::Token
     let service_type = service_type.clone();
     let optional = *optional;
     let position = spec
-        .dependency_position
-        .expect("inject field must have a dependency position");
+        .input_slot
+        .expect("inject field must have an input slot");
 
     zyn! {
         @if (optional) {
             {{ context }}.take_optional::<{{ service_type }}>(
-                ::nestrs_core::__private::InputPosition({{ position }})
+                ::nestrs_core::__private::InputSlot::new({{ position }})
             )?
         } @else {
             {{ context }}.take::<{{ service_type }}>(
-                ::nestrs_core::__private::InputPosition({{ position }})
+                ::nestrs_core::__private::InputSlot::new({{ position }})
             )?
         }
+    }
+}
+
+fn context_binding(analysis: &AnalyzedFields, context: &syn::Ident) -> zyn::TokenStream {
+    if analysis.has_injected_fields() {
+        quote!(mut #context: ::nestrs_core::__private::ConstructionInputs)
+    } else {
+        quote!(#context: ::nestrs_core::__private::ConstructionInputs)
     }
 }
 
 fn context_identifier(item: &ItemStruct) -> syn::Ident {
     let service = &item.ident;
     zyn::format_ident!("__nestrs_injectable_context_for_{service}")
-}
-
-fn unused_context_identifier(item: &ItemStruct) -> syn::Ident {
-    let service = &item.ident;
-    zyn::format_ident!("_nestrs_injectable_context_for_{service}")
 }
 
 #[cfg(test)]
@@ -231,14 +227,25 @@ mod tests {
         let generated = render_constructor(item, specs);
 
         assert!(generated.contains("fn __nestrs_construct"));
-        assert!(generated.contains("ConstructionContext"));
+        assert!(generated.contains("ConstructionInputs"));
         assert!(generated.contains("take :: < Service >"));
-        assert!(generated.contains("InputPosition (0usize)"));
+        assert!(generated.contains("InputSlot :: new (0usize)"));
         assert!(generated.contains("take_optional :: < dyn Audit >"));
-        assert!(generated.contains("InputPosition (1usize)"));
+        assert!(generated.contains("InputSlot :: new (1usize)"));
         assert!(generated.contains("Into :: < String > :: into (\"label\")"));
         assert!(generated.contains("Default :: default ()"));
-        assert!(generated.contains("ErasedService :: new (Consumer"));
+        assert!(generated.contains("let __nestrs_injectable_instance = Consumer"));
+        assert!(generated.contains("ErasedService :: new (__nestrs_injectable_instance)"));
+        let construct = generated
+            .find("let __nestrs_injectable_instance")
+            .expect("the class instance should be built into a local first");
+        let ensure = generated
+            .find("ensure_all_consumed ()")
+            .expect("the adapter should validate its input coverage");
+        let erase = generated
+            .find("ErasedService :: new (__nestrs_injectable_instance)")
+            .expect("the validated instance should be erased last");
+        assert!(construct < ensure && ensure < erase);
         assert!(!generated.contains("unsafe"));
     }
 
@@ -249,15 +256,15 @@ mod tests {
                 .expect("tuple input should parse");
         let tuple_specs = collect_field_specs(&tuple.fields).expect("fields should be valid");
         let tuple_output = render_constructor(tuple, tuple_specs);
-        assert!(tuple_output.contains("ErasedService :: new (Tuple"));
+        assert!(tuple_output.contains("let __nestrs_injectable_instance = Tuple"));
         assert!(tuple_output.contains("take :: < Service >"));
 
         let unit: ItemStruct = syn::parse_str("struct Unit;").expect("unit input should parse");
         let unit_specs = collect_field_specs(&unit.fields).expect("fields should be valid");
         let unit_output = render_constructor(unit, unit_specs);
         assert!(unit_output.contains(
-            "_nestrs_injectable_context_for_Unit : :: nestrs_core :: __private :: ConstructionContext"
+            "__nestrs_injectable_context_for_Unit : :: nestrs_core :: __private :: ConstructionInputs"
         ));
-        assert!(unit_output.contains("ErasedService :: new (Unit)"));
+        assert!(unit_output.contains("let __nestrs_injectable_instance = Unit"));
     }
 }

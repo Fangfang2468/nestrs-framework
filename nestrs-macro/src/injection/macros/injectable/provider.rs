@@ -146,12 +146,12 @@ mod tests {
         assert!(output.contains("declaration_position : 0usize"));
         assert!(
             output
-                .contains("input_position : :: nestrs_core :: __private :: InputPosition (0usize)")
+                .contains("input_slot : :: nestrs_core :: __private :: InputSlot :: new (0usize)")
         );
         assert!(output.contains("declaration_position : 2usize"));
         assert!(
             output
-                .contains("input_position : :: nestrs_core :: __private :: InputPosition (1usize)")
+                .contains("input_slot : :: nestrs_core :: __private :: InputSlot :: new (1usize)")
         );
         assert!(output.contains("ServiceKey :: Indexed (7usize)"));
         assert!(!output.contains("declaration_position : 1usize"));
