@@ -1,0 +1,16 @@
+[package]
+name = "nestrs-tool-bridge"
+version.workspace = true
+edition.workspace = true
+description = "cargo nestrs 管理的内部声明展开桥接"
+publish = false
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "nestrs_tool_bridge"
+proc-macro = true
+
+[dependencies]
+cargo-nestrs = { path = "../..", default-features = false }

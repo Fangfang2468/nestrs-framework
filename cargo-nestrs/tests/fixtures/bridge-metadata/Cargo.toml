@@ -1,0 +1,12 @@
+[package]
+name = "nestrs-bridge-consumer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+members = ["producer"]
+resolver = "3"
+
+[dependencies]
+producer = { package = "nestrs-bridge-producer", path = "producer" }

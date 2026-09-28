@@ -1,0 +1,5 @@
+error[E0433]: cannot find `register` in `nestrs_macro`
+ --> tests/ui/fail/register-is-not-exported.rs:1:15
+  |
+1 | nestrs_macro::register!(u32);
+  |               ^^^^^^^^ could not find `register` in `nestrs_macro`

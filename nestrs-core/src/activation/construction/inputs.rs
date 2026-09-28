@@ -1,18 +1,22 @@
 //! 固定槽位的构造输入状态机。
 
-use std::{any::Any, mem, ptr::NonNull};
+use std::{any::Any, mem};
 
-use crate::{activation::Injection, service::Injectable};
+use crate::{
+    activation::{DependencyLease, Injection},
+    service::Injectable,
+};
 
 use super::{error::ConstructionError, slot::InputSlot};
 
 /// 已经完成类型化准备、但尚未写入固定槽位的一个输入。
 ///
-/// 未来 `InputPreparer` 只会产生此值；实际写入 buffer 与收纳 dependency lease 的动作
+/// `InputPreparer` 只会产生此值；实际写入 buffer 与收纳 dependency lease 的动作
 /// 由 activation runtime 集中完成，因此 preparer 无法留下半写入状态。
 #[doc(hidden)]
 pub struct PreparedInput {
     form: InputForm,
+    lease: Option<DependencyLease>,
 }
 
 /// 一个已准备输入的交付形态。
@@ -32,41 +36,56 @@ enum InputForm {
 }
 
 impl PreparedInput {
-    /// 将已经验证过的稳定地址包装成必选字段注入 token。
-    ///
-    /// # Safety
-    ///
-    /// `pointer` 必须指向精确的 `T`，并且实例 owner 必须在所有消费该 token 的对象
-    /// 销毁前保持地址有效。
-    pub(super) unsafe fn required<T>(pointer: NonNull<T>) -> Self
+    /// 包装已经带有真实 owner lease 的必选注入 token。
+    pub(super) fn required<T>(token: Injection<T>) -> Self
     where
         T: Injectable + ?Sized,
     {
         Self {
+            lease: Some(token.lease()),
             form: InputForm::Required {
-                value: Box::new(unsafe { Injection::from_service_ptr(pointer) }),
+                value: Box::new(token),
                 service_type_name: std::any::type_name::<T>(),
             },
         }
     }
 
-    /// 将已经验证过的稳定地址包装成可选字段注入 token。
-    ///
-    /// # Safety
-    ///
-    /// `Some(pointer)` 的安全前提与 [`Self::required`] 相同；`None` 表示一个已经准备
-    /// 完成的可选缺席输入，而不是未填充的槽位。
-    pub(super) unsafe fn optional<T>(pointer: Option<NonNull<T>>) -> Self
+    /// 包装可选 token；`None` 是已准备的缺席值，而非未填充槽位。
+    pub(super) fn optional<T>(token: Option<Injection<T>>) -> Self
     where
         T: Injectable + ?Sized,
     {
-        let token = pointer.map(|pointer| unsafe { Injection::from_service_ptr(pointer) });
-
         Self {
+            lease: token.as_ref().map(Injection::lease),
             form: InputForm::Optional {
                 value: Box::new(token),
                 service_type_name: std::any::type_name::<T>(),
             },
+        }
+    }
+
+    pub(super) fn dependency(&self) -> Option<DependencyLease> {
+        self.lease.clone()
+    }
+
+    /// 根服务查询复用 binding preparer，并以准确 token 类型恢复 trait 指针。
+    pub(crate) fn into_required<T>(self, slot: InputSlot) -> Result<Injection<T>, ConstructionError>
+    where
+        T: Injectable + ?Sized,
+    {
+        match self.form {
+            InputForm::Required {
+                value,
+                service_type_name,
+            } => value
+                .downcast::<Injection<T>>()
+                .map(|token| *token)
+                .map_err(|_| ConstructionError::InputTypeMismatch {
+                    slot,
+                    expected: std::any::type_name::<T>(),
+                    actual: service_type_name,
+                }),
+            InputForm::Optional { .. } => Err(ConstructionError::RequiredInputExpected { slot }),
         }
     }
 }
@@ -78,7 +97,6 @@ pub(super) struct InputBuffer {
     slots: Vec<BufferSlot>,
 }
 
-#[allow(dead_code)] // The runtime wires prepared inputs in the following activation unit.
 enum BufferSlot {
     Empty,
     Ready(PreparedInput),
@@ -96,7 +114,6 @@ impl InputBuffer {
     /// 写入一个已经准备好的输入。
     ///
     /// 写入失败时 `input` 会直接被销毁，buffer 本身不发生变化。
-    #[allow(dead_code)] // The runtime owns buffer writes; unit tests exercise this invariant.
     pub(super) fn insert(
         &mut self,
         slot: InputSlot,
@@ -170,6 +187,7 @@ impl ConstructionInputs {
                     value,
                     service_type_name: _,
                 },
+            ..
         } = self.take_available(slot)
         else {
             unreachable!("required input was checked before consumption");
@@ -196,6 +214,7 @@ impl ConstructionInputs {
                     value,
                     service_type_name: _,
                 },
+            ..
         } = self.take_available(slot)
         else {
             unreachable!("optional input was checked before consumption");
@@ -299,35 +318,47 @@ impl ConstructionInputs {
 
 #[cfg(test)]
 mod tests {
-    use std::ptr::NonNull;
-
     use super::super::slot::InputSlot;
     use super::{ConstructionInputs, InputBuffer, PreparedInput};
-    use crate::{activation::Injection, activation::construction::error::ConstructionError};
+    use crate::activation::{
+        DependencyLease, ErasedService, Injection, ReleaseDomain,
+        construction::error::ConstructionError, prepare_optional, prepare_required,
+    };
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct Alpha;
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct Beta;
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct Tagged(u8);
 
     fn required<T>(value: &mut T) -> PreparedInput
     where
-        T: Send + Sync + 'static,
+        T: Clone + Send + Sync + 'static,
     {
-        // SAFETY: test locals outlive the input token and all assertions that dereference it.
-        unsafe { PreparedInput::required(NonNull::from(value)) }
+        let lease = DependencyLease::new(
+            ErasedService::new(value.clone()),
+            vec![],
+            ReleaseDomain::new(),
+        );
+        prepare_required::<T>(InputSlot::new(0), Some(lease.erased_ref())).unwrap()
     }
 
     fn optional<T>(value: Option<&mut T>) -> PreparedInput
     where
-        T: Send + Sync + 'static,
+        T: Clone + Send + Sync + 'static,
     {
-        // SAFETY: test locals outlive the input token and all assertions that dereference it.
-        unsafe { PreparedInput::optional(value.map(NonNull::from)) }
+        let input = value.map(|value| {
+            DependencyLease::new(
+                ErasedService::new(value.clone()),
+                vec![],
+                ReleaseDomain::new(),
+            )
+            .erased_ref()
+        });
+        prepare_optional::<T>(InputSlot::new(0), input).unwrap()
     }
 
     #[test]
@@ -442,7 +473,7 @@ mod tests {
             inputs.take_optional::<Alpha>(InputSlot::new(0)),
             Err(ConstructionError::OptionalInputExpected { slot }) if slot == InputSlot::new(0)
         ));
-        assert!(matches!(inputs.take::<Alpha>(InputSlot::new(0)), Ok(_)));
+        assert!(inputs.take::<Alpha>(InputSlot::new(0)).is_ok());
     }
 
     #[test]
@@ -481,7 +512,7 @@ mod tests {
                 && expected == std::any::type_name::<Beta>()
                 && actual == std::any::type_name::<Alpha>()
         ));
-        assert!(matches!(inputs.take::<Alpha>(InputSlot::new(0)), Ok(_)));
+        assert!(inputs.take::<Alpha>(InputSlot::new(0)).is_ok());
     }
 
     #[test]

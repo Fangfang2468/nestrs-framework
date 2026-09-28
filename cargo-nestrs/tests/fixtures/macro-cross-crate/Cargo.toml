@@ -1,0 +1,11 @@
+[package]
+name = "nestrs-macro-cross-crate"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+nestrs-core = { path = "../../../../nestrs-core" }
+tokio = { version = "1.53.1", default-features = false, features = ["rt", "macros"] }

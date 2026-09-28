@@ -1,0 +1,17 @@
+error[E0401]: can't use generic parameters from outer item
+ --> tests/ui/fail/query-requires-a-closed-type.rs:4:49
+  |
+3 | async fn generic_query<T: Send + Sync + 'static>(provider: &ServiceProvider) {
+  |                        - type parameter from outer item
+4 |     let _ = nestrs_core::get_service!(provider, T).await;
+  |             ------------------------------------^-
+  |             |                                   |
+  |             |                                   use of generic parameter from outer item
+  |             generic parameter used in this inner function
+  |
+  = note: nested items are independent from their parent item for everything except for privacy and name resolution
+help: try introducing a local generic parameter here
+ --> $WORKSPACE/nestrs-core/src/query.rs
+  |
+  |         fn __nestrs_query_root<T>() -> $crate::__private::RootDeclaration {
+  |                               +++

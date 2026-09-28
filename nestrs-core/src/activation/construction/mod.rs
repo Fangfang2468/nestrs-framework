@@ -10,13 +10,16 @@ mod class;
 mod error;
 mod factory;
 mod inputs;
+mod preparation;
 mod preparer;
 mod slot;
 
 pub use class::ClassConstructor;
 pub use error::ConstructionError;
+pub(crate) use factory::FactoryLeaseFrame;
 pub use factory::{AsyncConstructor, FactoryConstructor, FactoryFuture, FactoryInputs};
 pub use inputs::{ConstructionInputs, PreparedInput};
+pub(crate) use preparation::ActivationPreparation;
 pub use preparer::{
     InputPreparer, prepare_bound_optional, prepare_bound_required, prepare_optional,
     prepare_optional_absent, prepare_required,

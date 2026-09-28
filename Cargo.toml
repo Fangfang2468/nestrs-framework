@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["nestrs-core", "nestrs-macro"]
+members = ["nestrs-core", "cargo-nestrs", "cargo-nestrs/internal/bridge"]
+default-members = ["nestrs-core", "cargo-nestrs", "cargo-nestrs/internal/bridge"]
 
 [workspace.package]
 version = "0.1.0"
@@ -27,7 +28,7 @@ toml = "1.1.4"
 ahash = "0.8.12"
 thiserror = "2"             # 错误定义
 anyhow = "1.0.103"          # 
-tokio = { version = "1.53.1", default-features = false, features = ["rt-multi-thread", "sync"] }
+tokio = { version = "1.53.1", default-features = false, features = ["rt-multi-thread", "sync", "macros", "time"] }
 
 
 # 底层工具

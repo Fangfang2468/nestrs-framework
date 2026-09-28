@@ -1,0 +1,63 @@
+error[E0599]: no method named `get_required_service` found for reference `&ServiceProvider` in the current scope
+ --> tests/ui/fail/query-methods-are-not-public.rs:4:22
+  |
+4 |     let _ = provider.get_required_service::<u32>().await;
+  |                      ^^^^^^^^^^^^^^^^^^^^ method not found in `&ServiceProvider`
+
+error[E0599]: no method named `get_service` found for reference `&ServiceProvider` in the current scope
+ --> tests/ui/fail/query-methods-are-not-public.rs:5:22
+  |
+5 |     let _ = provider.get_service::<u32>().await;
+  |                      ^^^^^^^^^^^ method not found in `&ServiceProvider`
+
+error[E0599]: no method named `get_required_keyed_service` found for reference `&ServiceProvider` in the current scope
+ --> tests/ui/fail/query-methods-are-not-public.rs:7:10
+  |
+6 |       let _ = provider
+  |  _____________-
+7 | |         .get_required_keyed_service::<u32>(ServiceKey::Indexed(1))
+  | |         -^^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `&ServiceProvider`
+  | |_________|
+  |
+
+error[E0599]: no method named `get_keyed_service` found for reference `&ServiceProvider` in the current scope
+  --> tests/ui/fail/query-methods-are-not-public.rs:10:10
+   |
+ 9 |       let _ = provider
+   |  _____________-
+10 | |         .get_keyed_service::<u32>(ServiceKey::Indexed(1))
+   | |         -^^^^^^^^^^^^^^^^^ method not found in `&ServiceProvider`
+   | |_________|
+   |
+
+error[E0599]: no method named `get_required_service` found for struct `ServiceProviderRef<'owner>` in the current scope
+  --> tests/ui/fail/query-methods-are-not-public.rs:15:22
+   |
+15 |     let _ = provider.get_required_service::<u32>().await;
+   |                      ^^^^^^^^^^^^^^^^^^^^ method not found in `ServiceProviderRef<'_>`
+
+error[E0599]: no method named `get_service` found for struct `ServiceProviderRef<'owner>` in the current scope
+  --> tests/ui/fail/query-methods-are-not-public.rs:16:22
+   |
+16 |     let _ = provider.get_service::<u32>().await;
+   |                      ^^^^^^^^^^^ method not found in `ServiceProviderRef<'_>`
+
+error[E0599]: no method named `get_required_keyed_service` found for struct `ServiceProviderRef<'owner>` in the current scope
+  --> tests/ui/fail/query-methods-are-not-public.rs:18:10
+   |
+17 |       let _ = provider
+   |  _____________-
+18 | |         .get_required_keyed_service::<u32>(ServiceKey::Indexed(1))
+   | |         -^^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `ServiceProviderRef<'_>`
+   | |_________|
+   |
+
+error[E0599]: no method named `get_keyed_service` found for struct `ServiceProviderRef<'owner>` in the current scope
+  --> tests/ui/fail/query-methods-are-not-public.rs:21:10
+   |
+20 |       let _ = provider
+   |  _____________-
+21 | |         .get_keyed_service::<u32>(ServiceKey::Indexed(1))
+   | |         -^^^^^^^^^^^^^^^^^ method not found in `ServiceProviderRef<'_>`
+   | |_________|
+   |

@@ -10,3 +10,5 @@ license.workspace = true
 [dependencies]
 thiserror = { workspace = true }
 linkme = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }

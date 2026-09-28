@@ -1,150 +1,373 @@
-//! `nestrs-core` 的公开 DI 门面。
-//!
-//! 此模块目前只固定 API 契约，不包含注册收集、图编译、实例存储或 Tokio 调度实现。
-//! 调用任一方法都会触发明确的 `unimplemented!()` 占位；后续实现必须遵守这里已经
-//! 固定的所有权与生命周期形状，而不能把内部 store、裸指针或 activation plan 暴露出去。
+//! 静态注册、先验证后激活的 DI 门面。
 
-use std::marker::PhantomData;
+use std::{
+    fmt,
+    num::NonZeroUsize,
+    sync::{Arc, Mutex},
+};
 
-use crate::ServiceKey;
-use thiserror::Error;
+use crate::{
+    ServiceKey, ServiceLifetime,
+    activation::InputSlot,
+    graph::{GraphCompiler, ValidatedGraph},
+    runtime::{Owner, Runtime},
+    service::{ServiceIdentifier, ServiceSource, ServiceType},
+};
 
-/// 构建服务容器时发生的错误。
+/// 提前初始化的范围。Eager 只预热 Singleton 及其必要依赖。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum InitializationMode {
+    #[default]
+    Lazy,
+    Eager,
+}
+
+/// 所有 scope 共享 root 的构造并发上限。
+#[derive(Debug, Clone)]
+pub struct ServiceProviderOptions {
+    pub initialization: InitializationMode,
+    pub max_concurrent_activations: NonZeroUsize,
+}
+
+impl Default for ServiceProviderOptions {
+    fn default() -> Self {
+        Self {
+            initialization: InitializationMode::Lazy,
+            max_concurrent_activations: NonZeroUsize::new(32).unwrap(),
+        }
+    }
+}
+
+/// 运行环境或 Eager 初始化失败。静态图错误直接 panic。
+#[derive(Debug, thiserror::Error)]
+pub enum BuildError {
+    #[error("构建服务容器需要当前 Tokio runtime")]
+    RuntimeUnavailable,
+    #[error("服务容器预热失败: {error}; 关闭结果: {dispose_error:?}")]
+    Initialization {
+        #[source]
+        error: ResolveError,
+        dispose_error: Option<DisposeError>,
+    },
+}
+
+#[derive(Debug)]
+struct ResolveFailure {
+    detail: Arc<str>,
+    path: Arc<Mutex<Vec<FailureFrame>>>,
+    tail: Option<usize>,
+}
+
+#[derive(Debug)]
+struct FailureFrame {
+    identifier: ServiceIdentifier,
+    source: ServiceSource,
+    parent: Option<usize>,
+}
+
+/// 获取或激活失败，保留失败原因和带 key、源码位置的依赖路径。
 ///
-/// 错误的具体分类将在图编译实现落地时补充；公开类型现在先固定，避免把内部 graph
-/// 或实例存储模型固化为用户 API。
-#[derive(Debug, Error)]
-#[error("服务容器构建失败")]
-pub struct BuildError {
-    _private: (),
+/// Singleton/Scoped 的失败被缓存，后续调用共享原始失败记录。
+#[derive(Debug, Clone)]
+pub struct ResolveError(Arc<ResolveFailure>);
+
+impl ResolveError {
+    pub(crate) fn new(detail: String) -> Self {
+        Self(Arc::new(ResolveFailure {
+            detail: detail.into(),
+            path: Arc::new(Mutex::new(Vec::new())),
+            tail: None,
+        }))
+    }
+
+    pub(crate) fn closed() -> Self {
+        Self::new("服务 owner 已关闭或正在关闭".to_owned())
+    }
+
+    pub(crate) fn construction(
+        identifier: &ServiceIdentifier,
+        source: ServiceSource,
+        detail: String,
+    ) -> Self {
+        Self::dependency(identifier, source, Self::new(detail))
+    }
+
+    pub(crate) fn dependency(
+        identifier: &ServiceIdentifier,
+        source: ServiceSource,
+        dependency: Self,
+    ) -> Self {
+        let mut frames = dependency
+            .0
+            .path
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let tail = frames.len();
+        frames.push(FailureFrame {
+            identifier: identifier.clone(),
+            source,
+            parent: dependency.0.tail,
+        });
+        drop(frames);
+        Self(Arc::new(ResolveFailure {
+            detail: dependency.0.detail.clone(),
+            path: dependency.0.path.clone(),
+            tail: Some(tail),
+        }))
+    }
 }
 
-/// 获取或激活服务时发生的错误。
-#[derive(Debug, Error)]
-#[error("服务解析失败")]
-pub struct ResolveError {
-    _private: (),
+impl fmt::Display for ResolveError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "服务解析失败: {}", self.0.detail)?;
+        let frames = self
+            .0
+            .path
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut current = self.0.tail;
+        while let Some(index) = current {
+            let FailureFrame {
+                identifier,
+                source,
+                parent,
+            } = &frames[index];
+            current = *parent;
+            write!(
+                formatter,
+                "\n  {} key={:?} ({}:{}:{})",
+                identifier.service_type.name,
+                identifier.service_key,
+                source.file,
+                source.line,
+                source.column
+            )?;
+        }
+        Ok(())
+    }
+}
+impl std::error::Error for ResolveError {}
+
+/// 所有 cleanup 都处理完成后汇总的关闭错误。
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("服务容器关闭失败: {failures:?}")]
+pub struct DisposeError {
+    failures: Arc<Vec<String>>,
+}
+impl DisposeError {
+    pub(crate) fn new(failures: Vec<String>) -> Self {
+        Self {
+            failures: Arc::new(failures),
+        }
+    }
+
+    /// 每个失败 cleanup 的诊断。其余实例仍会继续清理。
+    pub fn failures(&self) -> &[String] {
+        &self.failures
+    }
 }
 
-/// 关闭 provider 或 scope 时发生的错误。
-#[derive(Debug, Error)]
-#[error("服务容器关闭失败")]
-pub struct ShutdownError {
-    _private: (),
-}
-
-/// 应用级 DI 容器。
+/// 应用级服务 owner。使用查询宏获取服务，结果引用借用实际 owner。
 ///
-/// `ServiceProvider` 是 Singleton 的 owner，并可创建 [`ServiceScope`]。它不提供运行期
-/// 注册、替换注册或按 `TypeId` 查询的能力；服务只能通过静态类型参数获取。
+/// 服务只可通过宏静态声明，构建后图被冻结。Drop 非阻塞地发起关闭；需要等待所有
+/// cleanup 时必须调用 [`Self::dispose_async`]。
 #[must_use]
 pub struct ServiceProvider {
-    _private: (),
+    graph: Arc<ValidatedGraph>,
+    runtime: Arc<Runtime>,
+    owner: Arc<Owner>,
 }
 
 impl ServiceProvider {
-    /// 收集服务声明并建立 root provider。
-    ///
-    /// 后续实现将在当前 Tokio runtime 中完成静态图验证和必要的异步初始化。
     pub async fn build() -> Result<Self, BuildError> {
-        unimplemented!("ServiceProvider runtime has not been implemented")
+        Self::build_with_options(ServiceProviderOptions::default()).await
     }
 
-    /// 从 root provider 获取默认 key 的服务。
+    /// 在执行任何构造函数之前完整验证图；结构错误立即 panic。
     ///
-    /// Singleton 由 provider 持有；root provider 请求 Scoped 服务将返回解析错误。
-    /// 直接解析的 Transient 由 provider 的生命周期 journal 持有，直至 provider 关闭。
-    pub async fn get<T>(&self) -> Result<&T, ResolveError>
-    where
-        T: ?Sized + Send + Sync + 'static,
-    {
-        unimplemented!("ServiceProvider runtime has not been implemented")
+    pub async fn build_with_options(options: ServiceProviderOptions) -> Result<Self, BuildError> {
+        let graph = Arc::new(
+            GraphCompiler::compile_static()
+                .unwrap_or_else(|error| panic!("DI 依赖图验证失败: {error}")),
+        );
+        tokio::runtime::Handle::try_current().map_err(|_| BuildError::RuntimeUnavailable)?;
+        let (runtime, owner) =
+            Runtime::start(graph.clone(), options.max_concurrent_activations.get());
+        let provider = Self {
+            graph,
+            runtime,
+            owner,
+        };
+        if options.initialization == InitializationMode::Eager
+            && let Err(error) = provider
+                .runtime
+                .warm_up(&provider.owner, ServiceLifetime::Singleton)
+                .await
+        {
+            let dispose_error = provider.runtime.close(&provider.owner).await.err();
+            return Err(BuildError::Initialization {
+                error,
+                dispose_error,
+            });
+        }
+        Ok(provider)
     }
 
-    /// 从 root provider 尝试获取默认 key 的服务。
-    pub async fn try_get<T>(&self) -> Result<Option<&T>, ResolveError>
-    where
-        T: ?Sized + Send + Sync + 'static,
-    {
-        unimplemented!("ServiceProvider runtime has not been implemented")
+    fn view(&self) -> ServiceProviderRef<'_> {
+        ServiceProviderRef {
+            graph: &self.graph,
+            runtime: &self.runtime,
+            owner: &self.owner,
+        }
     }
 
-    /// 从 root provider 获取指定 key 的服务。
-    pub async fn get_keyed<T>(&self, _key: ServiceKey) -> Result<&T, ResolveError>
-    where
-        T: ?Sized + Send + Sync + 'static,
-    {
-        unimplemented!("ServiceProvider runtime has not been implemented")
-    }
-
-    /// 从 root provider 尝试获取指定 key 的服务。
-    pub async fn try_get_keyed<T>(&self, _key: ServiceKey) -> Result<Option<&T>, ResolveError>
-    where
-        T: ?Sized + Send + Sync + 'static,
-    {
-        unimplemented!("ServiceProvider runtime has not been implemented")
-    }
-
-    /// 创建一个新的 Scoped 生命周期边界。
-    ///
-    /// 创建 scope 本身不解析任何服务，因此它保持同步；第一次 `get` 才会按需激活服务。
+    /// 同步建立独立 Scoped owner，不执行任何服务构造。
     pub fn create_scope(&self) -> ServiceScope<'_> {
-        unimplemented!("ServiceProvider runtime has not been implemented")
+        ServiceScope {
+            provider: self,
+            owner: self.runtime.create_scope(),
+        }
     }
 
-    /// 执行 provider 及其已创建服务的异步关闭流程。
-    pub async fn shutdown(self) -> Result<(), ShutdownError> {
-        unimplemented!("ServiceProvider runtime has not been implemented")
+    /// 消费 owner，等待已接受构造、scope 关闭及本 owner 的所有 cleanup。
+    /// 取消等待不会取消关闭；不返回的 factory/cleanup 会使关闭持续等待。
+    pub async fn dispose_async(self) -> Result<(), DisposeError> {
+        self.runtime.close(&self.owner).await
     }
 }
 
-/// 一次 Scoped 生命周期的 owner。
-///
-/// scope 借用其 [`ServiceProvider`]；因此在 scope 仍然存在时，安全 Rust 不能消费
-/// provider 并调用 `shutdown`。它不暴露 cache、activation plan 或内部实例地址。
-#[must_use = "ServiceScope 必须在结束前调用 shutdown().await"]
+impl Drop for ServiceProvider {
+    fn drop(&mut self) {
+        self.runtime.request_close(&self.owner);
+    }
+}
+
+/// Scoped 实例的 owner，借用 root 并隔离其他 scope 的缓存。
+#[must_use]
 pub struct ServiceScope<'provider> {
-    _provider: PhantomData<&'provider ServiceProvider>,
+    provider: &'provider ServiceProvider,
+    owner: Arc<Owner>,
 }
-
 impl ServiceScope<'_> {
-    /// 从当前 scope 获取默认 key 的服务。
-    ///
-    /// Singleton 从 root provider 读取，Scoped 缓存在当前 scope；每次获取 Transient
-    /// 都创建新的实例，并由本 scope 持有到关闭为止。
-    pub async fn get<T>(&self) -> Result<&T, ResolveError>
-    where
-        T: ?Sized + Send + Sync + 'static,
-    {
-        unimplemented!("ServiceScope runtime has not been implemented")
+    pub fn service_provider(&self) -> ServiceProviderRef<'_> {
+        ServiceProviderRef {
+            graph: &self.provider.graph,
+            runtime: &self.provider.runtime,
+            owner: &self.owner,
+        }
     }
-
-    /// 从当前 scope 尝试获取默认 key 的服务。
-    pub async fn try_get<T>(&self) -> Result<Option<&T>, ResolveError>
-    where
-        T: ?Sized + Send + Sync + 'static,
-    {
-        unimplemented!("ServiceScope runtime has not been implemented")
+    pub async fn warm_up(&self) -> Result<(), ResolveError> {
+        self.provider
+            .runtime
+            .warm_up(&self.owner, ServiceLifetime::Scoped)
+            .await
     }
-
-    /// 从当前 scope 获取指定 key 的服务。
-    pub async fn get_keyed<T>(&self, _key: ServiceKey) -> Result<&T, ResolveError>
-    where
-        T: ?Sized + Send + Sync + 'static,
-    {
-        unimplemented!("ServiceScope runtime has not been implemented")
-    }
-
-    /// 从当前 scope 尝试获取指定 key 的服务。
-    pub async fn try_get_keyed<T>(&self, _key: ServiceKey) -> Result<Option<&T>, ResolveError>
-    where
-        T: ?Sized + Send + Sync + 'static,
-    {
-        unimplemented!("ServiceScope runtime has not been implemented")
-    }
-
-    /// 执行 scope 及其已创建服务的异步关闭流程。
-    pub async fn shutdown(self) -> Result<(), ShutdownError> {
-        unimplemented!("ServiceScope runtime has not been implemented")
+    pub async fn dispose_async(self) -> Result<(), DisposeError> {
+        self.provider.runtime.close(&self.owner).await
     }
 }
+impl Drop for ServiceScope<'_> {
+    fn drop(&mut self) {
+        self.provider.runtime.request_close(&self.owner);
+    }
+}
+
+/// 传给查询宏的轻量视图；临时视图不会缩短结果引用的有效期。
+#[derive(Clone, Copy)]
+pub struct ServiceProviderRef<'owner> {
+    graph: &'owner ValidatedGraph,
+    runtime: &'owner Arc<Runtime>,
+    owner: &'owner Arc<Owner>,
+}
+impl<'owner> ServiceProviderRef<'owner> {
+    async fn required<T: ?Sized + Send + Sync + 'static>(
+        self,
+        key: Option<ServiceKey>,
+    ) -> Result<&'owner T, ResolveError> {
+        self.query::<T>(key.clone()).await?.ok_or_else(|| {
+            ResolveError::new(format!(
+                "服务未注册: {} key={key:?}",
+                std::any::type_name::<T>()
+            ))
+        })
+    }
+
+    async fn query<T: ?Sized + Send + Sync + 'static>(
+        self,
+        key: Option<ServiceKey>,
+    ) -> Result<Option<&'owner T>, ResolveError> {
+        if self.owner.is_closed() {
+            return Err(ResolveError::closed());
+        }
+        let identifier = ServiceIdentifier::new(key, ServiceType::create::<T>());
+        let Some(route) = self.graph.routes.get(&identifier) else {
+            return Ok(None);
+        };
+        let lease = self.runtime.resolve(self.owner, route.provider).await?;
+        let pointer = if let Some(project) = route.projection {
+            let prepared = project(InputSlot::new(0), Some(lease.erased_ref()))
+                .map_err(|error| ResolveError::new(error.to_string()))?;
+            let token = prepared
+                .into_required::<T>(InputSlot::new(0))
+                .map_err(|error| ResolveError::new(error.to_string()))?;
+            if !token.lease().ptr_eq(&lease) {
+                return Err(ResolveError::new(
+                    "trait 投影返回了不同实例的注入令牌".to_owned(),
+                ));
+            }
+            token.into_ptr()
+        } else {
+            lease.pointer::<T>().ok_or_else(|| {
+                ResolveError::new(format!(
+                    "构造结果类型不匹配: {}",
+                    identifier.service_type.name
+                ))
+            })?
+        };
+        // SAFETY: runtime.resolve publishes a lease in the actual Owner's journal before
+        // completing this request. Owner retains that journal even after runtime shutdown.
+        // Its borrowing facade cannot be consumed/dropped while this reference is used.
+        // Projection above validates T and obtains its exact (possibly wide) typed address.
+        Ok(Some(unsafe { pointer.as_ref() }))
+    }
+}
+
+/// Macro-only query normalization. Its return value borrows the actual owner, not a temporary
+/// view or this receiver. This is hidden expansion ABI, not a supported service-query method.
+#[doc(hidden)]
+pub trait QueryTarget<'owner> {
+    fn __nestrs_query_view(self) -> ServiceProviderRef<'owner>;
+}
+
+impl<'owner> QueryTarget<'owner> for &'owner ServiceProvider {
+    fn __nestrs_query_view(self) -> ServiceProviderRef<'owner> {
+        self.view()
+    }
+}
+
+impl<'owner> QueryTarget<'owner> for &ServiceProviderRef<'owner> {
+    fn __nestrs_query_view(self) -> ServiceProviderRef<'owner> {
+        *self
+    }
+}
+
+/// Expansion bridge. Must be public because exported macros expand in downstream crates.
+#[doc(hidden)]
+pub async fn query_required<'owner, T: ?Sized + Send + Sync + 'static>(
+    view: ServiceProviderRef<'owner>,
+    key: Option<ServiceKey>,
+) -> Result<&'owner T, ResolveError> {
+    view.required::<T>(key).await
+}
+
+/// Expansion bridge preserving optional-missing versus initialization-failure semantics.
+#[doc(hidden)]
+pub async fn query_optional<'owner, T: ?Sized + Send + Sync + 'static>(
+    view: ServiceProviderRef<'owner>,
+    key: Option<ServiceKey>,
+) -> Result<Option<&'owner T>, ResolveError> {
+    view.query::<T>(key).await
+}
+
+#[cfg(test)]
+mod error_path_tests;

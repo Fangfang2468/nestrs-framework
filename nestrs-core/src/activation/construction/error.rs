@@ -9,7 +9,7 @@ use super::slot::InputSlot;
 /// 由输入准备、adapter 消费或 factory 调用产生的受控错误。
 ///
 /// 此错误是下一代隐藏 construction ABI 的一部分，不会直接进入公开的
-/// [`crate::BuildError`]。后续 runtime 负责在其边界上把它映射为公开错误。
+/// [`crate::BuildError`]。runtime 在激活边界上将它映射为公开解析错误。
 #[doc(hidden)]
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ConstructionError {
@@ -50,9 +50,10 @@ pub enum ConstructionError {
         trait_type: &'static str,
     },
 
-    #[error("factory provider {provider}（{provider_source:?}）执行失败")]
+    #[error("factory provider {provider}（{provider_source:?}）执行失败：{detail}")]
     FactoryFailed {
         provider: &'static str,
         provider_source: ServiceSource,
+        detail: String,
     },
 }

@@ -2,7 +2,7 @@
 
 /// 宏生成 adapter 与 provider descriptor 共享的固定输入槽位标识。
 ///
-/// 槽位的有效范围由后续 [`super::inputs::InputBuffer`] 的长度决定；调用方不能依靠
+/// 槽位的有效范围由 [`super::inputs::InputBuffer`] 的长度决定；调用方不能依靠
 /// 构造该值绕过范围检查。
 #[doc(hidden)]
 #[repr(transparent)]
@@ -17,7 +17,7 @@ impl InputSlot {
     }
 
     #[inline]
-    pub(super) const fn index(self) -> usize {
+    pub(crate) const fn index(self) -> usize {
         self.0
     }
 }

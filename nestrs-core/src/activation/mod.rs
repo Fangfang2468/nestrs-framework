@@ -7,7 +7,9 @@
 pub(crate) mod construction;
 pub(crate) mod erased_service;
 pub(crate) mod injection;
+mod instance;
 
+pub(crate) use construction::ActivationPreparation;
 pub use construction::{
     AsyncConstructor, ClassConstructor, ConstructionError, ConstructionInputs, FactoryConstructor,
     FactoryFuture, FactoryInputs, InputPreparer, InputSlot, PreparedInput, prepare_bound_optional,
@@ -15,3 +17,4 @@ pub use construction::{
 };
 pub use erased_service::{ErasedService, ErasedServiceRef};
 pub use injection::Injection;
+pub(crate) use instance::{DependencyLease, ReleaseDomain};

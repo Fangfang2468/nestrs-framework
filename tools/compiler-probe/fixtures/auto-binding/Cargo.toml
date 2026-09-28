@@ -1,0 +1,17 @@
+[package]
+name = "nestrs-auto-binding-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+default-run = "positive"
+
+# Compiler integration is opt-in and must not make ordinary workspace checks
+# depend on rustc-dev or a compiler wrapper.
+[workspace]
+
+[features]
+alternate = []
+
+[dependencies]
+nestrs-core = { path = "../../../../nestrs-core" }
+tokio = { version = "1.53.1", default-features = false, features = ["rt-multi-thread", "sync", "macros", "time"] }

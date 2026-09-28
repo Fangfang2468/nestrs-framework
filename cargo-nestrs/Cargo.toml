@@ -1,0 +1,27 @@
+[package]
+name = "cargo-nestrs"
+version.workspace = true
+edition.workspace = true
+description = "Nestrs Cargo 子命令与固定工具链编译器适配"
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+default-run = "cargo-nestrs"
+
+[features]
+default = []
+compiler-driver = []
+
+[dependencies]
+zyn = { workspace = true, features = ["derive", "diagnostics", "ext"] }
+serde_json = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[[bin]]
+name = "cargo-nestrs"
+path = "src/main.rs"
+
+[[bin]]
+name = "nestrs-driver"
+path = "src/bin/nestrs-driver.rs"
+required-features = ["compiler-driver"]

@@ -1,7 +1,7 @@
 //! 宏生成的 provider 注册 ABI。
 //!
 //! Provider 只描述声明和构造 adapter；选择 provider、执行 factory、保存实例和生命周期
-//! 语义均留给后续重新设计的容器实现。
+//! 语义由 graph 编译器和 runtime 协调器实现。
 
 use std::{future::Future, pin::Pin};
 

@@ -1,0 +1,13 @@
+error[E0277]: `OpaqueError` doesn't implement `Debug`
+ --> tests/ui/fail/factory-error-requires-debug.rs:6:1
+  |
+6 | #[factory]
+  | ^^^^^^^^^^ `OpaqueError` cannot be formatted using `{:?}` because it doesn't implement `Debug`
+  |
+  = help: the trait `Debug` is not implemented for `OpaqueError`
+  = note: this error originates in the macro `$crate::__export::format_args` which comes from the expansion of the attribute macro `factory` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider annotating `OpaqueError` with `#[derive(Debug)]`
+  |
+4 + #[derive(Debug)]
+5 | struct OpaqueError;
+  |

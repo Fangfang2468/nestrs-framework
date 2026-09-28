@@ -1,9 +1,12 @@
 //! Factory provider 构造 adapter 的 ABI。
 
-use std::{future::Future, marker::PhantomData, pin::Pin};
+use std::{future::Future, pin::Pin};
 
 use super::{ConstructionError, ConstructionInputs, InputSlot};
-use crate::{activation::erased_service::ErasedService, service::Injectable};
+use crate::{
+    activation::{DependencyLease, erased_service::ErasedService},
+    service::Injectable,
+};
 
 /// 异步 factory adapter 返回的 frame-bound future。
 pub type FactoryFuture<'frame> =
@@ -18,13 +21,40 @@ pub type AsyncConstructor = for<'frame> fn(FactoryInputs<'frame>) -> FactoryFutu
 
 /// 仅供 factory adapter 消费的 frame-bound 构造输入。
 ///
-/// 该类型没有公开构造函数。下一单元的 `FactoryLeaseFrame` 将在本模块内创建它，并实际
-/// 持有每个输入服务的 owner lease；在那之前 runtime 无法安全地调用 factory adapter。
-/// 这避免了旧 `FactoryActivationFrame` 那种仅以 ZST 承诺服务存活期的设计。
+/// 只有持有全部真实 dependency leases 的 `FactoryLeaseFrame` 可以创建它。
 #[doc(hidden)]
 pub struct FactoryInputs<'frame> {
     inputs: ConstructionInputs,
-    _lease_frame: PhantomData<&'frame ()>,
+    _lease_frame: &'frame [DependencyLease],
+}
+
+/// 可被 owned worker 持有、但只能借出一次 inputs 的 factory 调用帧。
+pub(crate) struct FactoryLeaseFrame {
+    inputs: Option<ConstructionInputs>,
+    dependencies: Vec<DependencyLease>,
+}
+
+impl FactoryLeaseFrame {
+    pub(super) fn new(inputs: ConstructionInputs, dependencies: Vec<DependencyLease>) -> Self {
+        Self {
+            inputs: Some(inputs),
+            dependencies,
+        }
+    }
+
+    pub(crate) fn inputs(&mut self) -> FactoryInputs<'_> {
+        FactoryInputs {
+            inputs: self
+                .inputs
+                .take()
+                .expect("factory frame inputs may only be consumed once"),
+            _lease_frame: &self.dependencies,
+        }
+    }
+
+    pub(crate) fn into_dependencies(self) -> Vec<DependencyLease> {
+        self.dependencies
+    }
 }
 
 impl<'frame> FactoryInputs<'frame> {
@@ -35,7 +65,7 @@ impl<'frame> FactoryInputs<'frame> {
     {
         let token = self.inputs.take::<T>(slot)?;
 
-        // SAFETY: FactoryInputs can only be constructed by the future FactoryLeaseFrame, which
+        // SAFETY: FactoryInputs can only be constructed by FactoryLeaseFrame, which
         // keeps every dependency lease alive for 'frame.
         Ok(unsafe { token.into_ptr().as_ref() })
     }
@@ -59,5 +89,97 @@ impl<'frame> FactoryInputs<'frame> {
     /// 拒绝 factory adapter 未消费的 descriptor 槽位。
     pub fn ensure_all_consumed(&self) -> Result<(), ConstructionError> {
         self.inputs.ensure_all_consumed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        future::Future,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::{Context, Poll, Waker},
+    };
+
+    use super::{FactoryFuture, FactoryInputs};
+    use crate::activation::{
+        ActivationPreparation, DependencyLease, ErasedService, InputSlot, ReleaseDomain,
+        prepare_required,
+    };
+
+    struct Dependency(Arc<AtomicUsize>);
+    impl Drop for Dependency {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn pending_adapter(mut inputs: FactoryInputs<'_>) -> FactoryFuture<'_> {
+        Box::pin(async move {
+            let dependency = inputs.take::<Dependency>(InputSlot::new(0))?;
+            inputs.ensure_all_consumed()?;
+            std::future::pending::<()>().await;
+            Ok(ErasedService::new(dependency.0.load(Ordering::SeqCst)))
+        })
+    }
+
+    #[test]
+    fn an_owned_send_worker_keeps_factory_borrows_alive_until_cancellation() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let dependency = DependencyLease::new(
+            ErasedService::new(Dependency(drops.clone())),
+            vec![],
+            ReleaseDomain::new(),
+        );
+        let mut preparation = ActivationPreparation::new(1);
+        preparation
+            .prepare(
+                InputSlot::new(0),
+                prepare_required::<Dependency>,
+                Some(dependency),
+            )
+            .unwrap();
+        let mut frame = preparation.finish_factory().unwrap();
+        let mut worker = Box::pin(async move { pending_adapter(frame.inputs()).await });
+        fn assert_send<T: Send>(_: &T) {}
+        assert_send(&worker);
+        let waker = Waker::noop();
+        assert!(matches!(
+            worker.as_mut().poll(&mut Context::from_waker(waker)),
+            Poll::Pending
+        ));
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(worker);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn successful_factory_frame_transfers_its_dependency_leases() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let dependency = DependencyLease::new(
+            ErasedService::new(Dependency(drops.clone())),
+            vec![],
+            ReleaseDomain::new(),
+        );
+        let mut preparation = ActivationPreparation::new(1);
+        preparation
+            .prepare(
+                InputSlot::new(0),
+                prepare_required::<Dependency>,
+                Some(dependency),
+            )
+            .unwrap();
+        let mut frame = preparation.finish_factory().unwrap();
+        {
+            let mut inputs = frame.inputs();
+            let _dependency = inputs.take::<Dependency>(InputSlot::new(0)).unwrap();
+            inputs.ensure_all_consumed().unwrap();
+        }
+        let retained = frame.into_dependencies();
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(retained);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
 }
