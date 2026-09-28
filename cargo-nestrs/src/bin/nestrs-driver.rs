@@ -235,6 +235,9 @@ fn run() -> Result<ExitCode, String> {
     if args.is_empty() || args[0].starts_with('-') {
         return Err("invoke this driver as RUSTC_WRAPPER with rustc as its first argument".into());
     }
+    // Record the original compilation unit before our editor-only/tool-owned
+    // extern is added. This includes all dependency and build-script invocations.
+    cargo_nestrs::ide::capture_rustc(&args)?;
     let rustc = args[0].clone();
     let crate_name = flag_value(&args, "--crate-name").map(str::to_owned);
     let uses_core = has_extern(&args, "nestrs_core");

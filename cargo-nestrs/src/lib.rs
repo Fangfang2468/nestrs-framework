@@ -6,4 +6,6 @@ pub mod bridge;
 pub mod codegen;
 pub mod commands;
 pub mod graph;
+#[doc(hidden)]
+pub mod ide;
 pub mod toolchain;

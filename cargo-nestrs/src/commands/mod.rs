@@ -10,6 +10,7 @@ use std::{
 use crate::toolchain::{Toolchain, cargo_program};
 
 mod graph;
+mod init;
 
 const HELP: &str = "Nestrs compiler toolchain
 
@@ -21,6 +22,7 @@ Commands:
   run      Build and run an application
   test     Build and run unit and integration tests
   graph    Export project dependency graphs as offline HTML; --bin selects one entry
+  init     Initialize an existing project's Nestrs development environment
   doctor   Verify the pinned compiler, rustc-dev and driver installation
 
 Cargo options, including --features, --target, --manifest-path, --locked and
@@ -39,6 +41,7 @@ enum Invocation {
     Version,
     Doctor,
     Graph(Vec<OsString>),
+    Init(Vec<OsString>),
     Cargo {
         command: String,
         args: Vec<OsString>,
@@ -82,6 +85,7 @@ fn execute(args: Vec<OsString>) -> Result<u8, String> {
         }
         Invocation::Cargo { command, args } => run_cargo(&command, args),
         Invocation::Graph(args) => graph::run(args),
+        Invocation::Init(args) => init::run(args),
     }
 }
 
@@ -106,6 +110,11 @@ fn parse(mut args: Vec<OsString>) -> Result<Invocation, String> {
             args.remove(0);
             Ok(Invocation::Graph(args))
         }
+        "init" => {
+            args.remove(0);
+            Ok(Invocation::Init(args))
+        }
+        "ide" => Err("cargo nestrs ide has been renamed to cargo nestrs init; rerun init with your previous options to refresh generated editor commands".into()),
         "check" | "build" | "run" | "test" => {
             let command = command.to_owned();
             args.remove(0);
@@ -332,6 +341,34 @@ mod tests {
         );
         assert_eq!(parse(Vec::new()).unwrap(), Invocation::Help);
         assert!(parse(arguments(&["install"])).is_err());
+    }
+
+    #[test]
+    fn init_routes_cargo_options_without_reinterpreting_them() {
+        let args = [
+            "--manifest-path",
+            "app/Cargo.toml",
+            "--features",
+            "server",
+            "--vscode",
+        ];
+        let mut command = vec![OsString::from("nestrs"), OsString::from("init")];
+        command.extend(arguments(&args));
+        assert_eq!(
+            parse(command.clone()).unwrap(),
+            Invocation::Init(arguments(&args))
+        );
+        command.remove(0);
+        assert_eq!(parse(command).unwrap(), Invocation::Init(arguments(&args)));
+        assert_eq!(
+            parse(arguments(&["init", "check", "--locked"])).unwrap(),
+            Invocation::Init(arguments(&["check", "--locked"]))
+        );
+        assert!(
+            parse(arguments(&["ide"]))
+                .unwrap_err()
+                .contains("renamed to cargo nestrs init")
+        );
     }
 
     #[test]

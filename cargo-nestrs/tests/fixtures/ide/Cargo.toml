@@ -1,0 +1,15 @@
+[package]
+name = "nestrs-ide-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[features]
+default = []
+alternate = []
+
+[dependencies]
+nestrs-core = { path = "../../../../nestrs-core" }
+tokio = { version = "1.53.1", default-features = false, features = ["rt", "macros"] }
