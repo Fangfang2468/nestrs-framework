@@ -223,7 +223,7 @@ mod tests {
             struct Consumer {
                 #[inject]
                 database: Database,
-                #[inject(key = "audit")]
+                #[inject("audit")]
                 audit: Option<dyn Audit>,
                 #[value(make_label("primary"))]
                 label: String,

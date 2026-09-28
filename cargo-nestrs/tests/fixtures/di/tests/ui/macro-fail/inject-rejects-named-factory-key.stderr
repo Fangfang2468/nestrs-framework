@@ -1,0 +1,1 @@
+error: #[inject] 只接受一个字符串或整数字面量；请使用 #[inject]、#[inject("key")] 或 #[inject(123)]

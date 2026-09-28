@@ -56,7 +56,7 @@ fn injectable_entrypoint_preserves_user_items_and_lowers_injection_fields() {
 #[test]
 fn factory_entrypoint_keeps_body_and_binds_parameters_to_activation_frame() {
     let original: syn::ItemFn = syn::parse_quote! {
-        async fn connection(database: Database, #[inject(key = "audit")] audit: Option<dyn Audit>)
+        async fn connection(database: Database, #[inject("audit")] audit: Option<dyn Audit>)
             -> Result<Connection, ConnectionError>
         {
             database.connect(audit).await
@@ -131,7 +131,7 @@ fn namespaced_helpers_are_consumed_by_class_and_factory_declarations() {
     let expanded = file(expand_factory(
         TokenStream::new(),
         quote! {
-            async fn connection(#[nestrs::inject(key = "main")] database: Database) -> Connection { Connection }
+            async fn connection(#[nestrs::inject("main")] database: Database) -> Connection { Connection }
         },
     ));
     let argument = expanded

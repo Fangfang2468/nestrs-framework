@@ -152,12 +152,14 @@ flowchart LR
 | Transient | `ReceiptFormatter` | 每次消费或直接获取时创建；注入 Scoped 服务的 formatter 会随那个服务实例复用，不会在每次业务方法调用时自动重建 |
 | 异步 factory | 模拟数据库和支付客户端初始化 | 依赖满足后才能启动，互不依赖的初始化可以重叠执行 |
 | Trait 注入 | `dyn OrderStore` 绑定到 `Repository<Order>`；`dyn PaymentGateway` 绑定到 `PaymentClient` | 业务代码依赖接口；订单绑定的闭合泛型实现会在图编译期间被纳入 |
-| Keyed 注入 | `#[inject(key = "card")]` 与 `#[inject(key = "wallet")]` 的字段均为 `dyn PaymentGateway` | trait 查询继承请求 key，取得同一 concrete 类型的两个独立客户端 |
+| Keyed 注入 | `#[inject("card")]` 与 `#[inject("wallet")]` 的字段均为 `dyn PaymentGateway` | trait 查询继承请求 key，取得同一 concrete 类型的两个独立客户端 |
 | Optional 注入 | `Option<dyn FraudCheck>` | 本例不注册该接口，因此字段为 `None`，结账仍能正常运行 |
 | 查询宏发现泛型根 | `Repository<AuditEvent>` | 没有业务服务依赖它，也能由查询宏在 build 之前贡献闭合类型声明 |
 | 异步关闭 | scope 与 provider 的 `dispose_async` | 请求结束先关闭 scope，最后关闭 root；初始化失败路径也安排关闭 |
 
 `#[inject]` 字段看起来声明的是普通服务类型，Nestrs 编译器会在 Rust 类型检查前把它改写成只读注入 token。共享状态的更新仍由业务服务自己的同步机制负责；DI 不会自动让库存的“检查并扣减”成为原子操作。
+
+字段和工厂参数的注入属性只接受裸标记 `#[inject]` 或单个 key 字面量，例如 `#[inject("card")]`、`#[inject(123)]`。`#[inject(key = ...)]` 会导致编译错误。`#[injectable]`、`#[factory]` 自身的服务注册配置继续使用 `key = ...`。
 
 `CheckoutService::place_order` 在短 Mutex 临界区内预留库存，释放锁后再等待支付。未提交的 `Reservation` 在支付拒绝、future 取消或展开栈时通过普通 Rust `Drop` 归还库存；保存订单后调用 `commit`。这是业务 RAII，和容器的 cleanup hook 是两条不同的清理路径。
 

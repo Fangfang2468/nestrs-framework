@@ -95,8 +95,8 @@ fn macro_declarations_preserve_all_ui_contracts() {
     );
     assert_eq!(
         macro_failing.len(),
-        3,
-        "check ordinary macro and helper misuse"
+        5,
+        "check ordinary macro/helper misuse and reject named injection keys"
     );
 
     let mut manifest = format!(
@@ -169,10 +169,17 @@ fn macro_declarations_preserve_all_ui_contracts() {
                     let code = diagnostic["code"]["code"].as_str().map(str::to_owned);
                     *actual.entry((code, normalized_message(text))).or_default() += 1;
                     if path.parent().unwrap().ends_with("macro-fail") {
+                        let expected_line = match path.file_stem().and_then(|stem| stem.to_str()) {
+                            Some(
+                                "inject-rejects-named-field-key"
+                                | "inject-rejects-named-factory-key",
+                            ) => 7,
+                            _ => 1,
+                        };
                         misuse_spans_valid &= diagnostic["spans"].as_array().is_some_and(|spans| {
                             spans.iter().any(|span| {
                                 span["is_primary"] == true
-                                    && span["line_start"] == 1
+                                    && span["line_start"] == expected_line
                                     && span["file_name"].as_str().is_some_and(|file| {
                                         Path::new(file).file_name() == path.file_name()
                                     })

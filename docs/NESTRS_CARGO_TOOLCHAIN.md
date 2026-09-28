@@ -274,8 +274,9 @@ python3 tools/verify-graph.py --skip-build
 python3 tools/compiler-probe/verify_autobind.py
 ```
 
-DI fixture 保留原 52 个 UI 基线，加 3 个宏/helper 误用和 1 个导入成功用例，共 56 个；
-均经过工具提供的 bridge，检查完整错误代码、消息和重复次数。跨 crate verifier
+DI fixture 保留原 52 个 UI 基线，加 3 个宏/helper 误用和 1 个导入成功用例；另增加
+字段与工厂参数拒绝 `#[inject(key = ...)]` 的两个用例，当前共 58 个。它们经过工具
+提供的 bridge，检查完整错误代码、消息和重复次数。跨 crate verifier
 覆盖 metadata-only check 及 6 次 debug/release 运行，自动绑定探针保留 14 次运行。
 图 verifier 检查副作用哨兵、目标缓存、普通运行正对照、单图失败保留输出，以及项目
 部分/全部失败、跨 package 同名入口、feature 跳过与开启和 library-only 项目。

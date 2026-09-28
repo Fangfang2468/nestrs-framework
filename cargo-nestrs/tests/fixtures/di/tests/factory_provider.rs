@@ -81,7 +81,7 @@ fn transient_factory() -> TransientFactoryService {
 fn parameterized_factory(
     database: Database,
     #[inject] cache: Cache,
-    #[inject(key = "audit")] audit: Option<Audit>,
+    #[inject("audit")] audit: Option<Audit>,
 ) -> ParameterizedService {
     let _ = (database, cache, audit);
     ParameterizedService

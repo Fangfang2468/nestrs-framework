@@ -21,7 +21,7 @@ impl Indexed {
 struct Consumer {
     #[inject]
     database: dyn Database,
-    #[inject(key = "audit")]
+    #[inject("audit")]
     audit: Option<dyn Audit>,
     #[inject(7)]
     indexed: Indexed,

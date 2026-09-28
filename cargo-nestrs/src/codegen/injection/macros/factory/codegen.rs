@@ -363,7 +363,7 @@ mod tests {
             r#"
             fn make(
                 database: Database,
-                #[inject(key = "audit")]
+                #[inject("audit")]
                 audit: Option<dyn Audit>,
             ) -> Result<Service, Error> { todo!() }
             "#,

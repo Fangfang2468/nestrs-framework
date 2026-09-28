@@ -433,7 +433,7 @@ mod tests {
                 database: Database,
                 #[inject]
                 cache: Cache,
-                #[inject(key = "audit")]
+                #[inject("audit")]
                 audit: Option<dyn Audit>,
             ) -> Service { todo!() }
             "#,

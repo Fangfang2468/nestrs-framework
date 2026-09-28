@@ -1432,6 +1432,9 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 
 * 应用使用 `use nestrs::{injectable, factory, primary};` 和短属性，也支持
   `#[nestrs::injectable]` 等完整路径。字段/参数 helper 支持裸名及 `nestrs::` 路径。
+* 字段与 factory 参数的 `inject` 语法一致，只接受裸标记 `#[inject]` 或单个字符串/
+  整数字面量，如 `#[inject("mail")]`、`#[inject(123)]`。`#[inject(key = ...)]`
+  为编译错误；provider 的 `#[injectable(key = ...)]`、`#[factory(key = ...)]` 配置不受影响。
 * `nestrs` 是工具注入的 extern 名称，不是在 Cargo.toml 中配置的公开宏依赖。
   同名 Cargo 依赖会明确报冲突，不能静默覆盖工具桥接。
 * 桥接只适配标准 proc_macro 输入输出；声明分析、字段/签名改写与注册生成复用

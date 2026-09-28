@@ -1,18 +1,15 @@
 //! `#[inject]` 子标注的唯一实现。
 //!
-//! `#[injectable]` 字段与 `#[factory]` 参数共用这个子标注：两者对 `#[inject]`、
-//! `#[inject("name")]`、`#[inject(1)]`、`#[inject(key = ...)]` 的接受范围，以及
-//! `Option<T>` 可选形态与可注入服务类型的规则完全一致。
+//! `#[injectable]` 字段与 `#[factory]` 参数共用这个子标注，只接受 `#[inject]`、
+//! `#[inject("name")]`、`#[inject(123)]`，不接受命名参数。
+//! 两者的 `Option<T>` 可选形态与可注入服务类型规则完全一致。
 //!
 //! 这里只做「源码语法 → 宏期事实」：不生成 token、不改写 AST、不依赖 provider 注册
 //! ABI。key 值的字面量规则定义在 [`crate::codegen::injection::macros_attrs::service_key`]，注册 ABI
 //! 的渲染在 `crate::codegen::injection::render`。
 
 use crate::codegen::injection::macros_attrs::service_key::{self, ServiceKeySpec};
-use zyn::syn::{
-    self, Attribute, GenericArgument, Lit, Meta, PathArguments, Type, parse::Parser,
-    punctuated::Punctuated,
-};
+use zyn::syn::{self, Attribute, GenericArgument, Lit, Meta, PathArguments, Type};
 
 // ---------------------------------------------------------------------------
 // 依赖请求事实
@@ -85,45 +82,26 @@ fn parse_inject_attribute(attribute: &Attribute) -> syn::Result<Option<ServiceKe
     match &attribute.meta {
         Meta::Path(_) => Ok(None),
         Meta::List(list) => {
+            if !matches!(list.delimiter, syn::MacroDelimiter::Paren(_)) {
+                return Err(syn::Error::new_spanned(
+                    attribute,
+                    "#[inject] 参数必须写在圆括号中",
+                ));
+            }
             if list.tokens.is_empty() {
                 return Err(syn::Error::new_spanned(
                     attribute,
-                    "#[inject] 不接受空参数；请使用 #[inject]、#[inject(\"key\")] 或 #[inject(key = \"key\")]",
+                    "#[inject] 不接受空参数；请使用 #[inject]、#[inject(\"key\")] 或 #[inject(123)]",
                 ));
             }
 
-            if let Ok(literal) = syn::parse2::<Lit>(list.tokens.clone()) {
-                return service_key::from_literal(&literal).map(Some);
-            }
-
-            let metas = Punctuated::<Meta, syn::Token![,]>::parse_terminated
-                .parse2(list.tokens.clone())
-                .map_err(|_| {
-                    syn::Error::new_spanned(attribute, "#[inject] 只接受一个字符串或整数 key")
-                })?;
-
-            if metas.len() != 1 {
-                return Err(syn::Error::new_spanned(
+            let literal = syn::parse2::<Lit>(list.tokens.clone()).map_err(|_| {
+                syn::Error::new_spanned(
                     attribute,
-                    "#[inject] 只接受一个 key 参数",
-                ));
-            }
-
-            let Some(Meta::NameValue(value)) = metas.first() else {
-                return Err(syn::Error::new_spanned(
-                    attribute,
-                    "#[inject] 只接受字符串或整数 key；命名形式请写为 key = ...",
-                ));
-            };
-
-            if !value.path.is_ident("key") {
-                return Err(syn::Error::new_spanned(
-                    &value.path,
-                    "#[inject] 只支持 key 参数",
-                ));
-            }
-
-            service_key::from_expression(&value.value).map(Some)
+                    "#[inject] 只接受一个字符串或整数字面量；请使用 #[inject]、#[inject(\"key\")] 或 #[inject(123)]",
+                )
+            })?;
+            service_key::from_literal(&literal).map(Some)
         }
         Meta::NameValue(_) => Err(syn::Error::new_spanned(
             attribute,
@@ -375,14 +353,6 @@ mod tests {
             key_of(parse_quote!(#[inject(7)])).expect("positional integer"),
             Some(ServiceKeySpec::Indexed(7))
         );
-        assert_eq!(
-            key_of(parse_quote!(#[inject(key = "named")])).expect("named string"),
-            Some(ServiceKeySpec::Named("named".to_owned()))
-        );
-        assert_eq!(
-            key_of(parse_quote!(#[inject(key = 3)])).expect("named integer"),
-            Some(ServiceKeySpec::Indexed(3))
-        );
     }
 
     #[test]
@@ -404,24 +374,42 @@ mod tests {
         let empty = key_of(parse_quote!(#[inject()])).expect_err("empty list must fail");
         assert!(empty.to_string().contains("不接受空参数"));
 
-        let empty_name = key_of(parse_quote!(#[inject(key = "")])).expect_err("empty key");
+        let empty_name = key_of(parse_quote!(#[inject("")])).expect_err("empty key");
         assert!(empty_name.to_string().contains("key 字符串不可为空"));
 
-        let float = key_of(parse_quote!(#[inject(key = 1.5)])).expect_err("float key");
+        let float = key_of(parse_quote!(#[inject(1.5)])).expect_err("float key");
         assert!(
             float
                 .to_string()
                 .contains("key 必须是字符串或非负整数值字面量")
         );
 
-        let unknown = key_of(parse_quote!(#[inject(name = "x")])).expect_err("unknown key name");
-        assert!(unknown.to_string().contains("只支持 key 参数"));
-
-        let two = key_of(parse_quote!(#[inject(a = 1, b = 2)])).expect_err("two keys");
-        assert!(two.to_string().contains("只接受一个 key 参数"));
-
         let name_value = key_of(parse_quote!(#[inject = 1])).expect_err("name-value form");
         assert!(name_value.to_string().contains("参数必须写在括号中"));
+
+        for attribute in [parse_quote!(#[inject["x"]]), parse_quote!(#[inject{123}])] {
+            let error = key_of(attribute).expect_err("only parentheses are supported");
+            assert_eq!(error.to_string(), "#[inject] 参数必须写在圆括号中");
+        }
+    }
+
+    #[test]
+    fn rejects_named_and_multiple_keys_with_literal_syntax_guidance() {
+        for attribute in [
+            parse_quote!(#[inject(key = "named")]),
+            parse_quote!(#[inject(key = 3)]),
+            parse_quote!(#[nestrs::inject(key = "named")]),
+            parse_quote!(#[inject(name = "x")]),
+            parse_quote!(#[inject(a = 1, b = 2)]),
+            parse_quote!(#[inject("named", 3)]),
+            parse_quote!(#[inject(KEY)]),
+        ] {
+            let error = key_of(attribute).expect_err("only one key literal is supported");
+            assert_eq!(
+                error.to_string(),
+                "#[inject] 只接受一个字符串或整数字面量；请使用 #[inject]、#[inject(\"key\")] 或 #[inject(123)]",
+            );
+        }
     }
 
     #[test]

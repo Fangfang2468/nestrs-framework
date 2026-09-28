@@ -204,7 +204,7 @@ struct Checkout {
     optional_connection: Option<dyn ConnectionPort>,
     #[inject]
     absent_plugin: Option<dyn MissingPlugin>,
-    #[inject(key = "zh")]
+    #[inject("zh")]
     greeting: dyn GreetingPort,
 }
 

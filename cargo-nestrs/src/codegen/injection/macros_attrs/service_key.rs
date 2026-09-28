@@ -1,7 +1,8 @@
 //! 服务 key 的定义与字面量语法。
 //!
 //! `ServiceKeySpec` 同时被 provider 配置（`#[injectable(key = ...)]`、`#[factory(key = ...)]`）
-//! 与依赖请求（`#[inject(key = ...)]`）使用，因此它的可接受写法只在这里实现一次。
+//! 与依赖请求（`#[inject("name")]`、`#[inject(123)]`）使用，字面量规则只在这里实现一次。
+//! 依赖请求只接受单个字面量，不改变 provider 的 `key = ...` 配置语法。
 
 use zyn::{
     Arg, FromArg,
@@ -19,7 +20,7 @@ pub(crate) enum ServiceKeySpec {
 
 /// 解析 `key = ...` 的值表达式。
 ///
-/// 只接受字符串或非负整数字面量；provider 配置与 `#[inject(key = ...)]` 共用该规则。
+/// 只接受字符串或非负整数字面量，供 provider 的命名配置使用。
 pub(crate) fn from_expression(expression: &Expr) -> syn::Result<ServiceKeySpec> {
     let Expr::Lit(ExprLit { lit, .. }) = expression else {
         return Err(syn::Error::new_spanned(
@@ -56,8 +57,8 @@ pub(crate) fn from_literal(literal: &Lit) -> syn::Result<ServiceKeySpec> {
 
 impl FromArg for ServiceKeySpec {
     fn from_arg(arg: &zyn::Arg) -> zyn::Result<Self> {
-        // provider 配置只支持 `key = <字面量>`；`#[inject(key = ...)]` 由 request 前端
-        // 调用同一个 `from_expression`，因此两条路径的接受范围与文案完全一致。
+        // provider 配置使用 `key = <字面量>`；注入字面量由 request 前端调用
+        // `from_literal`，共用相同值校验，不接受 provider 的命名配置语法。
         let Arg::Expr(_, expression) = arg else {
             return Err(zyn::mark::error("key 必须是字符串或非负整数值字面量")
                 .span(arg.span())

@@ -190,7 +190,8 @@ python3 tools/verify-graph.py --skip-build
 python3 tools/compiler-probe/verify_autobind.py
 ```
 
-独立 DI fixture 保留 52 个旧 UI 语义用例，加 3 个误用和 1 个导入成功用例，共 56 个。
+独立 DI fixture 保留 52 个旧 UI 语义用例，加 3 个误用和 1 个导入成功用例，以及
+字段与工厂参数拒绝命名注入 key 的 2 个用例，当前共 58 个。
 这些用例与实际 linkme/图/实例化/关闭回归均通过工具提供的 bridge。不得批量更新
 旧 stderr 来掩盖错误语义改变。
 

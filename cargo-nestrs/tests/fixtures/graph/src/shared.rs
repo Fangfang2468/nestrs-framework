@@ -53,7 +53,7 @@ trait Missing: Send + Sync {}
 struct Consumer {
     #[inject]
     database: Database,
-    #[inject(key = "active")]
+    #[inject("active")]
     port: dyn Port,
     #[inject]
     optional: Option<dyn Missing>,

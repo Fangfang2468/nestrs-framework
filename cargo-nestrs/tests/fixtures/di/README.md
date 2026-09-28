@@ -42,8 +42,9 @@ cargo nestrs run --manifest-path cargo-nestrs/tests/fixtures/di/Cargo.toml --bin
 
 The UI harness preserves 15 original positive cases and 37 original negative
 cases, plus three ordinary macro/helper misuse negatives and one renamed macro
-import positive, for 56 cases in total. It inherits the Nestrs wrapper, exact
-compiler and private bridge when invoked through the CLI. For example:
+import positive. Two additional negatives reject `#[inject(key = ...)]` on a
+field and a factory parameter, for 58 cases in total. It inherits the Nestrs
+wrapper, exact compiler and private bridge when invoked through the CLI. For example:
 
 ```sh
 cargo nestrs test --manifest-path cargo-nestrs/tests/fixtures/di/Cargo.toml --test ui

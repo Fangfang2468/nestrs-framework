@@ -153,6 +153,8 @@ cargo nestrs graph
 | --- | --- |
 | `#[inject] dependency: SomeService` | 解析必选服务 |
 | `#[inject] port: dyn SomeTrait` | 根据接口和 key 选择实现 |
+| `#[inject("mail")] port: dyn SomeTrait` | 解析字符串 key 为 `"mail"` 的服务 |
+| `#[inject(123)] dependency: SomeService` | 解析整数 key 为 `123` 的服务 |
 | `#[inject] optional: Option<SomeService>` | 没有注册时注入 `None` |
 | `#[value(表达式)] field: T` | 创建实例时执行表达式并初始化字段 |
 | `field: T`，没有上述属性 | 创建实例时调用 `T::default()`，不会自动注入 |
@@ -239,7 +241,7 @@ struct RetryPolicy {
 
 ```rust
 #[factory]
-fn notifier_label(#[inject(key = "mail")] notifier: dyn Notifier) -> String {
+fn notifier_label(#[inject("mail")] notifier: dyn Notifier) -> String {
     notifier.notify(0)
 }
 ```
@@ -314,9 +316,9 @@ fn sms() -> NotificationClient {
 
 #[injectable]
 struct NotificationService {
-    #[inject(key = "mail")]
+    #[inject("mail")]
     mail: dyn Notifier,
-    #[inject(key = "sms")]
+    #[inject("sms")]
     sms: dyn Notifier,
 }
 
@@ -339,15 +341,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-注意两种 key 写法的区别：
+注意服务注册、依赖注入与查询的 key 写法不同：
 
 | 位置 | 字符串 key | 整数 key |
 | --- | --- | --- |
-| 声明或注入属性 | `key = "mail"` | `key = 7` |
+| `injectable` / `factory` 注册属性 | `key = "mail"` | `key = 7` |
+| 字段或工厂参数的注入属性 | `#[inject("mail")]` | `#[inject(7)]` |
 | 查询宏第三个参数 | `ServiceKey::Named("mail".to_owned())` | `ServiceKey::Indexed(7)` |
 
 属性只接受非空字符串或可表示为 `usize` 的非负整数字面量，不能写运行期变量。
-`#[inject("mail")]`、`#[inject(7)]` 也是支持的简写；推荐使用显式的 `key = ...`。
+字段和工厂参数的注入属性只接受裸标记 `#[inject]` 或单个 key 字面量，如
+`#[inject("mail")]`、`#[inject(7)]`。`#[inject(key = "mail")]`、
+`#[inject(key = 7)]` 会导致编译错误；`injectable` / `factory` 自身的服务注册配置
+仍使用 `key = ...`。
 查询宏可以接收运行期计算出的 `ServiceKey`，但不会创建新的注册。
 
 无 key、字符串 `"7"`、整数 `7` 是三种不同选择；默认查询不会回退到 named/indexed

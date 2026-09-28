@@ -72,9 +72,9 @@ pub struct CheckoutService {
     orders: dyn OrderStore,
     #[inject]
     inventory: Inventory,
-    #[inject(key = "card")]
+    #[inject("card")]
     card: dyn PaymentGateway,
-    #[inject(key = "wallet")]
+    #[inject("wallet")]
     wallet: dyn PaymentGateway,
     #[inject]
     formatter: ReceiptFormatter,

@@ -85,9 +85,9 @@ struct GraphConsumer {
     left: Formatter,
     #[inject]
     right: Formatter,
-    #[inject(key = "replica")]
+    #[inject("replica")]
     named: Channel,
-    #[inject(key = 7)]
+    #[inject(7)]
     indexed: Channel,
     #[inject]
     plugin: Option<dyn MissingPlugin>,

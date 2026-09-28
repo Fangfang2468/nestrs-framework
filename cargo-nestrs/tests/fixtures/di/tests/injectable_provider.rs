@@ -24,7 +24,7 @@ struct Controller {
     retries: usize,
     #[value("controller")]
     name: String,
-    #[inject(key = "audit")]
+    #[inject("audit")]
     audit: Option<dyn Audit>,
     enabled: bool,
 }
