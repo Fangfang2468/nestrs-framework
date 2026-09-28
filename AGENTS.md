@@ -1382,92 +1382,210 @@ ci(framework): 增加 workspace CI 检查
 
 # 架构共识
 
-本部分记录 Nestrs 框架的模块划分共识（已与项目维护者确认）。
-AI 在分析、修改本仓库时必须遵守；如需变更，应先与维护者确认再修改本节。
+本部分记录已与维护者确认的 Nestrs 架构。应用只依赖 core 与业务库，服务声明、
+编译、文档和编辑器所需工具统一由 `cargo nestrs` 管理。私有过程宏桥接供 rustc、
+rustdoc 和原版 rust-analyzer 共用，生成后端只有一份；应用不依赖公开宏 package。
+AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 
-## 1. 总体定位
+## 1. 总体定位与 package
 
-* Nestrs 框架以依赖注入（DI）为根基，**框架的核心能力建立在 DI 容器之上**。
-* `nestrs-core`（由原 `nestrs-injection` 更名而来）承担框架核心位置：
-  DI 容器 + linkme 宿主，是所有生态库的地基。
-* `nestrs-bootstrap` 是顶层引导库，基于 `nestrs-core` 之上统筹
-  logger、config、injection、macro 等所有生态库，导出 `NestrsFactory`，
-  形成 Nestrs 框架的最小闭环，达成基础功能。
+* Nestrs 以 DI 为根基。用户面向 `nestrs-core` 与 `cargo-nestrs`；`nestrs-tool-bridge`
+  是工具包内部的 `publish = false` 构建工件，不是应用依赖或独立公开 API。
+* `nestrs-core` 是 DI 容器、linkme 宿主和所有运行期生态库的地基。
+* `cargo-nestrs` 是构建工具：Cargo CLI、编译器适配、声明生成、IDE 项目模型和 HTML 图。
+  它不是 runtime crate，应用运行时不链接工具实现。
+* `cargo-nestrs/internal/bridge` 是标准 proc-macro 薄桥接，委托
+  `cargo-nestrs/src/codegen`。CLI 将其以 `nestrs` extern 提供给编译器与编辑器；
+  不复制生成逻辑，不恢复公开 `nestrs-macro` 或独立 `nestrs-codegen` package。
+* `nestrs-bootstrap` 仍为未来的顶层引导库，负责 Application、配置和生态组合，
+  导出 `NestrsFactory`；本阶段不提前实现。
+* `example/` 只作多项目父目录，业务示例分别位于其子目录并各有 Cargo.toml、源码与说明。
+  故意非法的 DI 声明放在 `cargo-nestrs/tests/fixtures/`，不使正常示例的默认运行或图导出失败。
 
-## 2. 分层模型
-
-所有生态库都建立在 `nestrs-core` 之上；`nestrs-bootstrap` 位于最顶层：
+## 2. 分层与依赖方向
 
 ```text
-┌───────────────────────────────────────────────┐
-│ nestrs-bootstrap                              │
-│ 创建 / 配置 / 运行 Nestrs 实例（Application） │
-│ 对接所有生态库，导出 NestrsFactory            │
-└──────────────────┬────────────────────────────┘
-                   │ 依赖
-        ┌──────────┼───────────┐
-        ▼          ▼           ▼
- nestrs-macro  nestrs-logger  nestrs-config
-        │          │           │
-        └──────────┼───────────┘
-                   ▼
-        ┌──────────────────────┐
-        │ nestrs-core         │
-        │ DI 容器 + linkme 宿主 │
-        └──────────────────────┘
+工具内部：nestrs-tool-bridge → cargo-nestrs::codegen → 类型化服务声明
+工具编排：cargo nestrs → rustc/rustdoc 的 extern 注入与 rust-analyzer 项目依赖
+语义分析：nestrs-driver → 根据真实类型自动生成 binding
+运行期：  应用及未来 bootstrap/logger/config → nestrs-core
 ```
 
-## 3. 依赖方向
+* core 不依赖 CLI、codegen、宏 crate 或 rustc 内部库。
+* 所有运行期生态库单向依赖 core，未来 bootstrap 位于其上；生态库不得反向依赖 bootstrap。
+* 编译期 codegen 位于 `cargo-nestrs/src/codegen`，只使用生成所需工具；生成代码
+  统一引用 `::nestrs_core::__private`。内部 token API 不是稳定用户 API。
+* `Provider::{Class, Factory}` 生产实例；`TraitBinding` 只描述 concrete 到 trait
+  的类型投影，不是 Provider，不创建另一份实例。
 
-* 依赖必须单向向下，禁止任何形式的循环依赖（Cargo 在 manifest 层面直接拒绝循环）。
-* `nestrs-core` 是所有生态库的地基：`nestrs-macro`、`nestrs-logger`、
-  `nestrs-config`、`nestrs-bootstrap` 均依赖它。
-* `nestrs-bootstrap` 位于最顶层，允许依赖全部生态库；
-  各生态库不得反向依赖 `nestrs-bootstrap`。
-* 由于所有生态库都建立在 `nestrs-core` 之上，"只使用宏、不使用 injection"
-  的场景在本架构中不存在，因此宏生成代码可以固定引用 injection 的私有重导出。
+## 3. linkme 与查询根
 
-## 4. linkme 归属
+* linkme 的唯一对外宿主为 `nestrs-core::__private::linkme`；用户不直接配置 linkme。
+* 生成的分布式注册固定引用该路径，不能改指向工具或其他运行时库。
+* 查询宏由 core 导出，在具体类型调用处生成静态根；闭合泛型可提供描述回调，
+  trait/factory-only 类型不被强加 ProviderDefinition 约束。
+* 全链接单元合并静态根，包括已编译但未执行的分支；类型不能捕获外层泛型/const
+  参数或 impl 的 Self。动态 key 求值一次，只选择冻结路由，不扩展图。
+* 内部跨 crate 桥接 ABI 隐藏导出供生成代码使用，不属于稳定公开 API。
 
-* linkme 的唯一对外宿主是 `nestrs-core`：
-  `#[doc(hidden)] pub mod __private { pub use linkme; }`
-* 宏生成的分布式注册代码统一引用 `::nestrs_core::__private::linkme`
-  （固定路径，不得改为指向其他库）。
-* 用户无需也不应直接配置 linkme 依赖。
-* 理由：`nestrs-core` 是所有生态库的共同地基，由它提供 linkme 重导出
-  不会出现"宏配套其他运行时库时断链"的问题。
-* 当 `nestrs-bootstrap` 落地后，若用户只直接依赖 bootstrap，则应由
-  bootstrap 转发该路径（re-export `nestrs-core` 或转发其 `__private`），
-  保证宏生成代码在用户 crate 中可解析。
+## 4. 工具私有桥接与标准宏展开
 
-## 5. nestrs-bootstrap 职责
+* 应用使用 `use nestrs::{injectable, factory, primary};` 和短属性，也支持
+  `#[nestrs::injectable]` 等完整路径。字段/参数 helper 支持裸名及 `nestrs::` 路径。
+* `nestrs` 是工具注入的 extern 名称，不是在 Cargo.toml 中配置的公开宏依赖。
+  同名 Cargo 依赖会明确报冲突，不能静默覆盖工具桥接。
+* 桥接只适配标准 proc_macro 输入输出；声明分析、字段/签名改写与注册生成复用
+  `cargo-nestrs/src/codegen`。组合 primary 时保留属性末段名称；不能承诺任意重命名
+  属性之间都可识别身份。crate/module 路径别名与单个宏重命名有对应回归。
+* 标准 Rust 宏展开处理 cfg、外部模块、macro_rules 生成项和属性/derive 顺序；
+  Injection<T> 字段和 factory frame 借用签名在类型检查前生成。
+* 应用经 cargo nestrs check/build/run/test 获取桥接与自动绑定；普通 Cargo 不注入
+  该环境。core 和工具自身可以用普通 Cargo 检查。应用级 Clippy 集成尚未交付。
+* driver 不注册 `nestrs` 工具属性，不替换原生展开管线或复制 token server。
+  编译器适配仍用于语义分析、图入口和 IDE 构建记录，升级时需维护并回归。
 
-* 创建 Nestrs 实例（Application）。
-* 配置 Nestrs 实例（加载并组装各生态库的配置与注册）。
-* 运行 Nestrs 实例。
-* 导出 `NestrsFactory`，形成最小闭环，提供基础能力。
-* 对接所有 Nestrs 生态库（injection、logger、config、macro 等）。
+## 5. 自动绑定
 
-## 6. 命名约定
+* 普通 `impl Trait for Concrete` 按实际注入/查询需求自动参与绑定，业务代码不写 bind。
+* 候选限于声明 provider、factory 成功类型和已知闭合泛型，不注册任意 impl，
+  不猜测泛型实参或枚举无限类型集合。
+* adapter 使用真实 Ty/DefId、归一化与 Unsize 求解检查投影，生成真实 typed coercion
+  再由 rustc 检查，不伪造 vtable、不延长借用、不绕过可见性。
+* 语义发现与最终生成使用两个完整编译阶段。FileLoader 只覆盖编译输入，原始源码
+  不修改；生成产物保存在 target，最终编译再次检查缺失绑定。
+* type/key 显式 provider 优先于蓝图；key 精确匹配；primary 只解决同 key 的 trait
+  多候选；optional 不能隐藏歧义、环或生命周期错误。
+* 核心保证以同 crate 为基础。有限的外部泛型能力不等于跨所有依赖 crate 的完整
+  候选汇总；下游独有接口需求、上游私有投影等场景必须如实记录支持边界。
+* `nestrs::bind` 只保留为文档隐藏的显式绑定 ABI 回归入口，不是推荐业务 API。
+  显式 pair 不再自动重复生成，重复显式 binding 仍是 core 图错误。
 
-* 顶层引导库命名为 `nestrs-bootstrap`，**不得**命名为 `nestrs-common`。
-  原因：`common` 在主流生态中通常指"被所有模块依赖的底层公共库"
-  （如 `@nestjs/common`、`spring-common`），而该库依赖所有生态库，
-  语义上属于 bootstrap。
-* `nestrs-core` 即框架核心库（由原 `nestrs-injection` 更名而来）；
-  后续若再次改名，需同步更新本节与所有引用。
+## 6. DI 门面与静态图
 
-## 7. Feature 开关
+* 服务查询只通过 core 的 `get_required_service!`、`get_service!` 和 keyed 变体；
+  不提供普通公开查询方法或单独 register!。
+* build/build_with_options、create_scope、service_provider、warm_up 和消费 owner
+  的 dispose_async 保留普通方法。引用绑定实际 root/scope owner 的借用期。
+* 任何服务构造前验证全部注册及可物化的闭合类型；结构错误在容器构建入口 panic，
+  成功后冻结图。之后不再读取 linkme、展开泛型或变更图。
+* 图编译、激活任务展开、失败传播和实例释放使用非递归算法。
+* Singleton 可以依赖 Transient，但整个激活闭包不得包含 Scoped；需要 Scoped 的
+  Transient 只能从 scope 查询。factory 参数同样参与生命周期验证。
+* Rust 类型检查、全图结构检查和外部资源初始化是三个不同层级；不能把
+  cargo nestrs check/build 成功描述成已运行容器全图检查。
 
-* `nestrs-macro` 的 `injection` feature 控制注入相关宏的编译开关，默认开启。
-* `zyn` 是宏库的基础依赖，不与任何 feature 绑定。
-* 未来 `nestrs-bootstrap` 的 feature 应聚合各生态库
-  （例如 `default = ["injection", "logger", "config"]`）。
+## 7. Tokio、lease 与关闭
 
-## 8. 设计参照
+* 每 root 一个中央 Tokio 协调器，所有 scope/查询共享默认 32 个构造名额。
+  依赖满足立即推进，没有整层屏障；worker 不递归 resolve。
+* Lazy 默认；Eager 预热 Singleton 及必要依赖，scope.warm_up 预热 Scoped。
+  Singleton 始终在 root 上下文构造；Transient 按每个消费槽位独立构造。
+* Injection 和 ErasedServiceRef 持有强 lease；稳定实例地址、真实 factory frame
+  和独立于 Tokio 的迭代 ReleaseDomain 维护内存安全。
+* Singleton/Scoped 失败缓存至 owner 关闭，Transient 失败只属于该 occurrence。
+  factory Result 要求 E: Debug；构造 panic 进入 ResolveError。
+* 取消查询仅取消等待，接受的初始化继续。关闭先排空接受的任务，再按 owner
+  逆发布顺序逐个完成 cleanup/释放；每 owner 至多一个 cleanup worker，root 等 scopes。
+* dispose_async 等待取消不取消关闭；Drop 只发送幂等关闭请求，不新建 runtime 或
+  block_on。Tokio 退出后只保证同步安全释放，不能保证异步 cleanup。
+* 逃逸 token 延长必要内存存活但不阻塞逻辑关闭；cleanup panic 聚合成 DisposeError，
+  其余 cleanup 继续。不添加自动超时或强制终止策略。
 
-* `nestrs-core` ≈ Spring Framework 的 `spring-context` / NestJS 的
-  `@nestjs/common`（地基）。
-* `nestrs-bootstrap` ≈ Spring Boot 的 `spring-boot` / NestJS 的 core
-  （在容器之上引导、配置、运行应用）。
-* 可选集成通过运行期注册（linkme 分布式切片）接入，而非编译期依赖。
+## 8. 依赖图 HTML
+
+* HTML/CSS/JavaScript 和文件输出全部归 cargo-nestrs。core 仅提供内部只读静态图
+  JSON 和既有验证语义，不再有 graph_output、graph_output_path 或 BuildError::GraphExport。
+* cargo nestrs graph 链接真实选定 binary 的注册集合，通过诊断入口导出图，不执行
+  业务 main、constructor、factory、Default、value 表达式或 cleanup。
+* 省略 --bin 时导出所选 package 的全部 binary；--workspace 导出 workspace 总览。
+  default-run 不隐藏其他入口。每个入口独立编译、校验并隔离缓存；页面保留独立节点和
+  依赖边，只标记共同 provider 声明的入口归属，不合并成跨入口容器。
+* 项目报告保留成功、错误和 required-features 未启用的跳过状态；编译、校验或不支持
+  的入口错误不阻断其他入口，写出报告后以非零退出。全部入口失败也生成诊断报告。
+  显式 --bin 维持单图失败不覆盖旧输出；无 binary、入口选择无效、元数据查询或写入
+  失败不覆盖旧输出。跳过不算错误，报告只有跳过时退出状态仍为 0，不代表验证成功。
+  lib-only package 可列入项目清单，但不能虚构其独立服务图。
+* 每个 package 独立解析特性；当前拒绝 --workspace --features，提示使用
+  -p PACKAGE --features。默认 workspace members 选中多个 package 时也拒绝显式
+  features，即使没有传 --workspace。--workspace 的 all-features/no-default-features 按各 package
+  分别应用，不承诺复现一次 Cargo workspace 构建的 feature 合并。
+* 当前只支持固定 host 可运行的 binary，以及源码中可定位的 main；宏生成 main、
+  lib/test/example 图目标和跨 target 运行尚未支持。无直接 core 依赖、no_main 及
+  cfg_attr 引入的 no_main 在执行前拒绝，不能声称全部入口都已验证。
+* 页面展示 provider 声明、槽位与投影关系，不是实例状态；重复 Transient 输入仍独立构造。
+* 默认写入 Cargo target 的 nestrs-di.html，输出错误由 CLI 报告，不污染容器构建契约。
+
+## 9. 工具链、IDE 与验证
+
+* pin 以 cargo-nestrs/toolchain.json 的 release、完整 commit 与支持的 host 为准。
+  当前本机适配为 x86_64-unknown-linux-gnu 与 x86_64-pc-windows-msvc；driver、bridge
+  和 sysroot 必须属于实际 host。不匹配时失败，不静默使用默认新编译器或退回源码扫描。
+  Windows 使用本机 exe/dll 和 MSVC 工具，不要求 WSL，不宣称 Windows GNU、ARM64
+  或跨 target graph/IDE 已支持。
+* compiler-driver feature 隔离 rustc_private；普通 core/工具单元测试无需该 feature。
+  zyn 是共享生成后端的基础依赖；内部 bridge 不建立用户面向的宏 feature 契约。
+* tools/build-toolchain.py 构建 CLI、driver 和匹配的 bridge。bootstrap 授权限于
+  nestrs_driver 构建，不改变全局工具链，也不向应用传播该变量。
+* CLI 按完整编译器身份及 driver、bridge 的联合内容指纹隔离 target；Cargo 保留
+  构建单元复用，rustc incremental 当前关闭，不宣称已有完整增量事务协议。
+* 编译器和 rustdoc 同时获得 bridge 所在目录的 dependency 搜索路径，使没有直接
+  core 依赖的下游也能解码上游 metadata。不能只给 producer 注入一个 extern 别名。
+* rustdoc 经 driver 注入同一 bridge 后转发给固定 sysroot 的真实 rustdoc；不使用
+  拒绝 shim，不静默跳过 doctest。独立 doctest 内新增服务的自动 trait 绑定不经过
+  两阶段 driver，不能把标准声明展开等同于新增接口自动注册。
+* `cargo nestrs init` 面向手动组装后接入 Nestrs 的现有 Rust 项目，初始化或刷新开发
+  环境；默认生成通用 rust-analyzer 项目与设置，只有 `--vscode` 才写 VS Code 配置。
+  init 不创建项目、不添加 Cargo 依赖、不安装编辑器或工具链组件；其他 rust-analyzer
+  LSP 客户端仍需自行加载生成配置，不能承诺所有支持 Rust 的编辑器都自动接入。
+* 未来 `cargo nestrs create` 在 bootstrap 完成后负责创建项目，内部复用初始化能力，
+  直接交付已初始化项目，用户无需再执行 init。create 当前属于规划，本阶段不实现。
+* cargo nestrs init 依据 Cargo artifacts 与真实 rustc 单元生成 rust-project.json，
+  保留依赖重命名/版本、cfg、edition、test、build.rs 环境、OUT_DIR 及过程宏工件。
+  为 core 用户增加编辑器专用的 `nestrs` 宏依赖，使用原版宏服务器。
+  Windows 编辑器路径统一为普通盘符/UNC，与正常文件 URI 对应；不能只改测试 URI
+  规避 verbatim 路径造成的 VFS 身份差异。设备或仅 verbatim 可表示的路径明确拒绝。
+  内部 artifact/缓存身份继续归一化，首次准备与保存检查必须复用同一模型与缓存。
+* cfg 由同一 rustc 按实际参数执行 --print cfg 获取；cfg.setTest=false 和
+  cargo.cfgs=[] 阻止编辑器合成 test、debug_assertions 或 miri 条件。原版
+  rust-analyzer 仍合并 host 默认 cfg，因此 IDE 拒绝 panic=abort、禁用默认 CPU
+  特性等移除默认条件的配置并保留旧模型。debug/release 和增加 CPU 特性可表示；
+  此限制不影响应用 check/build/run。
+* init --vscode 合并 linkedProjects、check override 和宏服务器配置，保留无关设置、
+  JSONC 注释与已有诊断偏好；不新增诊断屏蔽。保存时 init check 成功后刷新模型，
+  失败保留上一份；未保存源码由 rust-analyzer 自身分析。详情见 docs/NESTRS_IDE.md。
+  check.extraEnv 固定实际选定的 rustc、driver、bridge 路径并保留其他用户环境变量。
+* tools/verify-ide.py 已验证真实原版 LSP 的冷启动、字段/工厂类型、补全、定义跳转、
+  未保存编辑、真实错误与恢复，以及 feature、宏生成项与 build.rs 产物；仍不能宣称
+  所有编辑器 UI、重命名操作、属性组合或其他 host 都已验收。
+* native_host、bridge_metadata、rustdoc 集成测试在 Linux/Windows 均启用；前者运行
+  真实 CLI 检查/构建/运行、图副作用隔离与重复导出、IDE 项目生成和配置的保存检查，
+  目录包含空格与中文。项目模型回归不等于完整 LSP 交互验收；不得把 Linux 结果当作
+  Windows 实机结果，实际验收范围须分别记录。
+* 2026-09-28 已实际通过 Windows MSVC workspace check/test、DI 与 56 个 UI 契约、
+  Eager/scope 预热示例及 cleanup、原生集成测试、rustdoc、图 12 条命令和跨 crate
+  6 次 debug/release 运行。原版 rust-analyzer 0.3.3049 的 default/alternate/release
+  完整 LSP 验收通过，使用普通 Windows 文件 URI、未向 RA 父进程额外加入 sysroot/bin。
+  此证据仍不覆盖所有编辑器 UI、重命名操作或其他 host。native-host CI 定义双 host
+  回归，工作流文件已提供不等于对应提交的 GitHub Actions 已成功执行。
+* DI fixture 保留原 52 个 UI 语义基线，加 3 个宏/helper 误用和 1 个导入成功用例。
+  UI 经 CLI 私有 bridge 编译；保留旧错误语义，不批量覆盖 stderr 掩盖退化。
+* tools/verify-graph.py 验证副作用隔离、不同 package/binary 缓存、项目部分失败和全部
+  失败报告、feature 跳过、入口拒绝与文件导出。单图验证失败保留旧输出；项目报告保留
+  已验证图与独立诊断。不能运行原业务入口代替诊断入口。
+
+## 10. 未来生态与命名
+
+* 顶层引导库继续命名 nestrs-bootstrap，不使用暗示底层公共库的 nestrs-common。
+* 未来 bootstrap 对接 logger/config/DI 等生态并聚合相应 features；运行期生态库
+  建立在 core 之上，bootstrap 位于最上层。
+* 本次工具链整合不增加 runtime crate，不提前实现 bootstrap、动态注册、运行期扩图
+  或集合解析。
+
+## 11. 当前说明与历史记录
+
+当前使用和限制以 [Cargo 工具链说明](docs/NESTRS_CARGO_TOOLCHAIN.md) 为准；
+[完整演进方案](docs/NESTRS_COMPILER_TOOLCHAIN_PLAN.md) 记录后续验收。
+阶段 B、独立 codegen 提取、公开薄宏和原生工具属性路线均属于历史记录。
+当前标准宏桥接由 CLI 私有管理，生成后端在 cargo-nestrs，HTML 在 CLI；不能据历史
+文件恢复公开宏依赖、独立后端包、原生展开替换或 core HTML 配置。IDE 以
+[当前接入说明](docs/NESTRS_IDE.md) 和真实 LSP 验证为准。
