@@ -6,6 +6,7 @@
 
 #![feature(rustc_private)]
 
+extern crate rustc_ast;
 extern crate rustc_driver;
 extern crate rustc_hir;
 extern crate rustc_interface;
@@ -18,6 +19,8 @@ extern crate rustc_span;
 mod autobind_codegen;
 #[path = "../compiler/autobind_semantic.rs"]
 mod autobind_semantic;
+#[path = "../compiler/graph_entry.rs"]
+mod graph_entry;
 
 use autobind_codegen::OverlayFileLoader;
 use autobind_semantic::Analysis;
@@ -85,11 +88,21 @@ impl Callbacks for Discover {
         config.file_loader = Some(Box::new(SnapshotLoader(self.sources.clone())));
     }
 
+    fn after_crate_root_parsing(
+        &mut self,
+        compiler: &interface::Compiler,
+        krate: &mut rustc_ast::Crate,
+    ) -> Compilation {
+        graph_entry::prepare(compiler, krate);
+        Compilation::Continue
+    }
+
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
+        graph_entry::validate(tcx);
         self.analysis = Some(autobind_semantic::analyze(tcx));
         Compilation::Stop
     }
@@ -115,11 +128,21 @@ impl Callbacks for Generate {
         });
     }
 
+    fn after_crate_root_parsing(
+        &mut self,
+        compiler: &interface::Compiler,
+        krate: &mut rustc_ast::Crate,
+    ) -> Compilation {
+        graph_entry::prepare(compiler, krate);
+        Compilation::Continue
+    }
+
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
+        graph_entry::validate(tcx);
         self.validation = Some(autobind_semantic::analyze(tcx).and_then(|analysis| {
             let observed = (analysis.providers, analysis.requests, analysis.explicit_bindings);
             if analysis.generated_bindings != 0 || observed != self.expected {
@@ -215,6 +238,23 @@ fn run() -> Result<ExitCode, String> {
     let rustc = args[0].clone();
     let crate_name = flag_value(&args, "--crate-name").map(str::to_owned);
     let uses_core = has_extern(&args, "nestrs_core");
+    let executable = flag_value(&args, "--crate-type")
+        .is_some_and(|kinds| kinds.split(',').any(|kind| kind == "bin"));
+    let graph_binary = if executable {
+        crate_name
+            .as_deref()
+            .map(|name| graph_entry::matches_arguments(name, &args))
+            .transpose()?
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    if graph_binary {
+        graph_entry::invalidate_proof()?;
+    }
+    if graph_binary && !uses_core {
+        return Err("cargo nestrs graph requires the selected binary to depend directly on nestrs-core; refusing to execute an unmodified application entry".into());
+    }
     let is_probe = crate_name.is_none()
         || args
             .iter()
@@ -234,6 +274,11 @@ fn run() -> Result<ExitCode, String> {
         let status = Command::new(&rustc)
             .args(&args[1..])
             .env_remove("RUSTC_BOOTSTRAP")
+            .env_remove("NESTRS_GRAPH_TARGET")
+            .env_remove("NESTRS_GRAPH_BINARY")
+            .env_remove("NESTRS_GRAPH_MANIFEST")
+            .env_remove("NESTRS_GRAPH_SOURCE")
+            .env_remove("NESTRS_GRAPH_PROOF")
             .status()
             .map_err(|error| error.to_string())?;
         return Ok(if status.success() {
@@ -341,6 +386,9 @@ fn run() -> Result<ExitCode, String> {
     .map_err(|error| error.to_string())?;
     if second == ExitCode::SUCCESS {
         validated?;
+        if graph_binary {
+            graph_entry::write_proof()?;
+        }
     }
     Ok(second)
 }

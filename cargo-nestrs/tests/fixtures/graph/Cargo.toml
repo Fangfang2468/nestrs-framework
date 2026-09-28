@@ -1,0 +1,28 @@
+[package]
+name = "nestrs-graph-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+default-run = "alpha"
+
+[workspace]
+members = ["no-core", "other-app", "library-only"]
+default-members = [".", "other-app"]
+
+[features]
+extras = []
+feature-alias = ["extras"]
+broken = []
+
+[[bin]]
+name = "feature_app"
+path = "src/bin/feature_app.rs"
+required-features = ["extras"]
+
+[[bin]]
+name = "compile_error"
+path = "src/bin/compile_error.rs"
+required-features = ["broken"]
+
+[dependencies]
+nestrs-core = { path = "../../../../nestrs-core" }

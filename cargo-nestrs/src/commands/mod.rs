@@ -9,6 +9,8 @@ use std::{
 
 use crate::toolchain::{Toolchain, cargo_program};
 
+mod graph;
+
 const HELP: &str = "Nestrs compiler toolchain
 
 Usage: cargo nestrs <COMMAND> [CARGO OPTIONS] [-- APPLICATION ARGUMENTS]
@@ -18,6 +20,7 @@ Commands:
   build    Build an application with the Nestrs compiler driver
   run      Build and run an application
   test     Build and run unit and integration tests
+  graph    Export project dependency graphs as offline HTML; --bin selects one entry
   doctor   Verify the pinned compiler, rustc-dev and driver installation
 
 Cargo options, including --features, --target, --manifest-path, --locked and
@@ -35,6 +38,7 @@ enum Invocation {
     Help,
     Version,
     Doctor,
+    Graph(Vec<OsString>),
     Cargo {
         command: String,
         args: Vec<OsString>,
@@ -77,6 +81,7 @@ fn execute(args: Vec<OsString>) -> Result<u8, String> {
             Ok(0)
         }
         Invocation::Cargo { command, args } => run_cargo(&command, args),
+        Invocation::Graph(args) => graph::run(args),
     }
 }
 
@@ -97,6 +102,10 @@ fn parse(mut args: Vec<OsString>) -> Result<Invocation, String> {
         "-V" | "--version" => Ok(Invocation::Version),
         "doctor" if args.len() == 1 => Ok(Invocation::Doctor),
         "doctor" => Err("doctor does not take Cargo arguments".into()),
+        "graph" => {
+            args.remove(0);
+            Ok(Invocation::Graph(args))
+        }
         "check" | "build" | "run" | "test" => {
             let command = command.to_owned();
             args.remove(0);

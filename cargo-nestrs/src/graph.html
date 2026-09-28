@@ -1,0 +1,921 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Nestrs · DI 依赖图</title>
+<style>
+:root{color-scheme:dark;--page:#0c111b;--panel:#111925;--raised:#172231;--border:#293548;--text:#e9f0f8;--muted:#a2b0c3;--faint:#77879f;--accent:#66e2d1;--singleton:#92b8ff;--scoped:#c5a2ff;--transient:#f3c87e;--font:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;--mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--page);color:var(--text);font-family:var(--font);font-size:14px}body{padding:28px 32px 20px}button,input{font:inherit}button{cursor:pointer}button:disabled{cursor:default;opacity:.5}button,input{color:var(--text)}button{border:1px solid var(--border);background:var(--raised);border-radius:8px;min-height:40px;padding:9px 13px;transition:background .15s,border-color .15s}button:hover:not(:disabled){background:#233246;border-color:#4b607c}button:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}button[aria-pressed="true"]{color:var(--accent);background:#153632;border-color:#337366}h1,h2,h3,p{margin:0}.mono{font-family:var(--mono)}.eyebrow{color:var(--accent);font-size:11px;font-weight:700;letter-spacing:.16em}.header{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:24px}.brand{display:flex;gap:14px;align-items:center;min-width:0}.brand-mark{flex:none;width:44px;height:44px;border:1px solid #36766e;border-radius:12px;background:#132d2c;color:var(--accent);display:grid;place-items:center}.brand-mark svg{width:26px;height:26px}h1{font-size:25px;font-weight:650;letter-spacing:-.04em;margin-top:5px}.header-caption{color:var(--muted);margin-top:7px;line-height:1.6;font-size:13px}.header-meta{display:flex;gap:24px;align-items:center}.stat{min-width:65px}.stat strong{font-family:var(--mono);font-size:25px;font-weight:500;display:block;line-height:1.2}.stat span{color:var(--muted);font-size:12px;display:block;margin-top:6px}.status-chip{align-items:center;display:inline-flex;gap:7px;color:var(--accent);font-size:12px;white-space:nowrap}.status-dot{width:6px;height:6px;background:var(--accent);border-radius:50%}.workspace{border:1px solid var(--border);border-radius:13px;overflow:hidden;min-width:0;background:var(--panel);box-shadow:0 16px 60px #00000020}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:15px 18px;border-bottom:1px solid var(--border);background:#141d2a}.search-wrap{position:relative;min-width:0;width:340px}.search-label{position:absolute;left:12px;top:13px;color:var(--muted);pointer-events:none}.search-label svg{width:17px;height:17px}.search-wrap input{background:#0e1622;border:1px solid var(--border);border-radius:8px;width:100%;min-height:44px;padding:10px 40px 10px 38px;font-size:13px}.search-wrap input::placeholder{color:#8b9bb1}.search-shortcut{position:absolute;right:13px;top:12px;padding:0 5px;line-height:20px;border:1px solid var(--border);border-radius:4px;color:var(--faint);font-size:12px;pointer-events:none}.search-results{position:absolute;top:51px;left:0;right:0;z-index:20;border:1px solid #3b526c;background:#141f2f;box-shadow:0 14px 40px #0008;border-radius:10px;max-height:410px;overflow:auto;padding:7px}.search-results[hidden]{display:none}.search-summary{padding:8px 9px;color:var(--muted);font-size:12px}.search-result{display:flex;align-items:center;gap:9px;width:100%;text-align:left;border:0;min-height:48px;padding:8px 9px;background:transparent}.search-result-text{min-width:0;flex:1}.search-result-name{display:block;overflow-wrap:anywhere;font:12px/1.5 var(--mono)}.search-result-sub{display:block;font-size:11px;color:var(--muted);margin-top:2px}.search-dot{width:6px;height:6px;border-radius:50%;flex:none}.search-more{width:100%;margin-top:5px}.view-controls{display:flex;gap:7px;align-items:center;flex-wrap:wrap}.control-divider{height:24px;border-left:1px solid var(--border);margin:0 5px}.icon-button{padding:7px;width:40px;display:inline-grid;place-items:center;flex:none}.icon-button svg{width:18px;height:18px}.zoom-value{min-width:42px;text-align:center;color:var(--muted);font:12px var(--mono)}.workspace-body{display:grid;grid-template-columns:minmax(0,1fr) 320px;min-height:570px;height:calc(100vh - 240px);max-height:1000px}.graph-panel{display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}.graph-topline{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:18px 22px 0;z-index:1;pointer-events:none}.graph-topline-label{font-size:11px;color:var(--muted);letter-spacing:.12em;font-weight:650}.legend{display:flex;gap:15px;flex-wrap:wrap;font-size:11px;color:var(--muted)}.legend-item{display:flex;align-items:center;gap:6px}.legend-line{width:16px;height:2px;background:#5f7695;position:relative}.legend-line:after{content:"";position:absolute;right:0;top:-2px;border-left:4px solid #5f7695;border-top:3px solid transparent;border-bottom:3px solid transparent}.legend-dot{width:6px;height:6px;border-radius:50%}.singleton{color:var(--singleton)}.scoped{color:var(--scoped)}.transient{color:var(--transient)}.viewport{flex:1;position:relative;min-height:300px;overflow:hidden;touch-action:none;cursor:grab;background-image:radial-gradient(#33435d80 .75px,transparent .75px);background-size:22px 22px;background-position:11px 11px}.viewport.dragging{cursor:grabbing}.viewport svg{display:block;width:100%;height:100%;position:absolute;inset:0;user-select:none}.graph-footer{padding:11px 20px;display:flex;gap:12px;justify-content:space-between;align-items:center;color:var(--muted);font-size:11px;line-height:1.6;border-top:1px solid #243043;flex-wrap:wrap;background:#101825}.graph-notice{padding:10px 18px;color:#f2d294;background:#332b1c;font-size:12px;line-height:1.6;border-bottom:1px solid #665033}.graph-notice[hidden]{display:none}.empty-graph{position:absolute;inset:0;display:grid;place-content:center;text-align:center;gap:10px;padding:24px;color:var(--muted);pointer-events:none}.empty-graph strong{font-size:17px;color:var(--text)}.empty-graph[hidden]{display:none}.inspector{border-left:1px solid var(--border);background:#111a27;overflow:auto;min-width:0}.inspector-heading{display:flex;align-items:center;justify-content:space-between;padding:19px 21px 16px;border-bottom:1px solid var(--border)}.inspector-heading h2{font-size:13px;font-weight:600}.inspector-id{color:var(--faint);font:12px var(--mono)}.inspector-content{padding:21px}.inspector-empty{color:var(--muted);font-size:13px;line-height:1.8}.detail-title{font:600 18px/1.45 var(--mono);overflow-wrap:anywhere;letter-spacing:-.03em;margin-bottom:11px}.detail-fullname{font:11px/1.75 var(--mono);color:var(--muted);overflow-wrap:anywhere;max-height:118px;overflow:auto;margin-top:12px}.badges{display:flex;gap:6px;flex-wrap:wrap}.badge{display:inline-block;padding:4px 7px;font-size:10px;line-height:1.3;border:1px solid #3b4d66;border-radius:5px;color:var(--muted);max-width:100%;overflow-wrap:anywhere}.badge.singleton{color:var(--singleton);background:#1a2b44;border-color:#354e71}.badge.scoped{color:var(--scoped);background:#2b2240;border-color:#554373}.badge.transient{color:var(--transient);background:#332c21;border-color:#655132}.badge.warning{color:#f3c87e;border-color:#655132}.detail-section{margin-top:23px}.section-heading{font-size:11px;color:var(--muted);letter-spacing:.06em;margin-bottom:10px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px}.section-count{font:11px var(--mono);color:var(--faint)}.detail-grid{display:grid;grid-template-columns:66px minmax(0,1fr);gap:9px 8px;font-size:12px;line-height:1.6}.detail-grid dt{color:var(--muted)}.detail-grid dd{margin:0;overflow-wrap:anywhere}.dependency-list{display:grid;gap:8px}.dependency-card{display:block;width:100%;text-align:left;min-width:0;padding:11px 12px;background:#172231;border:1px solid #2b3a50;border-radius:8px;cursor:pointer}.dependency-card:hover{border-color:#53708e}.dependency-card.absent{cursor:default;border-style:dashed;background:#25231d;border-color:#55482e}.dependency-heading{display:flex;gap:8px;justify-content:space-between;font:600 12px/1.5 var(--mono)}.dependency-slot{font:10px/1.8 var(--mono);color:var(--faint);white-space:nowrap}.dependency-type{font:11px/1.7 var(--mono);color:#c1cddd;overflow-wrap:anywhere;margin-top:6px}.dependency-target{font:11px/1.7 var(--mono);color:var(--accent);overflow-wrap:anywhere;margin-top:2px}.dependency-meta{font-size:10px;color:var(--muted);line-height:1.6;margin-top:5px;overflow-wrap:anywhere}.dependency-absent{color:#edc781;font-size:11px;margin-top:5px}.source{font:11px/1.8 var(--mono);color:var(--muted);overflow-wrap:anywhere;background:#0d1520;border:1px solid #233047;border-radius:7px;padding:11px 12px}.detail-note{color:var(--muted);font-size:11px;line-height:1.8;margin-top:21px;padding-top:15px;border-top:1px solid var(--border)}.panel-button{display:block;width:100%;font-size:12px;margin-top:9px}.footer{display:flex;gap:16px;justify-content:space-between;align-items:center;flex-wrap:wrap;margin-top:15px;color:var(--faint);font-size:11px;line-height:1.7}.footer strong{font-weight:500;color:var(--muted)}.node{cursor:pointer;outline:none}.node .node-frame{fill:#1a2636;stroke:#40536f;stroke-width:1.2;transition:fill .15s,stroke .15s}.node:hover .node-frame{fill:#213249;stroke:#829fbd}.node:focus-visible .node-frame{stroke:var(--accent);stroke-width:3}.node.is-selected .node-frame{fill:#153431;stroke:var(--accent);stroke-width:2}.node.is-related .node-frame{stroke:#478c86}.node.is-muted{opacity:.42}.node.is-missing .node-frame{fill:#2c281f;stroke:#8b734a;stroke-dasharray:5 4}.node-name{fill:var(--text);font-family:var(--mono);font-size:14px;font-weight:600}.node-kind{fill:#b2bfd0;font-family:var(--font);font-size:11px}.node-id{fill:#91a0b4;font-family:var(--mono);font-size:10px}.node-key{fill:#d7c6ef;font-family:var(--mono);font-size:10px}.node-badge{font-family:var(--mono);font-size:10px}.edge{fill:none;stroke:#526983;stroke-width:1.4;opacity:.75}.edge.is-related{stroke:var(--accent);opacity:.9;stroke-width:1.8}.edge.is-muted{opacity:.13}.edge.is-optional{stroke-dasharray:5 4}.edge-count{fill:#b4c7db;stroke:var(--panel);stroke-width:4px;paint-order:stroke;font:10px var(--mono);pointer-events:none}.edge-count.is-muted{opacity:.2}.node-missing-name{fill:#e5c589;font:12px var(--mono)}
+@media(min-width:1700px){body{padding:32px 48px}.workspace-body{grid-template-columns:minmax(0,1fr) 360px}}
+@media(max-width:1100px){body{padding:22px 20px 16px}.header-meta{gap:15px}.status-chip{display:none}.workspace-body{grid-template-columns:minmax(0,1fr) 290px}.toolbar{gap:10px;padding:12px}.search-wrap{width:290px}.view-controls{gap:4px}.view-controls>button{padding:8px 10px;font-size:12px}.control-divider{margin:0 2px}.graph-topline{padding:15px 15px 0}.legend{gap:8px}}
+@media(max-width:800px){body{padding:18px 12px}.header{gap:16px;margin-bottom:18px;align-items:flex-start}.brand{gap:10px}.brand-mark{width:36px;height:36px;border-radius:9px}.brand-mark svg{width:22px;height:22px}.eyebrow{font-size:9px}h1{font-size:21px}.header-caption{font-size:11px;max-width:290px}.header-meta{gap:10px}.stat{min-width:45px}.stat strong{font-size:20px}.stat span{font-size:10px}.toolbar{flex-wrap:wrap;gap:12px}.search-wrap{width:100%}.view-controls{width:100%;justify-content:space-between;gap:5px}.workspace-body{display:flex;flex-direction:column;height:auto;max-height:none;min-height:0}.graph-panel{height:580px}.inspector{border-left:0;border-top:1px solid var(--border);max-height:580px}.inspector-content{padding:18px}.inspector-heading{padding:16px 18px}.detail-section{margin-top:18px}.dependency-list{grid-template-columns:repeat(2,minmax(0,1fr))}.graph-footer{padding:10px 13px}.footer{font-size:10px;gap:5px}.search-results{max-height:340px}.icon-button,button{min-height:44px}.icon-button{width:44px}}
+@media(max-width:430px){.header-meta .stat:last-of-type{display:none}.brand-mark{display:none}.graph-panel{height:490px}.graph-topline{gap:10px}.graph-topline-label{font-size:10px}.legend{font-size:10px;gap:10px}.dependency-list{grid-template-columns:1fr}.view-controls>button{font-size:11px;padding:8px}.zoom-value{min-width:32px;font-size:10px}.control-divider{display:none}.graph-footer span:last-child{display:none}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;scroll-behavior:auto!important}}
+.project-panel{border:1px solid var(--border);border-radius:12px;background:var(--panel);padding:18px;margin-bottom:18px}.project-panel[hidden]{display:none}.project-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}.project-heading h2{font-size:15px;line-height:1.6;overflow-wrap:anywhere}.project-summary{color:var(--muted);line-height:1.7;font-size:12px;margin-top:5px}.entry-select{display:flex;gap:10px;align-items:center;flex:none}.entry-select label{font-size:12px;color:var(--muted)}select{font:inherit;color:var(--text);background:#172231;border:1px solid #40536f;border-radius:8px;min-height:44px;padding:8px 32px 8px 12px;max-width:310px}select:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.entry-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-top:16px;max-height:330px;overflow:auto;padding:3px}.entry-card{border:1px solid var(--border);border-radius:9px;background:#141e2c;min-width:0;overflow:hidden}.entry-card[data-status="error"]{border-color:#85554c}.entry-card[data-status="skipped"]{border-color:#705e3f}.entry-card.is-active{box-shadow:inset 0 0 0 1px var(--accent)}.entry-open{width:100%;border:0;background:transparent;border-radius:0;text-align:left;min-height:76px;padding:13px}.entry-card-heading{display:flex;align-items:center;justify-content:space-between;gap:10px}.entry-name{font:600 13px/1.6 var(--mono);overflow-wrap:anywhere}.entry-status{font-size:11px;white-space:nowrap;color:var(--accent)}.entry-card[data-status="error"] .entry-status{color:#ffb4a8}.entry-card[data-status="skipped"] .entry-status{color:#f3c87e}.entry-meta{display:block;font-size:11px;line-height:1.8;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}.entry-features{padding:0 13px 10px}.entry-diagnostic{border-top:1px solid var(--border);padding:10px 13px;font-size:12px}.entry-diagnostic summary{cursor:pointer;min-height:24px;line-height:24px;color:#ffcdc4}.entry-card[data-status="skipped"] summary{color:#f3c87e}.entry-diagnostic pre,.diagnostic-text{font:11px/1.8 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;color:#d3deec;margin:10px 0 0;max-height:260px;overflow:auto}.status-chip.is-partial{color:#f3c87e}.status-chip.is-partial .status-dot{background:#f3c87e}.entry-band-title{fill:#b8d7d3;font:600 12px var(--mono)}.entry-band-border{fill:#16223144;stroke:#38504e;stroke-dasharray:5 5;pointer-events:none}.badge.shared{color:var(--accent);border-color:#337366}.project-note{font-size:11px;color:var(--muted);line-height:1.8;margin-top:12px}.entry-context{color:var(--accent);font:12px/1.7 var(--mono);overflow-wrap:anywhere;margin-bottom:12px}.project-mode .workspace-body{height:calc(100vh - 450px);min-height:570px}.project-mode .status-chip{max-width:210px;white-space:normal;line-height:1.7}.project-mode .node-id{font-size:10px}
+@media(max-width:800px){.project-panel{padding:14px}.project-heading{flex-direction:column;gap:12px}.entry-select{width:100%}.entry-select select{flex:1;min-width:0;max-width:none}.entry-cards{grid-template-columns:repeat(auto-fit,minmax(220px,1fr));max-height:280px}.project-mode .workspace-body{height:auto;min-height:0}.entry-diagnostic summary{min-height:36px;line-height:36px}.entry-open{min-height:82px}}
+.node.is-projection .node-frame{fill:#242039;stroke:#9b86bd;stroke-width:1.5}.node.is-projection:hover .node-frame{fill:#302744;stroke:#d0b5f2}.node.is-projection.is-selected .node-frame{fill:#193734;stroke:var(--accent);stroke-width:2}.node.is-projection .node-name{fill:#e2cffb}.node-projection-title{fill:#c8b1ea;font:600 10px var(--font)}.legend-interface{width:9px;height:9px;border:1.5px solid #c5a2ff;transform:rotate(45deg)}.legend-projection{width:19px;border-top:2px dashed #b39ccc}.legend-absent{width:12px;height:9px;border:1px dashed #d4b475;border-radius:2px}.edge.is-projection{stroke:#a58bbd;stroke-dasharray:7 5;opacity:.9}.edge.is-optional{stroke-dasharray:2 4}.edge-label{fill:#bccbdd;stroke:#111925;stroke-width:4px;paint-order:stroke;font:10px var(--mono);pointer-events:none}.edge-label.projection-label{fill:#d1b7ee;font-family:var(--font)}.edge-label.is-muted{opacity:.16}.edge-label.is-related{fill:#b8f5e8}.badge.projection{color:#dbc1f8;background:#2b2240;border-color:#675080}.search-dot.projection{border:1px solid #d1b7ee;background:transparent!important;border-radius:0;transform:rotate(45deg);width:8px;height:8px}.search-dot.missing{border:1px dashed #edc781;background:transparent!important;width:8px;height:8px}.mapping-note{font-size:12px;line-height:1.8;color:var(--muted);margin-top:12px}.mapping-key{font:12px/1.8 var(--mono);overflow-wrap:anywhere;color:#e0cef6}.projection-card{border-color:#66517d}.graph-topline{padding-bottom:9px}.graph-topline-label{letter-spacing:.04em}.project-mode .graph-topline-label{font-size:10px}.node-kind{font-size:10px}@media(max-width:800px){.projection-stat{display:none}.legend{row-gap:9px}.graph-topline{gap:12px}.graph-topline-label{font-size:10px}}
+</style>
+</head>
+<body>
+<header class="header">
+  <div class="brand">
+    <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 28 28" fill="none"><path d="M7 7h14M7 7v14M7 7l14 14" stroke="currentColor" stroke-width="1.4"/><rect x="3.5" y="3.5" width="7" height="7" rx="2" fill="#132d2c" stroke="currentColor"/><rect x="17.5" y="3.5" width="7" height="7" rx="2" fill="#132d2c" stroke="currentColor"/><rect x="17.5" y="17.5" width="7" height="7" rx="2" fill="#132d2c" stroke="currentColor"/><rect x="3.5" y="17.5" width="7" height="7" rx="2" fill="#132d2c" stroke="currentColor"/></svg></div>
+    <div><div class="eyebrow">NESTRS / DEPENDENCY EXPLORER</div><h1 id="page-title">服务依赖图</h1><p id="header-caption" class="header-caption">从服务入口出发，看清每一条依赖关系。</p></div>
+  </div>
+  <div class="header-meta">
+    <div class="stat"><strong id="provider-count">—</strong><span>服务声明</span></div>
+    <div class="stat"><strong id="dependency-count">—</strong><span>依赖输入</span></div>
+    <div class="stat projection-stat"><strong id="projection-count">—</strong><span>接口请求</span></div>
+    <div class="stat"><strong id="optional-count">—</strong><span>可选缺席</span></div>
+    <div id="validation-status" class="status-chip"><span class="status-dot"></span><span id="validation-label">结构已验证 · 图已冻结</span></div>
+  </div>
+</header>
+<section id="project-panel" class="project-panel" aria-labelledby="project-title" hidden>
+  <div class="project-heading">
+    <div><h2 id="project-title">项目总览</h2><p id="project-summary" class="project-summary" aria-live="polite"></p></div>
+    <div class="entry-select"><label for="entry-filter">查看入口</label><select id="entry-filter"><option value="">项目总览 · 全部入口</option></select></div>
+  </div>
+  <div id="entry-cards" class="entry-cards" aria-label="项目入口及结构验证结果"></div>
+  <p class="project-note">各入口单独编译与校验。总览按入口分区，不合并注册；相同声明可被多个入口复用，独立程序不共享运行时实例。</p>
+</section>
+<main class="workspace">
+  <div class="toolbar">
+    <div class="search-wrap">
+      <label class="search-label" for="service-search"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg></label>
+      <input id="service-search" type="search" autocomplete="off" spellcheck="false" placeholder="搜索服务、接口、key…" aria-label="搜索服务、请求接口、依赖类型或 key" aria-controls="search-results" aria-expanded="false">
+      <kbd class="search-shortcut" aria-hidden="true">/</kbd>
+      <div id="search-results" class="search-results" aria-label="服务搜索结果" hidden></div>
+    </div>
+    <div class="view-controls" aria-label="依赖图视图控制">
+      <button id="overview-button" type="button" aria-pressed="true">全图概览</button>
+      <button id="related-button" type="button" aria-pressed="false">关联视图</button>
+      <span class="control-divider" aria-hidden="true"></span>
+      <button id="zoom-out" class="icon-button" type="button" aria-label="缩小依赖图" title="缩小（−）"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14"/></svg></button>
+      <span id="zoom-value" class="zoom-value" aria-label="画布缩放比例">100%</span>
+      <button id="zoom-in" class="icon-button" type="button" aria-label="放大依赖图" title="放大（+）"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14M12 5v14"/></svg></button>
+      <button id="fit-button" class="icon-button" type="button" aria-label="适配整个可视依赖图" title="适配画布（0）"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5"/></svg></button>
+    </div>
+  </div>
+  <div class="workspace-body">
+    <section class="graph-panel" aria-label="依赖关系画布">
+      <div id="graph-notice" class="graph-notice" role="status" hidden></div>
+      <div class="graph-topline"><span class="graph-topline-label">消费者 → 请求接口 → 选中实现</span><div class="legend" aria-label="节点与连线图例"><span class="legend-item"><span class="legend-interface"></span>接口请求</span><span class="legend-item"><span class="legend-projection"></span>选中实现</span><span class="legend-item"><span class="legend-absent"></span>可选缺席</span><span class="legend-item"><span class="legend-dot" style="background:var(--singleton)"></span>Singleton</span><span class="legend-item"><span class="legend-dot" style="background:var(--scoped)"></span>Scoped</span><span class="legend-item"><span class="legend-dot" style="background:var(--transient)"></span>Transient</span></div></div>
+      <div id="graph-viewport" class="viewport" tabindex="0" role="region" aria-label="交互式依赖图。方向键平移，加减号缩放，0 适配。点击服务或按 Tab 选择服务。">
+        <svg id="graph-svg" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="服务与依赖连线">
+          <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#7690ae" stroke-width="1.5"/></marker><marker id="arrow-active" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#66e2d1" stroke-width="1.5"/></marker></defs>
+          <g id="graph-world"><g id="graph-edges"></g><g id="graph-nodes"></g></g>
+        </svg>
+        <div id="empty-graph" class="empty-graph" hidden><strong>还没有服务声明</strong><span>当前冻结图为空，注册服务后重新构建即可查看。</span></div>
+      </div>
+      <div class="graph-footer"><span id="visible-summary" aria-live="polite">正在读取依赖图…</span><span>拖动画布 · 滚轮缩放 · 点击节点查看详情</span></div>
+    </section>
+    <aside class="inspector" aria-label="所选服务或接口请求的详细信息">
+      <div class="inspector-heading"><h2>节点详情</h2><span id="inspector-id" class="inspector-id">选择一个节点</span></div>
+      <div id="inspector-content" class="inspector-content"><p class="inspector-empty">点击服务或接口请求，查看声明、消费槽位与选中实现。</p></div>
+    </aside>
+  </div>
+</main>
+<footer class="footer"><span><strong>Nestrs Core</strong> · 构建时的依赖结构快照，不反映实例运行状态。</span><span>服务节点代表 provider；接口请求来自依赖输入，不创建实例。此文件可离线打开。</span></footer>
+<noscript><p class="graph-notice">请在浏览器中启用 JavaScript 以查看交互式依赖图。全部图数据已嵌入此 HTML 文件，无需联网。</p></noscript>
+<script type="application/json" id="graph-data">/*NESTRS_GRAPH_DATA*/</script>
+<script>
+"use strict";
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const MAX_VISIBLE = 180;
+  const MAX_MISSING = 40;
+  const MAX_EDGES = 1200;
+  const PAGE_SIZE = 40;
+  const NODE_WIDTH = 224;
+  const NODE_HEIGHT = 88;
+  const COLUMN_GAP = 174;
+  const ROW_GAP = 18;
+  const COLORS = { Singleton: "#92b8ff", Scoped: "#c5a2ff", Transient: "#f3c87e" };
+  const KINDS = { class: "Class", "sync factory": "同步 Factory", "async factory": "异步 Factory" };
+  let data;
+  try {
+    data = JSON.parse($("graph-data").textContent);
+    if (!(data.version === 1 && Array.isArray(data.nodes)) && !(data.version === 2 && data.kind === "project" && Array.isArray(data.entries))) throw new Error("不支持的图数据格式");
+  } catch (error) {
+    $("graph-notice").hidden = false;
+    $("graph-notice").textContent = "依赖图读取失败：" + error.message;
+    $("visible-summary").textContent = "无法显示依赖图";
+    return;
+  }
+  const project = data.version === 2 ? data : null;
+  const entries = project ? project.entries : [];
+  const entryById = new Map(entries.map((entry) => [entry.id, entry]));
+  const allNodes = [];
+  const declarations = new Map();
+  const nodeIdentity = (entry, id) => JSON.stringify([entry.id, id]);
+  if (project) {
+    for (const entry of entries) {
+      if (entry.status !== "ok") continue;
+      for (const original of entry.graph.nodes) {
+        const identity = JSON.stringify([original.name, original.key === null ? null : [original.key.kind, original.key.value], original.kind, original.lifetime, original.source.file, original.source.line, original.source.column]);
+        if (!declarations.has(identity)) declarations.set(identity, new Set());
+        declarations.get(identity).add(entry.id);
+        allNodes.push({ ...original, id: nodeIdentity(entry, original.id), localId: original.id, entryId: entry.id, declarationIdentity: identity,
+          dependencies: original.dependencies.map((dep) => ({ ...dep, target: dep.target === null ? null : nodeIdentity(entry, dep.target) })) });
+      }
+    }
+  } else for (const node of data.nodes) allNodes.push(node);
+  let nodes = allNodes;
+  let visualNodes = [];
+  let visualEdges = [];
+  const byId = new Map();
+  const dependents = new Map();
+  const children = new Map();
+  const parents = new Map();
+  const searchText = new Map();
+  const inputTargets = new Map();
+  const keyLabel = (key) => key === null ? "无 key" : key.kind === "named" ? JSON.stringify(key.value) : String(key.value);
+  const providerId = (node) => node.localId === undefined ? node.id : node.localId;
+  const entryLabel = (entry) => entry.package + " / " + entry.binary;
+  const inputIdentity = (node, dep) => JSON.stringify([node.id, dep.slot]);
+  const nodeKind = (node) => node.projection ? "projection" : node.missing ? "missing" : "provider";
+  function indexNodes() {
+    byId.clear(); dependents.clear(); searchText.clear(); inputTargets.clear(); children.clear(); parents.clear();
+    visualNodes = nodes.slice(); visualEdges = [];
+    let slotCount = 0;
+    let absentCount = 0;
+    let projectionCount = 0;
+    for (const node of nodes) { byId.set(node.id, node); dependents.set(node.id, []); }
+    for (const node of nodes) {
+      const seen = new Set();
+      for (const dep of node.dependencies) {
+        slotCount += 1;
+        const selected = dep.target === null ? null : byId.get(dep.target);
+        let target = dep.target;
+        if (!selected) {
+          absentCount += 1;
+          target = "missing-" + inputIdentity(node, dep);
+          const missing = { id: target, name: dep.requested, label: dep.requestedLabel, key: dep.key, entryId: node.entryId, missing: true, sourceId: node.id, slot: dep.slot, input: dep, dependencies: [] };
+          byId.set(target, missing); visualNodes.push(missing);
+        } else {
+          if (!seen.has(dep.target)) { dependents.get(dep.target).push(node.id); seen.add(dep.target); }
+          // Both names come from Rust type_name: aliases are already normalized.
+          // A selected concrete type differing from the request is a typed projection.
+          if (dep.requested !== selected.name) {
+            target = "request-" + JSON.stringify([node.entryId ?? null, "request", node.id, dep.slot]);
+            if (!byId.has(target)) {
+              const mapping = { id: target, name: dep.requested, label: dep.requestedLabel, key: dep.key, entryId: node.entryId, projection: true, targetId: dep.target, consumerId: node.id, slot: dep.slot, input: dep, inputs: [], dependencies: [] };
+              byId.set(target, mapping); visualNodes.push(mapping); projectionCount += 1;
+              visualEdges.push({ source: target, target: dep.target, kind: "projection", optional: false, mapping });
+            }
+            byId.get(target).inputs.push({ consumerId: node.id, dependency: dep });
+          }
+        }
+        inputTargets.set(inputIdentity(node, dep), target);
+        visualEdges.push({ source: node.id, target, kind: "input", optional: dep.optional, dependency: dep });
+      }
+    }
+    for (const node of visualNodes) { children.set(node.id, new Set()); parents.set(node.id, new Set()); }
+    for (const edge of visualEdges) { children.get(edge.source).add(edge.target); parents.get(edge.target).add(edge.source); }
+    for (const node of visualNodes) {
+      const text = [node.name, node.label, keyLabel(node.key)];
+      if (project) text.push(entryLabel(entryById.get(node.entryId)));
+      if (node.projection) {
+        text.push("接口请求", byId.get(node.targetId).name);
+        for (const input of node.inputs) text.push(input.dependency.label, "slot " + input.dependency.slot);
+      } else if (node.missing) text.push("optional 缺席 未注册", node.input.label, "slot " + node.slot);
+      else {
+        text.push(node.lifetime, node.kind, "#" + providerId(node));
+        for (const dep of node.dependencies) text.push(dep.label, dep.requested, keyLabel(dep.key));
+      }
+      searchText.set(node.id, text.join(" ").toLocaleLowerCase());
+    }
+    $("provider-count").textContent = nodes.length.toLocaleString();
+    $("dependency-count").textContent = slotCount.toLocaleString();
+    $("optional-count").textContent = absentCount.toLocaleString();
+    $("projection-count").textContent = projectionCount.toLocaleString();
+  }
+  indexNodes();
+  const state = { entryId: null, bands: [], selected: null, mode: "overview", visible: new Set(), rendered: [], edges: [], positions: new Map(), bounds: { width: 1, height: 1 }, scale: 1, x: 0, y: 0, autoFit: true, searchLimit: PAGE_SIZE, dependencyLimit: PAGE_SIZE };
+  const viewport = $("graph-viewport");
+  const world = $("graph-world");
+  const nodeElements = new Map();
+  const edgeElements = [];
+  const html = (tag, className, text) => {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (text !== undefined) element.textContent = text;
+    return element;
+  };
+  const svg = (tag, attributes, text) => {
+    const element = document.createElementNS(SVG_NS, tag);
+    for (const [name, value] of Object.entries(attributes || {})) element.setAttribute(name, String(value));
+    if (text !== undefined) element.textContent = text;
+    return element;
+  };
+  const truncate = (text, limit) => {
+    const characters = Array.from(text);
+    return characters.length > limit ? characters.slice(0, limit - 1).join("") + "…" : text;
+  };
+  const lifetimeClass = (lifetime) => lifetime.toLowerCase();
+  function initializeProject() {
+    if (!project) return;
+    document.body.classList.add("project-mode");
+    $("project-panel").hidden = false;
+    $("page-title").textContent = "项目依赖图";
+    $("header-caption").textContent = "从整个项目出发，按程序入口查看服务依赖与诊断。";
+    $("project-title").textContent = project.packages.map((pkg) => pkg.name).join(" · ") || "项目总览";
+    const valid = entries.filter((entry) => entry.status === "ok").length;
+    const errors = entries.filter((entry) => entry.status === "error").length;
+    const skipped = entries.filter((entry) => entry.status === "skipped").length;
+    const shared = Array.from(declarations.values()).filter((owners) => owners.size > 1).length;
+    $("project-summary").textContent = entries.length + " 个入口 · " + valid + " 个结构有效 · " + errors + " 个失败 · " + skipped + " 个跳过" + (shared ? " · " + shared + " 个声明在多个入口中出现" : "");
+    $("validation-status").classList.toggle("is-partial", errors > 0 || skipped > 0 || !entries.length);
+    $("validation-label").textContent = valid === entries.length && valid > 0 ? "所有入口结构已验证" : valid + " / " + entries.length + " 入口结构已验证";
+    const labels = { ok: "结构有效", error: "导出失败", skipped: "已跳过" };
+    for (const entry of entries) {
+      const option = html("option", "", entryLabel(entry) + " · " + labels[entry.status]);
+      option.value = entry.id;
+      $("entry-filter").append(option);
+      const card = html("article", "entry-card");
+      card.dataset.entryId = entry.id;
+      card.dataset.status = entry.status;
+      const button = html("button", "entry-open");
+      button.type = "button";
+      button.setAttribute("aria-pressed", "false");
+      button.setAttribute("aria-label", "查看 " + entryLabel(entry) + "，" + labels[entry.status]);
+      const heading = html("span", "entry-card-heading");
+      heading.append(html("span", "entry-name", entry.binary), html("span", "entry-status", labels[entry.status]));
+      const count = entry.status === "ok" ? entry.graph.nodes.length + " 个服务 · " + entry.graph.nodes.reduce((sum, node) => sum + node.dependencies.length, 0) + " 个输入" : entry.status === "skipped" ? "未纳入本次图" : "此入口未生成有效图";
+      button.append(heading, html("span", "entry-meta", entry.package + " · " + count));
+      button.addEventListener("click", () => chooseEntry(entry.id));
+      card.append(button);
+      if (entry.requiredFeatures.length) card.append(html("p", "entry-meta entry-features", "所需 feature：" + entry.requiredFeatures.join(", ")));
+      if (entry.diagnostic) {
+        const diagnostic = html("details", "entry-diagnostic");
+        diagnostic.append(html("summary", "", entry.status === "error" ? "查看错误诊断" : "查看跳过原因"), html("pre", "", entry.diagnostic));
+        card.append(diagnostic);
+      }
+      $("entry-cards").append(card);
+    }
+    $("entry-filter").addEventListener("change", () => chooseEntry($("entry-filter").value || null));
+  }
+  function chooseEntry(id) {
+    state.entryId = id;
+    $("entry-filter").value = id || "";
+    for (const card of $("entry-cards").children) {
+      const active = card.dataset.entryId === id;
+      card.classList.toggle("is-active", active);
+      card.querySelector("button").setAttribute("aria-pressed", String(active));
+    }
+    nodes = id === null ? allNodes : allNodes.filter((node) => node.entryId === id);
+    indexNodes();
+    state.selected = null;
+    state.mode = "overview";
+    state.searchLimit = PAGE_SIZE;
+    $("overview-button").setAttribute("aria-pressed", "true");
+    $("related-button").setAttribute("aria-pressed", "false");
+    $("related-button").disabled = true;
+    closeSearch(); buildView(); renderInspector();
+  }
+  function wrapNodeLabel(text) {
+    const lines = [""];
+    let width = 0;
+    for (const character of text) {
+      const characterWidth = character.codePointAt(0) > 0x2ff ? 2 : 1;
+      if (width + characterWidth > 22) {
+        if (lines.length === 2) { lines[1] = Array.from(lines[1]).slice(0, -1).join("") + "…"; break; }
+        lines.push("");
+        width = 0;
+      }
+      lines[lines.length - 1] += character;
+      width += characterWidth;
+    }
+    return lines;
+  }
+  function reachable(start, direction, limit = Infinity) {
+    const visited = new Set();
+    const queued = new Set([start]);
+    const queue = [start];
+    const enqueue = (id) => {
+      if (id !== null && !queued.has(id) && queue.length < limit) { queued.add(id); queue.push(id); }
+    };
+    for (let head = 0; head < queue.length && visited.size < limit; head += 1) {
+      const id = queue[head];
+      if (!byId.has(id)) continue;
+      visited.add(id);
+      if (direction !== "up") for (const target of children.get(id)) enqueue(target);
+      if (direction !== "down") for (const parent of parents.get(id)) enqueue(parent);
+    }
+    return visited;
+  }
+  function relatedIds(start, limit) {
+    const downstream = reachable(start, "down", limit).values();
+    const upstream = reachable(start, "up", limit).values();
+    const result = new Set();
+    let down = downstream.next();
+    let up = upstream.next();
+    while (result.size < limit && (!down.done || !up.done)) {
+      if (!down.done) { result.add(down.value); down = downstream.next(); }
+      if (result.size < limit && !up.done) { result.add(up.value); up = upstream.next(); }
+    }
+    return result;
+  }
+  function pickVisible() {
+    if (state.mode === "related" && state.selected !== null) return relatedIds(state.selected, MAX_VISIBLE);
+    if (visualNodes.length <= MAX_VISIBLE) return new Set(visualNodes.map((node) => node.id));
+    if (state.selected !== null) return relatedIds(state.selected, MAX_VISIBLE);
+    const visible = new Set();
+    const queue = [];
+    const queued = new Set();
+    for (const node of visualNodes) if (!parents.get(node.id).size) { queue.push(node.id); queued.add(node.id); }
+    for (let head = 0; head < queue.length && visible.size < MAX_VISIBLE; head += 1) {
+      const id = queue[head]; visible.add(id);
+      for (const target of children.get(id)) if (!queued.has(target)) { queue.push(target); queued.add(target); }
+    }
+    for (const node of visualNodes) { if (visible.size >= MAX_VISIBLE) break; visible.add(node.id); }
+    return visible;
+  }
+  function buildView() {
+    state.visible = pickVisible();
+    let missingCount = 0;
+    const rendered = [];
+    for (const node of visualNodes) {
+      if (!state.visible.has(node.id)) continue;
+      if (node.missing && missingCount >= MAX_MISSING && node.id !== state.selected) { state.visible.delete(node.id); continue; }
+      rendered.push(node);
+      if (node.missing) missingCount += 1;
+    }
+    const edges = [];
+    let omittedEdges = 0;
+    for (const edge of visualEdges) {
+      if (!state.visible.has(edge.source)) continue;
+      if (!state.visible.has(edge.target) || edges.length >= MAX_EDGES) { omittedEdges += 1; continue; }
+      edges.push(edge);
+    }
+    state.rendered = rendered; state.edges = edges;
+    const notices = [];
+    if (visualNodes.length > MAX_VISIBLE) notices.push("大图浏览：单次最多展示 " + MAX_VISIBLE + " 个节点（服务、接口请求与缺席输入）。搜索可访问全部节点，并切换到局部依赖图。");
+    if (omittedEdges > 0) notices.push("当前画布未绘制 " + omittedEdges + " 条连线；节点详情保留完整的依赖输入与选中实现。");
+    $("graph-notice").hidden = notices.length === 0;
+    $("graph-notice").textContent = notices.join(" ");
+    const providerCount = rendered.filter((node) => !node.projection && !node.missing).length;
+    const mappingCount = rendered.filter((node) => node.projection).length;
+    $("visible-summary").textContent = "显示 " + providerCount + " / " + nodes.length + " 个服务 · " + mappingCount + " 个接口请求" + (missingCount ? " · " + missingCount + " 个可选缺席输入" : "") + (state.selected !== null ? " · 青色为关联路径" : "");
+    $("empty-graph").hidden = nodes.length !== 0;
+    if (project) {
+      const entry = entryById.get(state.entryId);
+      const validEmpty = entry ? entry.status === "ok" : entries.some((item) => item.status === "ok");
+      $("empty-graph").querySelector("strong").textContent = validEmpty ? "当前入口没有服务声明" : "当前没有可展示的有效图";
+      $("empty-graph").querySelector("span").textContent = entry && entry.status !== "ok" ? "查看入口诊断，或切换到其他入口。" : validEmpty ? "结构检查已通过，但当前选择未收集到服务声明。" : "各入口的失败或跳过原因列在上方，点击入口可查看详情。";
+      $("visible-summary").textContent = (entry ? entryLabel(entry) : "项目总览 · 各入口独立") + " · " + $("visible-summary").textContent;
+    }
+    layout(); draw(); highlight(); fit();
+  }
+  function layout() {
+    state.bands = [];
+    state.edgeRoutes = new Map();
+    if (!project) {
+      const result = layoutGraph(state.rendered, state.edges);
+      state.positions = result.positions; state.bounds = result.bounds; state.edgeRoutes = result.edgeRoutes;
+      return;
+    }
+    state.positions = new Map();
+    let height = 0;
+    let width = 1;
+    for (const entry of entries) {
+      const group = state.rendered.filter((node) => node.entryId === entry.id);
+      if (!group.length) continue;
+      const members = new Set(group.map((node) => node.id));
+      const edges = state.edges.filter((edge) => members.has(edge.source));
+      const result = layoutGraph(group, edges);
+      const top = height + 40;
+      for (const [id, position] of result.positions) state.positions.set(id, { x: position.x + 16, y: position.y + top });
+      for (const [edge, route] of result.edgeRoutes) state.edgeRoutes.set(edge, { y: route.y + top, lane: route.lane });
+      state.bands.push({ entry, y: height, width: result.bounds.width + 32, height: result.bounds.height + 56 });
+      width = Math.max(width, result.bounds.width + 32);
+      height += result.bounds.height + 82;
+    }
+    state.bounds = { width, height: Math.max(1, height - 26) };
+  }
+  function layoutGraph(rendered, edges) {
+    const incoming = new Map();
+    const outgoing = new Map();
+    const indegree = new Map();
+    const rank = new Map();
+    for (const node of rendered) { incoming.set(node.id, []); outgoing.set(node.id, []); indegree.set(node.id, 0); rank.set(node.id, 0); }
+    for (const edge of edges) {
+      outgoing.get(edge.source).push(edge.target);
+      incoming.get(edge.target).push(edge.source);
+      indegree.set(edge.target, indegree.get(edge.target) + 1);
+    }
+    const queue = [];
+    for (const node of rendered) if (indegree.get(node.id) === 0) queue.push(node.id);
+    for (let head = 0; head < queue.length; head += 1) {
+      const source = queue[head];
+      for (const target of outgoing.get(source)) {
+        rank.set(target, Math.max(rank.get(target), rank.get(source) + 1));
+        indegree.set(target, indegree.get(target) - 1);
+        if (indegree.get(target) === 0) queue.push(target);
+      }
+    }
+    const layers = [];
+    for (const node of rendered) {
+      const index = rank.get(node.id);
+      if (!layers[index]) layers[index] = [];
+      layers[index].push(node.id);
+    }
+    const order = new Map();
+    for (const layer of layers) layer.forEach((id, index) => order.set(id, index));
+    const reorder = (layer, neighbors) => {
+      const scores = new Map();
+      for (const id of layer) {
+        const related = neighbors.get(id);
+        let sum = 0;
+        for (const neighbor of related) sum += order.get(neighbor);
+        scores.set(id, related.length ? sum / related.length : order.get(id));
+      }
+      layer.sort((left, right) => scores.get(left) - scores.get(right) || order.get(left) - order.get(right));
+      layer.forEach((id, index) => order.set(id, index));
+    };
+    for (let pass = 0; pass < 4; pass += 1) {
+      for (let index = 1; index < layers.length; index += 1) reorder(layers[index], incoming);
+      for (let index = layers.length - 2; index >= 0; index -= 1) reorder(layers[index], outgoing);
+    }
+    let maxRows = 1;
+    for (const layer of layers) maxRows = Math.max(maxRows, layer.length);
+    const height = maxRows * (NODE_HEIGHT + ROW_GAP) - ROW_GAP;
+    const positions = new Map();
+    layers.forEach((layer, column) => {
+      const layerHeight = layer.length * (NODE_HEIGHT + ROW_GAP) - ROW_GAP;
+      layer.forEach((id, row) => positions.set(id, { x: column * (NODE_WIDTH + COLUMN_GAP), y: (height - layerHeight) / 2 + row * (NODE_HEIGHT + ROW_GAP) }));
+    });
+    // Edges skipping a column must not cross the cards in intermediate columns.
+    // Route them through the column gutters and individual lanes below all cards.
+    const edgeRoutes = new Map();
+    for (const edge of edges) {
+      if (rank.get(edge.target) - rank.get(edge.source) <= 1) continue;
+      const lane = edgeRoutes.size;
+      edgeRoutes.set(edge, { y: height + 38 + lane * 34, lane });
+    }
+    const routedHeight = edgeRoutes.size ? height + 58 + (edgeRoutes.size - 1) * 34 : height;
+    const bounds = { width: Math.max(1, layers.length * (NODE_WIDTH + COLUMN_GAP) - COLUMN_GAP), height: Math.max(1, routedHeight) };
+    return { positions, bounds, edgeRoutes };
+  }
+  function draw() {
+    const edgeContainer = $("graph-edges");
+    const nodeContainer = $("graph-nodes");
+    edgeContainer.replaceChildren();
+    nodeContainer.replaceChildren();
+    nodeElements.clear();
+    edgeElements.length = 0;
+    for (const band of state.bands) {
+      const group = svg("g", { class: "entry-band", "data-entry-id": band.entry.id });
+      group.append(svg("rect", { class: "entry-band-border", x: 0, y: band.y, width: band.width, height: band.height, rx: 12 }));
+      group.append(svg("text", { class: "entry-band-title", x: 16, y: band.y + 23 }, truncate(entryLabel(band.entry), Math.max(20, Math.floor(band.width / 8)))));
+      group.append(svg("title", {}, entryLabel(band.entry)));
+      nodeContainer.append(group);
+    }
+    const parallelEdges = new Map();
+    for (const edge of state.edges) {
+      const pair = JSON.stringify([edge.source, edge.target]);
+      if (!parallelEdges.has(pair)) parallelEdges.set(pair, []);
+      parallelEdges.get(pair).push(edge);
+    }
+    for (const edge of state.edges) {
+      const source = state.positions.get(edge.source);
+      const target = state.positions.get(edge.target);
+      const parallel = parallelEdges.get(JSON.stringify([edge.source, edge.target]));
+      const index = parallel.indexOf(edge);
+      const spacing = Math.min(28, 64 / Math.max(1, parallel.length - 1));
+      const shift = (index - (parallel.length - 1) / 2) * spacing;
+      const x1 = source.x + NODE_WIDTH + 2;
+      const y1 = source.y + NODE_HEIGHT / 2 + shift;
+      const x2 = target.x - 4;
+      const y2 = target.y + NODE_HEIGHT / 2 + shift;
+      const offset = Math.max(30, (x2 - x1) * .47);
+      const isProjection = edge.kind === "projection";
+      const dep = edge.dependency;
+      const title = isProjection ? "选中实现：" + edge.mapping.name + " → " + byId.get(edge.target).name + "；key=" + keyLabel(edge.mapping.key) : dep.label + " · slot " + dep.slot + " · key=" + keyLabel(dep.key) + "\n请求：" + dep.requested + (dep.optional ? " · optional" : "");
+      const route = state.edgeRoutes.get(edge);
+      let pathData = "M " + x1 + " " + y1 + " C " + (x1 + offset) + " " + y1 + ", " + (x2 - offset) + " " + y2 + ", " + x2 + " " + y2;
+      if (route) {
+        const firstGutter = x1 + 12 + (route.lane % 4) * 4;
+        const lastGutter = x2 - 12 - (route.lane % 4) * 4;
+        pathData = "M " + x1 + " " + y1 + " H " + (firstGutter - 8) + " Q " + firstGutter + " " + y1 + " " + firstGutter + " " + (y1 + 8) + " V " + (route.y - 8) + " Q " + firstGutter + " " + route.y + " " + (firstGutter + 8) + " " + route.y + " H " + (lastGutter - 8) + " Q " + lastGutter + " " + route.y + " " + lastGutter + " " + (route.y - 8) + " V " + (y2 + 8) + " Q " + lastGutter + " " + y2 + " " + (lastGutter + 8) + " " + y2 + " H " + x2;
+      }
+      const attributes = { d: pathData, class: "edge" + (isProjection ? " is-projection" : edge.optional ? " is-optional" : ""), "marker-end": "url(#arrow)", "data-edge-source": edge.source, "data-edge-target": edge.target, "data-edge-kind": edge.kind, "aria-label": title };
+      if (dep) Object.assign(attributes, { "data-slot": dep.slot, "data-input-label": dep.label, "data-requested": dep.requested, "data-key-kind": dep.key === null ? "none" : dep.key.kind, "data-key-value": dep.key === null ? "" : dep.key.value });
+      const path = svg("path", attributes);
+      path.append(svg("title", {}, title));
+      edgeContainer.append(path);
+      const labelX = (x1 + x2) / 2;
+      const labelY = (route ? route.y : (y1 + y2) / 2) - (isProjection || dep.key === null ? 7 : 17);
+      const label = svg("text", { x: labelX, y: labelY, class: "edge-label" + (isProjection ? " projection-label" : ""), "text-anchor": "middle", "data-edge-source": edge.source, "data-edge-target": edge.target, "data-edge-kind": edge.kind });
+      if (isProjection) label.textContent = "选中实现";
+      else {
+        label.setAttribute("data-slot", String(dep.slot));
+        label.append(svg("tspan", { x: labelX, dy: 0 }, truncate(dep.label + " · slot " + dep.slot, 27)));
+        if (dep.key !== null) label.append(svg("tspan", { x: labelX, dy: 12 }, truncate("key=" + keyLabel(dep.key), 27)));
+      }
+      label.append(svg("title", {}, title));
+      edgeContainer.append(label);
+      edgeElements.push({ edge, path, label });
+    }
+    for (const node of state.rendered) {
+      const position = state.positions.get(node.id);
+      const category = nodeKind(node);
+      const description = node.projection ? "接口请求，不创建实例，选中实现 " + byId.get(node.targetId).name : node.missing ? "可选依赖未注册，输入缺席" : node.lifetime + "，" + KINDS[node.kind];
+      const attributes = { class: "node" + (node.missing ? " is-missing" : node.projection ? " is-projection" : ""), transform: "translate(" + position.x + " " + position.y + ")", tabindex: "0", role: "button", "aria-label": node.name + "，" + description + "，key=" + keyLabel(node.key) + (project ? "，入口 " + entryLabel(entryById.get(node.entryId)) : ""), "data-node-id": node.id, "data-node-kind": category, "data-entry-id": node.entryId ?? "", "data-key-kind": node.key === null ? "none" : node.key.kind, "data-key-value": node.key === null ? "" : node.key.value };
+      if (node.projection) Object.assign(attributes, { "data-projection-target": node.targetId, "data-requested": node.name, "data-consumer-id": node.consumerId, "data-slot": node.slot, "data-input-label": node.input.label });
+      const group = svg("g", attributes);
+      group.append(svg("title", {}, node.name + "\n" + description + (project ? "\n入口: " + entryLabel(entryById.get(node.entryId)) : "") + "\nkey: " + keyLabel(node.key)));
+      if (node.projection) group.append(svg("path", { class: "node-frame", d: "M 14 0 H " + (NODE_WIDTH - 14) + " L " + NODE_WIDTH + " 14 V " + (NODE_HEIGHT - 14) + " L " + (NODE_WIDTH - 14) + " " + NODE_HEIGHT + " H 14 L 0 " + (NODE_HEIGHT - 14) + " V 14 Z" }));
+      else group.append(svg("rect", { class: "node-frame", width: NODE_WIDTH, height: NODE_HEIGHT, rx: 10 }));
+      if (node.missing) group.append(svg("text", { x: 15, y: 25, fill: "#d6b97e", "font-size": "10", "font-family": "var(--font)" }, "OPTIONAL · 未注册"));
+      else if (node.projection) {
+        group.append(svg("text", { x: 15, y: 24, class: "node-projection-title" }, "接口请求 · slot " + node.slot));
+        group.append(svg("text", { x: NODE_WIDTH - 15, y: 24, class: "node-projection-title", "text-anchor": "end" }, truncate(node.input.label, 12)));
+      }
+      else {
+        const widths = { Singleton: 66, Scoped: 49, Transient: 66 };
+        const width = widths[node.lifetime] || 66;
+        group.append(svg("rect", { x: 14, y: 12, width, height: 18, rx: 4, fill: COLORS[node.lifetime] || "#a2b0c3", "fill-opacity": ".12" }));
+        group.append(svg("text", { x: 20, y: 24.5, class: "node-badge", fill: COLORS[node.lifetime] || "#a2b0c3" }, node.lifetime));
+        group.append(svg("text", { x: NODE_WIDTH - 14, y: 25, class: "node-id", "text-anchor": "end" }, "#" + providerId(node) + (node.primary ? " · primary" : "")));
+      }
+      const label = wrapNodeLabel(node.label);
+      const labelY = label.length > 1 ? 44 : 53;
+      label.forEach((line, index) => group.append(svg("text", { x: 15, y: labelY + index * 16, class: node.missing ? "node-missing-name" : "node-name" }, line)));
+      const footer = node.projection ? "key=" + keyLabel(node.key) : node.missing ? "slot " + node.slot + " · 输入缺席" : KINDS[node.kind] + (node.requiresScope && node.lifetime === "Transient" ? " · 需 Scope" : "");
+      group.append(svg("text", { x: 15, y: 77, class: node.projection ? "node-key" : "node-kind" }, truncate(footer, node.projection ? 28 : 30)));
+      if (!node.projection && node.key !== null) group.append(svg("text", { x: NODE_WIDTH - 14, y: 77, class: "node-key", "text-anchor": "end" }, truncate(keyLabel(node.key), 13)));
+      const activate = () => selectNode(node.id, true);
+      group.addEventListener("click", activate);
+      group.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); activate(); } });
+      nodeContainer.append(group);
+      nodeElements.set(node.id, group);
+    }
+  }
+  function highlight() {
+    const related = new Set();
+    if (state.selected !== null) {
+      for (const id of reachable(state.selected, "down")) related.add(id);
+      for (const id of reachable(state.selected, "up")) related.add(id);
+    }
+    for (const node of state.rendered) {
+      const group = nodeElements.get(node.id);
+      const isRelated = related.has(node.id);
+      group.classList.toggle("is-selected", node.id === state.selected);
+      group.classList.toggle("is-related", isRelated && node.id !== state.selected);
+      group.classList.toggle("is-muted", state.selected !== null && !isRelated);
+      group.setAttribute("aria-pressed", node.id === state.selected ? "true" : "false");
+    }
+    for (const { edge, path, label } of edgeElements) {
+      const active = related.has(edge.source) && related.has(edge.target);
+      path.classList.toggle("is-related", active);
+      path.classList.toggle("is-muted", state.selected !== null && !active);
+      path.setAttribute("marker-end", active ? "url(#arrow-active)" : "url(#arrow)");
+      label.classList.toggle("is-muted", state.selected !== null && !active);
+      label.classList.toggle("is-related", active);
+    }
+  }
+  function selectNode(id, fromGraph = false) {
+    if (!byId.has(id)) return;
+    const changed = state.selected !== id;
+    state.selected = id;
+    if (visualNodes.length > MAX_VISIBLE) {
+      state.mode = "related";
+      $("overview-button").setAttribute("aria-pressed", "false");
+      $("related-button").setAttribute("aria-pressed", "true");
+    }
+    state.dependencyLimit = PAGE_SIZE;
+    closeSearch();
+    if ((state.mode === "related" && changed) || !state.visible.has(id) || (visualNodes.length > MAX_VISIBLE && changed)) buildView();
+    else highlight();
+    renderInspector();
+    $("related-button").disabled = false;
+    if (!fromGraph) {
+      const selected = nodeElements.get(id);
+      const position = state.positions.get(id);
+      if (position) {
+        state.autoFit = false;
+        state.scale = Math.max(.85, state.scale);
+        state.x = viewport.clientWidth / 2 - (position.x + NODE_WIDTH / 2) * state.scale;
+        state.y = viewport.clientHeight / 2 - (position.y + NODE_HEIGHT / 2) * state.scale;
+        applyTransform();
+      }
+      if (selected) selected.focus({ preventScroll: true });
+    }
+  }
+  function addBadge(container, text, className = "") { container.append(html("span", "badge " + className, text)); }
+  function section(title, count) {
+    const container = html("section", "detail-section");
+    const heading = html("h3", "section-heading", title);
+    if (count !== undefined) heading.append(html("span", "section-count", String(count)));
+    container.append(heading);
+    return container;
+  }
+  function jumpButton(text, id, className = "panel-button mono") {
+    const button = html("button", className, text);
+    button.type = "button";
+    button.setAttribute("data-dependency-target", String(id));
+    button.addEventListener("click", () => selectNode(id));
+    return button;
+  }
+  function mappingInspector(content, node) {
+    $("inspector-id").textContent = "接口请求";
+    content.append(html("h3", "detail-title", node.label));
+    if (project) content.append(html("p", "entry-context", "入口 " + entryLabel(entryById.get(node.entryId))));
+    const badges = html("div", "badges"); addBadge(badges, "请求接口", "projection");
+    content.append(badges, html("p", "detail-fullname", node.name), html("p", "mapping-key", "key=" + keyLabel(node.key)));
+    content.append(html("p", "mapping-note", "此节点来自当前依赖输入的接口请求，仅展示已选中的类型投影；不创建实例，也没有自己的生命周期。实例由选中实现提供。"));
+    const implementation = byId.get(node.targetId);
+    const selected = section("选中实现");
+    selected.append(jumpButton(implementation.label + "  #" + providerId(implementation), implementation.id, "panel-button mono projection-card"), html("p", "mapping-note", "实现生命周期：" + implementation.lifetime + " · key=" + keyLabel(implementation.key)));
+    content.append(selected);
+    const inputs = section("消费槽位", node.inputs.length);
+    for (const input of node.inputs.slice(0, state.dependencyLimit)) {
+      const consumer = byId.get(input.consumerId);
+      const dep = input.dependency;
+      const card = jumpButton("", consumer.id, "dependency-card");
+      card.setAttribute("data-input-slot", String(dep.slot));
+      const heading = html("div", "dependency-heading");
+      heading.append(html("span", "", dep.label), html("span", "dependency-slot", "slot " + dep.slot));
+      card.append(heading, html("p", "dependency-type", consumer.label + "  #" + providerId(consumer)), html("p", "dependency-meta", "key=" + keyLabel(dep.key) + (dep.optional ? " · optional" : "")));
+      inputs.append(card);
+    }
+    if (node.inputs.length > state.dependencyLimit) {
+      const more = html("button", "panel-button", "显示更多消费槽位"); more.type = "button";
+      more.addEventListener("click", () => { state.dependencyLimit += PAGE_SIZE; renderInspector(); }); inputs.append(more);
+    }
+    content.append(inputs, html("p", "detail-note", "每个消费槽位对应独立接口请求。多个请求可以选中同一个 provider，Transient 仍按每次消费分别构造。此页仅展示当前依赖输入，不枚举全部 trait 绑定或候选。"));
+  }
+  function missingInspector(content, node) {
+    $("inspector-id").textContent = "可选输入缺席";
+    content.append(html("h3", "detail-title", node.label), html("p", "detail-fullname", node.name), html("p", "mapping-key", "key=" + keyLabel(node.key)));
+    const consumer = byId.get(node.sourceId);
+    if (project) content.append(html("p", "entry-context", "入口 " + entryLabel(entryById.get(node.entryId))));
+    content.append(html("p", "mapping-note", "该 optional 输入未找到注册候选，冻结为缺席；没有选中实现，也不创建实例。"));
+    const input = section("消费槽位");
+    input.append(html("p", "dependency-type", node.input.label + " · slot " + node.slot), jumpButton(consumer.label + "  #" + providerId(consumer), consumer.id));
+    content.append(input);
+  }
+  function renderInspector() {
+    const content = $("inspector-content");
+    content.replaceChildren();
+    if (state.selected === null) {
+      $("inspector-id").textContent = "选择一个节点";
+      const entry = entryById.get(state.entryId);
+      if (entry) {
+        $("inspector-id").textContent = "入口详情";
+        content.append(html("h3", "detail-title", entry.binary), html("p", "entry-context", entry.package));
+        if (entry.diagnostic) content.append(html("p", "inspector-empty", entry.status === "skipped" ? "该入口未纳入本次导出。" : "该入口导出失败，其他入口的结果不受影响。"), html("pre", "diagnostic-text", entry.diagnostic));
+        else content.append(html("p", "inspector-empty", "此入口结构已验证。点击服务或接口请求查看依赖路径。"));
+      } else content.append(html("p", "inspector-empty", "点击服务或接口请求，查看声明、消费槽位与选中实现。"));
+      return;
+    }
+    const node = byId.get(state.selected);
+    if (node.projection) { mappingInspector(content, node); return; }
+    if (node.missing) { missingInspector(content, node); return; }
+    $("inspector-id").textContent = "PROVIDER #" + providerId(node);
+    content.append(html("h3", "detail-title", node.label));
+    if (project) content.append(html("p", "entry-context", "入口 " + entryLabel(entryById.get(node.entryId))));
+    const badges = html("div", "badges");
+    addBadge(badges, node.lifetime, lifetimeClass(node.lifetime));
+    addBadge(badges, KINDS[node.kind]);
+    if (node.primary) addBadge(badges, "Primary");
+    const owners = project ? declarations.get(node.declarationIdentity) : null;
+    if (owners && owners.size > 1) addBadge(badges, "相同声明 · " + owners.size + " 个入口", "shared");
+    if (node.requiresScope) addBadge(badges, "需要 Scope", "warning");
+    content.append(badges, html("p", "detail-fullname", node.name));
+    if (owners && owners.size > 1) {
+      const shared = section("声明复用", owners.size);
+      shared.append(html("p", "inspector-empty", "以下入口含有相同类型、key、构造类型、生命周期及源码位置的声明；各入口仍独立构造实例。"));
+      for (const owner of owners) {
+        const button = html("button", "panel-button mono", entryLabel(entryById.get(owner)));
+        button.type = "button";
+        button.addEventListener("click", () => {
+          chooseEntry(owner);
+          const equivalent = nodes.find((other) => other.declarationIdentity === node.declarationIdentity);
+          if (equivalent) selectNode(equivalent.id);
+        });
+        shared.append(button);
+      }
+      content.append(shared);
+    }
+    const registration = section("注册信息");
+    const grid = html("dl", "detail-grid");
+    grid.append(html("dt", "", "Key"), html("dd", "mono", keyLabel(node.key)), html("dt", "", "消费者"), html("dd", "", dependents.get(node.id).length + " 个服务声明"));
+    registration.append(grid);
+    content.append(registration);
+    const dependencies = section("依赖输入", node.dependencies.length);
+    const list = html("div", "dependency-list");
+    for (const dep of node.dependencies.slice(0, state.dependencyLimit)) {
+      const target = dep.target === null ? null : byId.get(dep.target);
+      const route = byId.get(inputTargets.get(inputIdentity(node, dep)));
+      const card = html("button", "dependency-card" + (target ? "" : " absent"));
+      if (route) {
+        card.type = "button";
+        card.setAttribute("aria-label", dep.label + "，slot " + dep.slot + "，" + dep.requested + "，key=" + keyLabel(dep.key));
+        card.setAttribute("data-dependency-target", String(route.id));
+        card.addEventListener("click", () => selectNode(route.id));
+      }
+      const heading = html("div", "dependency-heading");
+      heading.append(html("span", "", dep.label), html("span", "dependency-slot", "slot " + dep.slot));
+      card.append(heading, html("p", "dependency-type", dep.requestedLabel));
+      if (target) {
+        card.append(html("p", "dependency-target", (route.projection ? "接口请求 → " : "→ ") + target.label + "  #" + providerId(target)));
+        card.append(html("p", "dependency-meta", target.lifetime + (dep.optional ? " · optional" : "") + (dep.key !== null ? " · key=" + keyLabel(dep.key) : "")));
+      } else {
+        card.append(html("p", "dependency-absent", "optional · 未注册，输入为空"));
+        if (dep.key !== null) card.append(html("p", "dependency-meta", "key=" + keyLabel(dep.key)));
+      }
+      card.title = dep.requested + (target ? " → " + target.name : " [optional, absent]");
+      list.append(card);
+    }
+    dependencies.append(list);
+    if (!node.dependencies.length) dependencies.append(html("p", "inspector-empty", "没有依赖输入，可独立构造。"));
+    if (node.dependencies.length > state.dependencyLimit) {
+      const more = html("button", "panel-button", "显示更多输入（" + state.dependencyLimit + " / " + node.dependencies.length + "）");
+      more.type = "button";
+      more.addEventListener("click", () => { state.dependencyLimit += PAGE_SIZE; renderInspector(); });
+      dependencies.append(more);
+    }
+    content.append(dependencies);
+    const requests = Array.from(parents.get(node.id)).map((id) => byId.get(id)).filter((parent) => parent.projection);
+    if (requests.length) {
+      const incoming = section("映射到此实现的接口请求", requests.length);
+      for (const request of requests.slice(0, PAGE_SIZE)) {
+        const consumer = byId.get(request.consumerId);
+        const card = jumpButton("", request.id, "dependency-card projection-card");
+        card.append(html("p", "dependency-type", request.label), html("p", "dependency-meta", consumer.label + "." + request.input.label + " · slot " + request.slot + " · key=" + keyLabel(request.key)));
+        incoming.append(card);
+      }
+      if (requests.length > PAGE_SIZE) incoming.append(html("p", "detail-note", "此处列出前 " + PAGE_SIZE + " 个接口请求，其余可通过字段名、接口或 key 搜索。"));
+      content.append(incoming);
+    }
+    const consumers = dependents.get(node.id);
+    if (consumers.length) {
+      const consumersSection = section("消费服务", consumers.length);
+      for (const id of consumers.slice(0, PAGE_SIZE)) {
+        const parent = byId.get(id);
+        const button = html("button", "panel-button mono", parent.label + "  #" + providerId(parent));
+        button.type = "button";
+        button.addEventListener("click", () => selectNode(id));
+        consumersSection.append(button);
+      }
+      if (consumers.length > PAGE_SIZE) consumersSection.append(html("p", "detail-note", "此处列出前 " + PAGE_SIZE + " 个消费者。可通过搜索依赖类型名查找其余消费者。"));
+      content.append(consumersSection);
+    }
+    const source = section("声明位置");
+    source.append(html("p", "source", node.source.file + ":" + node.source.line + ":" + node.source.column));
+    content.append(source, html("p", "detail-note", "每个 slot 都保留独立输入连线。接口请求经映射指向选中实现，concrete 请求直接连接；多个槽位指向同一 Transient 声明时，仍分别构造实例。"));
+  }
+  function applyTransform() {
+    world.setAttribute("transform", "translate(" + state.x + " " + state.y + ") scale(" + state.scale + ")");
+    $("zoom-value").textContent = Math.round(state.scale * 100) + "%";
+  }
+  function fit() {
+    state.autoFit = true;
+    const width = viewport.clientWidth;
+    const height = viewport.clientHeight;
+    state.scale = Math.min(1.1, Math.max(.002, Math.min((width - 52) / state.bounds.width, (height - 52) / state.bounds.height)));
+    state.x = (width - state.bounds.width * state.scale) / 2;
+    state.y = (height - state.bounds.height * state.scale) / 2;
+    applyTransform();
+  }
+  function zoom(multiplier, x = viewport.clientWidth / 2, y = viewport.clientHeight / 2) {
+    state.autoFit = false;
+    const nextScale = Math.max(.002, Math.min(3.5, state.scale * multiplier));
+    const ratio = nextScale / state.scale;
+    state.x = x - (x - state.x) * ratio;
+    state.y = y - (y - state.y) * ratio;
+    state.scale = nextScale;
+    applyTransform();
+  }
+  function closeSearch() {
+    $("search-results").hidden = true;
+    $("service-search").setAttribute("aria-expanded", "false");
+  }
+  function showSearch() {
+    const query = $("service-search").value.trim().toLocaleLowerCase();
+    const results = [];
+    const terms = query.split(/\s+/).filter(Boolean);
+    for (const node of visualNodes) if (terms.every((term) => searchText.get(node.id).includes(term))) results.push(node);
+    const container = $("search-results");
+    container.replaceChildren();
+    container.hidden = false;
+    $("service-search").setAttribute("aria-expanded", "true");
+    container.append(html("p", "search-summary", results.length ? results.length + " 个匹配节点 · 点击跳转" : "没有匹配节点。试试类型名、trait 或 key。"));
+    for (const node of results.slice(0, state.searchLimit)) {
+      const button = html("button", "search-result");
+      button.type = "button";
+      button.setAttribute("data-search-node-id", String(node.id));
+      button.setAttribute("data-node-kind", nodeKind(node));
+      const dot = html("span", "search-dot " + nodeKind(node));
+      dot.style.background = COLORS[node.lifetime] || "#a2b0c3";
+      const text = html("span", "search-result-text");
+      text.append(html("span", "search-result-name", node.label), html("span", "search-result-sub", (node.projection ? "接口请求 · 选中 " + byId.get(node.targetId).label : node.missing ? "optional · 缺席" : "#" + providerId(node) + " · " + node.lifetime) + (project ? " · " + entryById.get(node.entryId).binary : "") + (node.key !== null ? " · key=" + keyLabel(node.key) : "")));
+      button.append(dot, text);
+      button.title = node.name;
+      button.addEventListener("click", () => { $("service-search").value = ""; selectNode(node.id); });
+      button.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          const sibling = event.key === "ArrowDown" ? button.nextElementSibling : button.previousElementSibling;
+          if (sibling && sibling.tagName === "BUTTON") sibling.focus();
+          else if (event.key === "ArrowUp") $("service-search").focus();
+        }
+      });
+      container.append(button);
+    }
+    if (results.length > state.searchLimit) {
+      const more = html("button", "search-more", "显示更多（" + state.searchLimit + " / " + results.length + "）");
+      more.type = "button";
+      more.addEventListener("click", () => { state.searchLimit += PAGE_SIZE; showSearch(); });
+      container.append(more);
+    }
+  }
+  $("service-search").addEventListener("input", () => { state.searchLimit = PAGE_SIZE; showSearch(); });
+  $("service-search").addEventListener("focus", showSearch);
+  $("service-search").addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "Enter") {
+      const first = $("search-results").querySelector(".search-result");
+      if (first) { event.preventDefault(); first.focus(); }
+    }
+  });
+  document.addEventListener("pointerdown", (event) => { if (!event.target.closest(".search-wrap")) closeSearch(); });
+  document.addEventListener("keydown", (event) => {
+    const editing = event.target.tagName === "INPUT" || event.target.tagName === "TEXTAREA" || event.target.isContentEditable;
+    if (event.key === "/" && !editing) { event.preventDefault(); $("service-search").focus(); }
+    if (event.key === "Escape") { closeSearch(); if (editing) $("service-search").blur(); }
+  });
+  $("overview-button").addEventListener("click", () => {
+    state.mode = "overview";
+    if (visualNodes.length > MAX_VISIBLE) state.selected = null;
+    $("related-button").disabled = state.selected === null;
+    $("overview-button").setAttribute("aria-pressed", "true");
+    $("related-button").setAttribute("aria-pressed", "false");
+    buildView(); renderInspector();
+  });
+  $("related-button").addEventListener("click", () => {
+    if (state.selected === null) return;
+    state.mode = "related";
+    $("overview-button").setAttribute("aria-pressed", "false");
+    $("related-button").setAttribute("aria-pressed", "true");
+    buildView();
+  });
+  $("zoom-in").addEventListener("click", () => zoom(1.25));
+  $("zoom-out").addEventListener("click", () => zoom(.8));
+  $("fit-button").addEventListener("click", fit);
+  viewport.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const bounds = viewport.getBoundingClientRect();
+    zoom(Math.exp(-Math.max(-100, Math.min(100, event.deltaY)) * .003), event.clientX - bounds.left, event.clientY - bounds.top);
+  }, { passive: false });
+  let drag = null;
+  viewport.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target.closest(".node")) return;
+    drag = { pointer: event.pointerId, x: event.clientX, y: event.clientY, originalX: state.x, originalY: state.y };
+    viewport.setPointerCapture(event.pointerId);
+    viewport.classList.add("dragging");
+    viewport.focus({ preventScroll: true });
+  });
+  viewport.addEventListener("pointermove", (event) => {
+    if (!drag || drag.pointer !== event.pointerId) return;
+    state.autoFit = false;
+    state.x = drag.originalX + event.clientX - drag.x;
+    state.y = drag.originalY + event.clientY - drag.y;
+    applyTransform();
+  });
+  const stopDragging = () => { drag = null; viewport.classList.remove("dragging"); };
+  viewport.addEventListener("pointerup", stopDragging);
+  viewport.addEventListener("pointercancel", stopDragging);
+  viewport.addEventListener("lostpointercapture", stopDragging);
+  viewport.addEventListener("keydown", (event) => {
+    let handled = true;
+    if (event.key === "+" || event.key === "=") zoom(1.25);
+    else if (event.key === "-") zoom(.8);
+    else if (event.key === "0") fit();
+    else if (event.key === "ArrowLeft") { state.autoFit = false; state.x += 45; }
+    else if (event.key === "ArrowRight") { state.autoFit = false; state.x -= 45; }
+    else if (event.key === "ArrowUp") { state.autoFit = false; state.y += 45; }
+    else if (event.key === "ArrowDown") { state.autoFit = false; state.y -= 45; }
+    else handled = false;
+    if (handled) { event.preventDefault(); applyTransform(); }
+  });
+  initializeProject();
+  if (!project && nodes.length && visualNodes.length <= MAX_VISIBLE) {
+    let initial = nodes[0];
+    for (const node of nodes) if (node.dependencies.length > initial.dependencies.length) initial = node;
+    state.selected = initial.id;
+  }
+  $("related-button").disabled = state.selected === null;
+  buildView();
+  renderInspector();
+  const resize = () => { if (state.autoFit) fit(); };
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(resize).observe(viewport);
+  else window.addEventListener("resize", resize);
+})();
+</script>
+</body>
+</html>

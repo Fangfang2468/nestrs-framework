@@ -78,6 +78,49 @@ impl Fixture {
             .env_remove("RUSTC_WORKSPACE_WRAPPER");
         command
     }
+
+    fn graph_command(&self, data: &str) -> Command {
+        self.graph_command_for(data, "service")
+    }
+
+    fn graph_command_for(&self, data: &str, binary: &str) -> Command {
+        let package = "path+file:///fixture#app@0.1.0";
+        let source = self.0.join("main.rs");
+        fs::write(&source, "fn main() {}\n").unwrap();
+        let target = serde_json::json!({
+            "kind": ["bin"], "name": binary, "src_path": source,
+        });
+        let metadata = serde_json::json!({
+            "workspace_members": [package],
+            "workspace_default_members": [package],
+            "packages": [{
+                "id": package, "name": "app", "version": "0.1.0",
+                "manifest_path": self.0.join("Cargo.toml"), "targets": [target],
+            }],
+        });
+        let artifact = serde_json::json!({
+            "reason": "compiler-artifact", "package_id": package,
+            "target": target, "executable": self.0.join("graph-program"),
+        });
+        let proof = serde_json::json!({
+            "binary": binary, "crate": binary.replace('-', "_"),
+            "manifest": self.0, "source": source,
+        });
+        script(
+            &self.0.join("cargo"),
+            &format!(
+                "if [ \"$1\" = metadata ]; then\n  printf '%s\\n' '{}'\nelse\n  printf '%s\\n' \"$@\" > \"$RECORD_ARGS\"\n  mkdir -p \"${{NESTRS_GRAPH_PROOF%/*}}\"\n  printf '%s\\n' '{}' > \"$NESTRS_GRAPH_PROOF\"\n  printf '%s\\n' '{}'\nfi\n",
+                metadata, proof, artifact,
+            ),
+        );
+        script(
+            &self.0.join("graph-program"),
+            "printf '%s\\n' \"$GRAPH_RESPONSE\"\n",
+        );
+        let mut command = self.command();
+        command.env("GRAPH_RESPONSE", data).arg("graph");
+        command
+    }
 }
 
 impl Drop for Fixture {
@@ -360,4 +403,140 @@ fn discovery_only_lists_installed_toolchains_without_installing() {
         fs::read_to_string(fixture.0.join("args.rustup")).unwrap(),
         "toolchain\nlist\n--verbose\n"
     );
+}
+
+#[test]
+fn graph_builds_a_selected_binary_and_writes_offline_html() {
+    let fixture = Fixture::new();
+    let destination = fixture.0.join("graph.html");
+    let output = fixture
+        .graph_command(r#"{"version":1,"nodes":[]}"#)
+        .args(["-p", "app", "--bin", "service", "--output"])
+        .arg(&destination)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let html = fs::read_to_string(destination).unwrap();
+    assert!(html.to_lowercase().starts_with("<!doctype html>"));
+    assert!(html.contains("graph-data"));
+    let args = fs::read_to_string(fixture.0.join("args")).unwrap();
+    assert!(args.starts_with("build\n"));
+    assert!(args.contains("--message-format=json"));
+    assert!(!args.contains("--output"));
+}
+
+#[test]
+fn invalid_graph_data_preserves_the_previous_output() {
+    let fixture = Fixture::new();
+    let destination = fixture.0.join("graph.html");
+    fs::write(&destination, "existing graph").unwrap();
+    // Project mode writes failure reports; single-entry errors preserve old output.
+    let output = fixture
+        .graph_command("invalid graph JSON")
+        .args(["--bin", "service"])
+        .arg("--output")
+        .arg(&destination)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid graph response"));
+    assert_eq!(fs::read_to_string(destination).unwrap(), "existing graph");
+}
+
+#[test]
+fn graph_export_file_errors_are_reported_and_temporary_files_removed() {
+    let fixture = Fixture::new();
+    let destination = fixture.0.join("existing-directory.html");
+    fs::create_dir_all(&destination).unwrap();
+    let output = fixture
+        .graph_command(r#"{"version":1,"nodes":[]}"#)
+        .arg("--output")
+        .arg(&destination)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot export graph"));
+    assert!(destination.is_dir());
+    assert!(!fs::read_dir(&fixture.0).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")
+    }));
+}
+
+#[test]
+fn graph_rejects_foreign_target_before_building() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .graph_command(r#"{"version":1,"nodes":[]}"#)
+        .args(["--target", "aarch64-unknown-linux-gnu"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("cross-target graph execution is not supported")
+    );
+    assert!(!fixture.0.join("args").exists());
+}
+
+#[test]
+fn graph_does_not_treat_application_help_as_its_own_help() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .command()
+        .args(["graph", "--", "--help"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("takes no arguments after --"));
+    assert!(!fixture.0.join("args").exists());
+}
+
+#[test]
+fn graph_rejects_mixed_targets_before_building() {
+    let fixture = Fixture::new();
+    for args in [
+        vec!["--bins", "--bin", "service"],
+        vec!["--test=integration"],
+        vec!["--bin=a", "--bin=b"],
+        vec!["--message-format=human"],
+    ] {
+        let output = fixture.command().arg("graph").args(args).output().unwrap();
+        assert!(!output.status.success());
+        assert!(!fixture.0.join("args").exists());
+    }
+}
+
+#[test]
+fn graph_targets_have_separate_cargo_cache_namespaces() {
+    let fixture = Fixture::new();
+    let mut namespaces = Vec::new();
+    for binary in ["first", "second"] {
+        let output = fixture
+            .graph_command_for(r#"{"version":1,"nodes":[]}"#, binary)
+            .args(["--bin", binary])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let args = fs::read_to_string(fixture.0.join("args")).unwrap();
+        let args: Vec<_> = args.lines().collect();
+        let target = args
+            .windows(2)
+            .find(|pair| pair[0] == "--target-dir")
+            .unwrap()[1];
+        assert!(target.contains(&format!("/graph/{binary}-")));
+        namespaces.push(target.to_owned());
+    }
+    assert_ne!(namespaces[0], namespaces[1]);
 }
