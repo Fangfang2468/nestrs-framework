@@ -54,6 +54,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nestrs-di-example"
+version = "0.1.0"
+dependencies = [
+ "nestrs-core",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "nestrs-tool-bridge"
 version = "0.1.0"
 dependencies = [

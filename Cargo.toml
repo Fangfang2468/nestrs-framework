@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["nestrs-core", "cargo-nestrs", "cargo-nestrs/internal/bridge"]
+members = ["nestrs-core", "cargo-nestrs", "cargo-nestrs/internal/bridge", "example/di-checkout"]
 default-members = ["nestrs-core", "cargo-nestrs", "cargo-nestrs/internal/bridge"]
 
 [workspace.package]

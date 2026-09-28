@@ -1,0 +1,17 @@
+[package]
+name = "nestrs-di-example"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+default-run = "checkout"
+description = "用电商下单演示 Nestrs 静态依赖图与异步 DI 生命周期"
+
+[dependencies]
+nestrs-core = { path = "../../nestrs-core" }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+
+[[bin]]
+name = "checkout"
+path = "src/main.rs"
