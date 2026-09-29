@@ -61,7 +61,7 @@ impl Drop for EmptyWorkspace {
 #[test]
 fn root_help_aliases_work_without_a_workspace_or_toolchain() {
     let workspace = EmptyWorkspace::new();
-    let usage = "Usage: cargo nestrs <COMMAND>";
+    let usage = "用法：cargo nestrs <COMMAND>";
     let expected = workspace.help(&[], usage);
     for args in [
         vec!["help"],
@@ -77,7 +77,7 @@ fn root_help_aliases_work_without_a_workspace_or_toolchain() {
 fn command_help_aliases_select_the_same_topic_without_running_the_command() {
     let workspace = EmptyWorkspace::new();
     for command in ["graph", "init", "doctor"] {
-        let usage = format!("Usage: cargo nestrs {command}");
+        let usage = format!("用法：cargo nestrs {command}");
         let expected = workspace.help(&["help", command], &usage);
         for args in [
             vec![command, "help"],
@@ -93,7 +93,7 @@ fn command_help_aliases_select_the_same_topic_without_running_the_command() {
 #[test]
 fn init_check_help_is_a_distinct_nested_topic() {
     let workspace = EmptyWorkspace::new();
-    let usage = "Usage: cargo nestrs init check";
+    let usage = "用法：cargo nestrs init check";
     let expected = workspace.help(&["help", "init", "check"], usage);
     for args in [
         vec!["init", "help", "check"],
@@ -106,27 +106,27 @@ fn init_check_help_is_a_distinct_nested_topic() {
     }
     assert_ne!(
         expected,
-        workspace.help(&["init", "help"], "Usage: cargo nestrs init"),
+        workspace.help(&["init", "help"], "用法：cargo nestrs init"),
     );
 }
 
 #[test]
 fn help_flags_after_context_options_do_not_load_the_project_or_toolchain() {
     let workspace = EmptyWorkspace::new();
-    let graph = workspace.help(&["graph", "help"], "Usage: cargo nestrs graph");
-    let check = workspace.help(&["init", "check", "help"], "Usage: cargo nestrs init check");
+    let graph = workspace.help(&["graph", "help"], "用法：cargo nestrs graph");
+    let check = workspace.help(&["init", "check", "help"], "用法：cargo nestrs init check");
     for flag in ["--help", "-h"] {
         assert_eq!(
             workspace.help(
                 &["graph", "-p", "missing", flag],
-                "Usage: cargo nestrs graph"
+                "用法：cargo nestrs graph"
             ),
             graph,
         );
         assert_eq!(
             workspace.help(
                 &["init", "check", "--output", "missing", flag],
-                "Usage: cargo nestrs init check",
+                "用法：cargo nestrs init check",
             ),
             check,
         );
@@ -136,10 +136,10 @@ fn help_flags_after_context_options_do_not_load_the_project_or_toolchain() {
 #[test]
 fn a_help_flag_selects_the_current_command_before_later_arguments() {
     let workspace = EmptyWorkspace::new();
-    let expected = workspace.help(&["init", "help"], "Usage: cargo nestrs init");
+    let expected = workspace.help(&["init", "help"], "用法：cargo nestrs init");
     for flag in ["--help", "-h"] {
         assert_eq!(
-            workspace.help(&["init", flag, "check"], "Usage: cargo nestrs init"),
+            workspace.help(&["init", flag, "check"], "用法：cargo nestrs init"),
             expected,
         );
     }
