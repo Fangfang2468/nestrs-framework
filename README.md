@@ -218,7 +218,7 @@ Singleton 在整个 root 及 scopes 间共享，Scoped 在各 scope 隔离，直
 
 Singleton/Scoped 初始化失败缓存至 owner 关闭，后续查询共享失败记录，不自动重试。Transient 失败只影响该次 occurrence。worker panic 转为带上下文的 `ResolveError`，协调器继续服务；失败依赖的消费者不执行构造。Lazy 失败保留其他请求可能使用的成功实例；Eager 失败会先关闭未交付的容器、清理成功实例，再返回 `BuildError`。
 
-失败原因和依赖路径按不可变记录共享；短期请求的路径随其错误引用释放，不会持续追加到 Singleton 的缓存失败中。
+失败原因和依赖路径按不可变记录共享；短期请求的路径随其错误引用释放，不会持续追加到 Singleton 的缓存失败中。Transient 的激活任务在完成通知后回收，成功实例仍由 owner 的实例日志保活至关闭；失败的 Transient 不会留下等待 owner 关闭的终态任务。
 
 取消查询只取消等待，协调器已经接受的初始化继续执行并收纳结果。关闭开始后拒绝新解析，先处理已接受任务，再按每个 owner 的实例成功发布时间逆序清理。每个 owner 同时仅运行一个 cleanup，完成 hook 并释放本项后才推进下一项；root 等全部 scopes 清理结束再清理自身。现有无参数 async cleanup 对每个成功发布的实例执行一次，panic 汇总为 `DisposeError`，其余 cleanup 继续。
 

@@ -6,7 +6,7 @@
 
 use std::{
     any::Any,
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     future::poll_fn,
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{
@@ -241,7 +241,7 @@ enum Command {
 struct OwnerState {
     data: Arc<OwnerData>,
     cache: HashMap<usize, TaskId>,
-    task_ids: Vec<TaskId>,
+    task_ids: HashSet<TaskId>,
     pending: usize,
     cleaning: bool,
     cleanup_running: bool,
@@ -254,7 +254,7 @@ impl OwnerState {
         Self {
             data,
             cache: HashMap::new(),
-            task_ids: Vec::new(),
+            task_ids: HashSet::new(),
             pending: 0,
             cleaning: false,
             cleanup_running: false,
@@ -444,7 +444,7 @@ impl Coordinator {
         );
         let state = self.owners.get_mut(&owner).unwrap();
         state.pending += 1;
-        state.task_ids.push(task);
+        state.task_ids.insert(task);
         if cached {
             state.cache.insert(provider, task);
         }
@@ -455,7 +455,12 @@ impl Coordinator {
     fn expand(&mut self, expansion: &mut Vec<TaskId>) {
         while let Some(task) = expansion.pop() {
             let (owner, provider) = {
-                let task = &self.tasks[&task];
+                let Some(task) = self.tasks.get(&task) else {
+                    continue;
+                };
+                if matches!(task.state, TaskState::Complete(_)) {
+                    continue;
+                }
                 (task.owner, task.provider)
             };
             let targets: Vec<_> = self.graph.nodes[provider]
@@ -528,6 +533,10 @@ impl Coordinator {
                 continue;
             }
             activation.state = TaskState::Complete(result.clone());
+            activation.inputs.clear();
+            let owner = activation.owner;
+            let transient =
+                self.graph.nodes[activation.provider].common.lifetime == ServiceLifetime::Transient;
             self.owners.get_mut(&activation.owner).unwrap().pending -= 1;
             let parents = std::mem::take(&mut activation.parents);
             for waiter in std::mem::take(&mut activation.waiters) {
@@ -558,6 +567,12 @@ impl Coordinator {
                         ));
                     }
                 }
+            }
+            // Shared lifetimes cache their result. Transient occurrences have no future
+            // cache readers; their consumers/waiters and the journal now own the result.
+            if transient {
+                self.tasks.remove(&task);
+                self.owners.get_mut(&owner).unwrap().task_ids.remove(&task);
             }
         }
     }

@@ -65,6 +65,104 @@ fn graph(nodes: Vec<CompiledNode>) -> Arc<ValidatedGraph> {
     })
 }
 
+#[test]
+fn failed_transient_tasks_are_retired_without_disposing_the_owner() {
+    let (_sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let graph = graph(vec![node::<Chain>(
+        0,
+        ServiceLifetime::Transient,
+        Constructor::Class(chain_leaf),
+        vec![],
+    )]);
+    let mut coordinator =
+        super::Coordinator::new(graph, super::OwnerData::new(super::ROOT), receiver, 1);
+    for _ in 0..10_000 {
+        let task = coordinator.ensure_task(super::ROOT, 0, &mut vec![]);
+        coordinator.settle(
+            task,
+            Err(crate::ResolveError::new("transient failure".into())),
+        );
+        assert!(coordinator.tasks.is_empty());
+        assert!(coordinator.owners[&super::ROOT].task_ids.is_empty());
+    }
+    let owner = &coordinator.owners[&super::ROOT];
+    assert_eq!(owner.pending, 0);
+    assert!(owner.cache.is_empty());
+    assert!(owner.data.journal.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn retiring_a_failed_parent_still_drains_its_previously_accepted_children() {
+    fn leaf(inputs: ConstructionInputs) -> Result<ErasedService, ConstructionError> {
+        inputs.ensure_all_consumed()?;
+        Ok(ErasedService::new(1_u32))
+    }
+    let dependencies = (0..2)
+        .map(|provider| CompiledDependency {
+            slot: InputSlot::new(provider),
+            requested: ServiceIdentifier::new(
+                Some(ServiceKey::Indexed(provider)),
+                ServiceType::create::<u32>(),
+            ),
+            optional: false,
+            target: Some(provider),
+            prepare: prepare_required::<u32>,
+            label: None,
+        })
+        .collect();
+    let graph = graph(vec![
+        node::<u32>(
+            0,
+            ServiceLifetime::Singleton,
+            Constructor::Class(leaf),
+            vec![],
+        ),
+        node::<u32>(
+            1,
+            ServiceLifetime::Transient,
+            Constructor::Class(leaf),
+            vec![],
+        ),
+        node::<u32>(
+            2,
+            ServiceLifetime::Transient,
+            Constructor::Class(leaf),
+            dependencies,
+        ),
+    ]);
+    let (_sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let owner = super::OwnerData::new(super::ROOT);
+    let mut coordinator = super::Coordinator::new(graph, owner.clone(), receiver, 1);
+    let cached = coordinator.ensure_task(super::ROOT, 0, &mut vec![]);
+    coordinator.settle(
+        cached,
+        Err(crate::ResolveError::new("cached failure".into())),
+    );
+    let (waiter, result) = tokio::sync::oneshot::channel();
+    coordinator.accept_resolution(super::ROOT, 2, waiter);
+    assert!(
+        result
+            .await
+            .unwrap()
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("cached failure")
+    );
+    assert_eq!(coordinator.owners[&super::ROOT].pending, 1);
+    coordinator.launch_ready();
+    let completion = coordinator.jobs.join_next_with_id().await.unwrap();
+    coordinator.handle_completion(completion);
+    assert_eq!(coordinator.owners[&super::ROOT].pending, 0);
+    assert_eq!(coordinator.tasks.len(), 1);
+    assert_eq!(coordinator.owners[&super::ROOT].task_ids.len(), 1);
+    assert_eq!(owner.journal.lock().unwrap().len(), 1);
+    coordinator.begin_close(owner.clone(), None);
+    coordinator.run().await;
+    assert_eq!(owner.status.load(Ordering::Acquire), super::CLOSED);
+    assert!(owner.journal.lock().unwrap().is_empty());
+}
+
 static CHAIN_DROPS: AtomicUsize = AtomicUsize::new(0);
 
 struct Chain {
