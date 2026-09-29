@@ -1,6 +1,6 @@
 //! Compiler-owned discovery for the automatic binding experiment.
 //!
-//! The three hidden marker functions describe DI intent. Types and candidate
+//! Hidden marker functions describe DI intent. Types and candidate
 //! applicability come from rustc; source text is only retained for the final
 //! source overlay, never searched for services or impls.
 
@@ -17,7 +17,10 @@ use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::mir;
 use rustc_middle::ty::{self, Ty, TyCtxt, TypeVisitableExt};
 use rustc_span::{FileName, Span};
-use rustc_trait_selection::infer::InferCtxtExt;
+use rustc_trait_selection::{
+    infer::InferCtxtExt,
+    traits::{self, Obligation, ObligationCause, ObligationCtxt},
+};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 pub struct Analysis {
@@ -26,6 +29,7 @@ pub struct Analysis {
     pub requests: usize,
     pub generated_bindings: usize,
     pub explicit_bindings: usize,
+    pub automatic_bindings: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,6 +37,7 @@ enum MarkerKind {
     Provider,
     Request,
     Binding,
+    AutomaticBinding,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -49,6 +54,7 @@ struct Marker<'tcx> {
     owner: LocalDefId,
     span: Span,
     key: Option<CompilerKey>,
+    passive: bool,
 }
 
 struct MarkerVisitor<'a, 'tcx> {
@@ -69,6 +75,9 @@ impl<'tcx> Visitor<'tcx> for MarkerVisitor<'_, 'tcx> {
                 "registration::compiler::compiler_provider" => Some(MarkerKind::Provider),
                 "registration::compiler::compiler_request" => Some(MarkerKind::Request),
                 "registration::compiler::compiler_binding" => Some(MarkerKind::Binding),
+                "registration::compiler::compiler_automatic_binding" => {
+                    Some(MarkerKind::AutomaticBinding)
+                }
                 _ => None,
             };
             if let Some(kind) = kind {
@@ -89,6 +98,7 @@ impl<'tcx> Visitor<'tcx> for MarkerVisitor<'_, 'tcx> {
                     owner: self.owner,
                     span: expr.span,
                     key,
+                    passive: false,
                 });
             }
         }
@@ -166,12 +176,6 @@ fn normalized<'tcx>(
     .map_err(|error| format!("cannot normalize DI type {ty}: {error:?}"))
 }
 
-fn type_source(ty: Ty<'_>) -> String {
-    rustc_middle::ty::print::with_no_trimmed_paths!(rustc_middle::ty::print::with_crate_prefix!(
-        ty.to_string()
-    ))
-}
-
 fn definition_path(tcx: TyCtxt<'_>, definition: DefId) -> String {
     tcx.def_path(definition)
         .data
@@ -204,10 +208,18 @@ fn provider_definition(tcx: TyCtxt<'_>) -> Option<(DefId, DefId)> {
     None
 }
 
-/// Analyze only this crate's DI declarations. Dependencies must be processed
-/// by the framework wrapper separately; this phase does not rewrite a foreign
-/// crate or manufacture registrations for arbitrary external implementations.
+/// Combine this crate's declarations with typed registration metadata from
+/// dependencies processed by the framework wrapper. Insertions remain local;
+/// private upstream projections come from the producer's capability catalog.
 pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
+    let runtimes: Vec<_> = tcx
+        .crates(())
+        .iter()
+        .filter(|&&krate| tcx.crate_name(krate).as_str() == "nestrs_core")
+        .collect();
+    if runtimes.len() > 1 {
+        return Err("multiple nestrs-core crate identities are linked; distributed DI registrations require a single compatible nestrs-core version".into());
+    }
     let mut markers = Vec::new();
     let mut errors = Vec::new();
     for owner in tcx.hir_body_owners() {
@@ -224,6 +236,7 @@ pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
     if !errors.is_empty() {
         return Err(errors.join("; "));
     }
+    markers.extend(external_registrations(tcx)?);
 
     let mut by_owner: HashMap<LocalDefId, Vec<Marker<'_>>> = HashMap::new();
     let mut pending = VecDeque::new();
@@ -232,7 +245,10 @@ pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
         // A closed-looking field inside an unused generic blueprint is not a
         // global DI request. Its markers become live only when that blueprint
         // is instantiated through a known closed root or dependency.
-        if tcx.generics_of(marker.owner).count() == 0 && marker.types.iter().copied().all(closed) {
+        if (tcx.def_kind(marker.owner) == DefKind::Mod
+            || tcx.generics_of(marker.owner).count() == 0)
+            && marker.types.iter().copied().all(closed)
+        {
             if marker.kind == MarkerKind::Provider {
                 explicit_providers.insert((
                     normalized(tcx, marker.owner, marker.types[0])?,
@@ -254,9 +270,12 @@ pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
     let param_env = ty::ParamEnv::empty();
     let definition = provider_definition(tcx);
     let mut providers: HashMap<Ty<'_>, Marker<'_>> = HashMap::new();
+    let mut capability_candidates: HashMap<Ty<'_>, Marker<'_>> = HashMap::new();
     let mut requests = HashSet::new();
     let mut bindings = HashSet::new();
+    let mut automatic_bindings = HashSet::new();
     let mut expanded = HashSet::new();
+    let mut passive_expanded = HashSet::new();
     let unsize_trait = tcx
         .lang_items()
         .unsize_trait()
@@ -280,14 +299,15 @@ pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
                 owner,
                 span: tcx.def_span(owner),
                 key: None,
+                passive: true,
             });
         }
     }
+    pending.extend(closed_impls.iter().cloned());
 
     loop {
         if pending.is_empty() {
-            for marker in &closed_impls {
-                let concrete = marker.types[0];
+            for (&concrete, marker) in &capability_candidates {
                 if !expanded.contains(&concrete)
                     && requests.iter().any(|interface| {
                         infcx
@@ -295,7 +315,10 @@ pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
                             .must_apply_modulo_regions()
                     })
                 {
-                    pending.push_back(marker.clone());
+                    let mut marker = marker.clone();
+                    marker.kind = MarkerKind::Request;
+                    marker.passive = false;
+                    pending.push_back(marker);
                 }
             }
         }
@@ -310,7 +333,19 @@ pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
         }
         match marker.kind {
             MarkerKind::Provider => {
-                providers.entry(marker.types[0]).or_insert(marker);
+                capability_candidates
+                    .entry(marker.types[0])
+                    .or_insert_with(|| marker.clone());
+                if !marker.passive {
+                    providers.entry(marker.types[0]).or_insert(marker);
+                }
+            }
+            MarkerKind::AutomaticBinding => {
+                automatic_bindings.insert((marker.types[0], marker.types[1]));
+                marker.kind = MarkerKind::Request;
+                marker.types.truncate(1);
+                marker.passive = true;
+                pending.push_back(marker);
             }
             MarkerKind::Binding => {
                 bindings.insert((marker.types[0], marker.types[1]));
@@ -324,10 +359,16 @@ pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
             MarkerKind::Request => {
                 let requested = marker.types[0];
                 if matches!(requested.kind(), ty::Dynamic(..)) {
-                    requests.insert(requested);
+                    if !marker.passive {
+                        requests.insert(requested);
+                    }
                     continue;
                 }
-                if !expanded.insert(requested) {
+                if !(if marker.passive {
+                    passive_expanded.insert(requested)
+                } else {
+                    expanded.insert(requested)
+                }) {
                     continue;
                 }
                 let Some((trait_id, method_id)) = definition else {
@@ -357,6 +398,7 @@ pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
                     let mut instantiated_markers = Vec::new();
                     for nested in nested {
                         let mut instantiated = nested.clone();
+                        instantiated.passive = marker.passive;
                         for ty in &mut instantiated.types {
                             *ty = ty::EarlyBinder::bind(tcx, *ty)
                                 .instantiate(tcx, instance.args)
@@ -366,7 +408,12 @@ pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
                     }
                     instantiated_markers
                 } else {
-                    external_blueprint_markers(tcx, instance, marker.owner, marker.span)?
+                    let mut imported =
+                        external_blueprint_markers(tcx, instance, marker.owner, marker.span, true)?;
+                    for imported_marker in &mut imported {
+                        imported_marker.passive = marker.passive;
+                    }
+                    imported
                 };
                 let blueprint = instantiated_markers
                     .iter()
@@ -388,17 +435,22 @@ pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
         }
     }
 
-    let inherited_bindings = inherited_bindings(tcx)?;
     let mut insertions = Vec::new();
     let mut generated = 0;
-    let mut candidates: Vec<_> = providers.iter().collect();
-    candidates.sort_by_key(|(ty, _)| type_source(**ty));
+    let type_source = crate::type_source::SourceTypes::new(tcx);
+    let mut candidates: Vec<_> = capability_candidates.iter().collect();
+    candidates.sort_by_key(|(ty, _)| type_source.render(**ty));
     let mut interfaces: Vec<_> = requests.iter().copied().collect();
-    interfaces.sort_by_key(|ty| type_source(*ty));
+    interfaces.sort_by_key(|ty| type_source.render(*ty));
+    let potential_impls = capability_impls(tcx);
     for (concrete, marker) in candidates {
-        for interface in &interfaces {
+        let mut candidate_interfaces: HashSet<_> = interfaces.iter().copied().collect();
+        candidate_interfaces.extend(declared_interfaces(tcx, *concrete, &potential_impls));
+        let mut candidate_interfaces: Vec<_> = candidate_interfaces.into_iter().collect();
+        candidate_interfaces.sort_by_key(|ty| type_source.render(*ty));
+        for interface in &candidate_interfaces {
             if bindings.contains(&(*concrete, *interface))
-                || inherited_bindings.contains(&(*concrete, *interface))
+                || automatic_bindings.contains(&(*concrete, *interface))
             {
                 continue;
             }
@@ -413,19 +465,18 @@ pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
                 .source_map()
                 .lookup_char_pos(marker.span.source_callsite().lo());
             let binding = BindingSpec {
-                concrete: type_source(*concrete),
-                interface: type_source(*interface),
+                concrete: type_source.render(*concrete),
+                interface: type_source.render(*interface),
                 source_file: source.file.name.prefer_local_unconditionally().to_string(),
                 source_line: source.line as u32,
                 source_column: source.col.0 as u32 + 1,
             };
-            insertions.push(insertion_for(
-                tcx,
-                *concrete,
-                *interface,
-                marker.owner,
-                binding,
-            )?);
+            let insertion = insertion_for(tcx, *concrete, *interface, marker.owner, binding);
+            match insertion {
+                Ok(insertion) => insertions.push(insertion),
+                Err(error) if requests.contains(interface) => return Err(error),
+                Err(_) => continue,
+            }
             generated += 1;
         }
     }
@@ -435,81 +486,55 @@ pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
         requests: requests.len(),
         generated_bindings: generated,
         explicit_bindings: bindings.len(),
+        automatic_bindings: automatic_bindings.len(),
     })
 }
 
-/// Generated registration callbacks use this private ABI name in both explicit
-/// macro fixtures and automatically emitted code. Read their *typed marker
-/// calls*, not name-based trait guesses, from upstream metadata. An inherited
-/// pair prevents a second automatic callback; existing explicit duplicates are
-/// left in the linked registration slices for the graph compiler to diagnose.
-fn inherited_bindings<'tcx>(tcx: TyCtxt<'tcx>) -> Result<HashSet<(Ty<'tcx>, Ty<'tcx>)>, String> {
-    let mut bindings = HashSet::new();
+/// Import only actual nongeneric registration callbacks. Template provider
+/// methods are read separately after a closed Instance is selected, so a
+/// dormant generic declaration cannot create an active dependency request.
+fn external_registrations<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Vec<Marker<'tcx>>, String> {
+    let mut markers = Vec::new();
     for &krate in tcx.crates(()) {
         for index in 0..tcx.num_extern_def_ids(krate) {
             let definition = DefId {
                 krate,
                 index: DefIndex::from_usize(index),
             };
-            // Metadata def-index tables may contain holes for stripped/private
-            // items. MIR table availability is safe to probe before asking for
-            // the corresponding DefKey or function signature.
+            // Metadata tables contain holes: inspect MIR availability first.
             if !tcx.is_mir_available(definition) {
                 continue;
             }
-            if tcx
-                .opt_item_name(definition)
-                .is_none_or(|name| name.as_str() != "__nestrs_reflect_trait_binding")
-            {
+            let Some(name) = tcx.opt_item_name(definition) else {
+                continue;
+            };
+            if !matches!(
+                name.as_str(),
+                "__nestrs_reflect_provider"
+                    | "__nestrs_reflected_factory"
+                    | "__nestrs_query_root"
+                    | "__nestrs_reflect_trait_binding"
+                    | "__nestrs_reflect_automatic_binding"
+            ) {
                 continue;
             }
-            for block in tcx.optimized_mir(definition).basic_blocks.iter() {
-                let mir::TerminatorKind::Call { func, .. } = &block.terminator().kind else {
-                    continue;
-                };
-                let body = tcx.optimized_mir(definition);
-                let ty::FnDef(callee, arguments) = *func.ty(&body.local_decls, tcx).kind() else {
-                    continue;
-                };
-                if tcx.crate_name(callee.krate).as_str() != "nestrs_core"
-                    || definition_path(tcx, callee) != "registration::compiler::compiler_binding"
-                {
-                    continue;
-                }
-                let types: Vec<_> = arguments.types().collect();
-                let [concrete, interface] = types.as_slice() else {
-                    return Err(
-                        "upstream compiler_binding marker has an incompatible type-argument count"
-                            .into(),
-                    );
-                };
-                if !closed(*concrete) || !closed(*interface) {
-                    return Err(
-                        "upstream binding callback unexpectedly contains an open generic type"
-                            .into(),
-                    );
-                }
-                let concrete = tcx
-                    .try_normalize_erasing_regions(
-                        ty::TypingEnv::fully_monomorphized(),
-                        ty::Unnormalized::new_wip(*concrete),
-                    )
-                    .map_err(|error| {
-                        format!("cannot normalize upstream binding concrete type: {error:?}")
-                    })?;
-                let interface = tcx
-                    .try_normalize_erasing_regions(
-                        ty::TypingEnv::fully_monomorphized(),
-                        ty::Unnormalized::new_wip(*interface),
-                    )
-                    .map_err(|error| {
-                        format!("cannot normalize upstream binding interface type: {error:?}")
-                    })?;
-                bindings.insert((concrete, interface));
+            if tcx.generics_of(definition).count() != 0 {
+                return Err(format!(
+                    "upstream registration callback {} unexpectedly captures generic arguments",
+                    tcx.def_path_str(definition)
+                ));
             }
+            let instance = ty::Instance::mono(tcx, definition);
+            markers.extend(external_blueprint_markers(
+                tcx,
+                instance,
+                LocalModDefId::CRATE_DEF_ID.to_local_def_id(),
+                tcx.def_span(definition),
+                false,
+            )?);
         }
     }
-    Ok(bindings)
+    Ok(markers)
 }
 
 /// Closed generic blueprints encode their MIR in the dependency's metadata.
@@ -522,6 +547,7 @@ fn external_blueprint_markers<'tcx>(
     instance: ty::Instance<'tcx>,
     owner: LocalDefId,
     request_span: Span,
+    require_provider: bool,
 ) -> Result<Vec<Marker<'tcx>>, String> {
     let owner = tcx.parent_module_from_def_id(owner).to_local_def_id();
     let definition = instance.def_id();
@@ -547,6 +573,7 @@ fn external_blueprint_markers<'tcx>(
             "registration::compiler::compiler_provider" => MarkerKind::Provider,
             "registration::compiler::compiler_request" => MarkerKind::Request,
             "registration::compiler::compiler_binding" => MarkerKind::Binding,
+            "registration::compiler::compiler_automatic_binding" => MarkerKind::AutomaticBinding,
             _ => continue,
         };
         let generic_args = ty::EarlyBinder::bind(tcx, generic_args)
@@ -568,11 +595,13 @@ fn external_blueprint_markers<'tcx>(
             owner,
             span: request_span,
             key,
+            passive: false,
         });
     }
-    if !markers
-        .iter()
-        .any(|marker| marker.kind == MarkerKind::Provider)
+    if require_provider
+        && !markers
+            .iter()
+            .any(|marker| marker.kind == MarkerKind::Provider)
     {
         return Err(format!(
             "external provider blueprint {} is missing preserved Nestrs compiler markers; rebuild the dependency with compatible cargo nestrs and nestrs-core",
@@ -695,6 +724,187 @@ fn external_key_parts<'tcx>(
     }
 }
 
+/// Capabilities come from real business trait impls, including upstream blanket
+/// impls. A closed provider fixes the impl's arguments; unconstrained trait
+/// parameters are never guessed.
+fn capability_impls(tcx: TyCtxt<'_>) -> Vec<DefId> {
+    let mut implementations = HashSet::new();
+    for definition in tcx.iter_local_def_id() {
+        if tcx.def_kind(definition) == (DefKind::Impl { of_trait: true }) {
+            implementations.insert(definition.to_def_id());
+        }
+    }
+    // External blanket impls may apply to a private local provider without a
+    // corresponding local impl item. Enumerate real business-trait metadata,
+    // then let rustc solve each finite concrete/impl pair below.
+    for &krate in tcx.crates(()) {
+        if matches!(
+            tcx.crate_name(krate).as_str(),
+            "core" | "std" | "alloc" | "nestrs_core"
+        ) {
+            continue;
+        }
+        for &trait_id in tcx.traits(krate) {
+            if tcx.is_dyn_compatible(trait_id) && !tcx.trait_is_auto(trait_id) {
+                implementations.extend(tcx.all_impls(trait_id));
+            }
+        }
+    }
+    let mut implementations: Vec<_> = implementations.into_iter().collect();
+    implementations.sort_by_key(|definition| tcx.def_path_str(*definition));
+    implementations
+}
+
+fn declared_interfaces<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    concrete: Ty<'tcx>,
+    implementations: &[DefId],
+) -> HashSet<Ty<'tcx>> {
+    let mut interfaces = HashSet::new();
+    for &definition in implementations {
+        let raw = tcx
+            .impl_trait_ref(definition)
+            .instantiate_identity()
+            .skip_normalization();
+        if matches!(
+            tcx.crate_name(raw.def_id.krate).as_str(),
+            "core" | "std" | "alloc" | "nestrs_core"
+        ) {
+            continue;
+        }
+        let infcx = tcx
+            .infer_ctxt()
+            .ignoring_regions()
+            .build(ty::TypingMode::non_body_analysis());
+        let args = infcx.fresh_args_for_item(tcx.def_span(definition), definition);
+        let ocx = ObligationCtxt::new(&infcx);
+        let cause = ObligationCause::dummy();
+        let environment = ty::ParamEnv::empty();
+        let self_ty = ocx.normalize(
+            &cause,
+            environment,
+            tcx.type_of(definition).instantiate(tcx, args),
+        );
+        if ocx.eq(&cause, environment, concrete, self_ty).is_err() {
+            continue;
+        }
+        let trait_ref = ocx.normalize(
+            &cause,
+            environment,
+            tcx.impl_trait_ref(definition).instantiate(tcx, args),
+        );
+        ocx.register_obligation(Obligation::new(tcx, cause, environment, trait_ref));
+        if !ocx.evaluate_obligations_error_on_ambiguity().is_empty() {
+            continue;
+        }
+        let trait_ref = infcx.resolve_vars_if_possible(trait_ref);
+        if trait_ref.has_infer()
+            || trait_ref.has_non_region_param()
+            || trait_ref.has_escaping_bound_vars()
+        {
+            continue;
+        }
+        for supertrait in traits::supertraits(tcx, ty::Binder::dummy(trait_ref)) {
+            let Some(supertrait) = supertrait.no_bound_vars() else {
+                continue;
+            };
+            if !matches!(
+                tcx.crate_name(supertrait.def_id.krate).as_str(),
+                "core" | "std" | "alloc" | "nestrs_core"
+            ) && !tcx.trait_is_auto(supertrait.def_id)
+                && tcx.is_dyn_compatible(supertrait.def_id)
+            {
+                interfaces.extend(interface_variants(tcx, concrete, supertrait));
+            }
+        }
+    }
+    interfaces
+}
+
+fn interface_variants<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    concrete: Ty<'tcx>,
+    principal: ty::TraitRef<'tcx>,
+) -> Vec<Ty<'tcx>> {
+    let mut predicates = vec![ty::ExistentialPredicate::Trait(
+        ty::ExistentialTraitRef::erase_self_ty(tcx, principal),
+    )];
+    for supertrait in traits::supertraits(tcx, ty::Binder::dummy(principal)) {
+        let Some(supertrait) = supertrait.no_bound_vars() else {
+            return Vec::new();
+        };
+        for item in tcx
+            .associated_items(supertrait.def_id)
+            .in_definition_order()
+        {
+            if !matches!(tcx.def_kind(item.def_id), DefKind::AssocTy)
+                || tcx.generics_require_sized_self(item.def_id)
+            {
+                continue;
+            }
+            if tcx.generics_of(item.def_id).count() != supertrait.args.len() {
+                return Vec::new();
+            }
+            let projection = Ty::new_projection(tcx, ty::IsRigid::No, item.def_id, supertrait.args);
+            let Ok(value) = tcx.try_normalize_erasing_regions(
+                ty::TypingEnv::fully_monomorphized(),
+                ty::Unnormalized::new_wip(projection),
+            ) else {
+                return Vec::new();
+            };
+            if !closed(value) || matches!(value.kind(), ty::Alias(..)) {
+                return Vec::new();
+            }
+            let binding = ty::ExistentialProjection::new(
+                tcx,
+                item.def_id,
+                supertrait.args.iter().skip(1),
+                value.into(),
+            );
+            predicates.push(ty::ExistentialPredicate::Projection(binding));
+        }
+    }
+    let (Some(send), Some(sync), Some(unsize)) = (
+        tcx.get_diagnostic_item(rustc_span::sym::Send),
+        tcx.lang_items().sync_trait(),
+        tcx.lang_items().unsize_trait(),
+    ) else {
+        return Vec::new();
+    };
+    let infcx = tcx
+        .infer_ctxt()
+        .ignoring_regions()
+        .build(ty::TypingMode::non_body_analysis());
+    let mut variants = Vec::new();
+    for mask in 0..4 {
+        let mut predicates = predicates.clone();
+        if mask & 1 != 0 {
+            predicates.push(ty::ExistentialPredicate::AutoTrait(send));
+        }
+        if mask & 2 != 0 {
+            predicates.push(ty::ExistentialPredicate::AutoTrait(sync));
+        }
+        use rustc_middle::ty::ExistentialPredicateStableCmpExt as _;
+        predicates.sort_by(|left, right| left.stable_cmp(tcx, right));
+        predicates.dedup();
+        let predicates = tcx.mk_poly_existential_predicates_from_iter(
+            predicates.into_iter().map(ty::Binder::dummy),
+        );
+        let object = Ty::new_dynamic(tcx, predicates, tcx.lifetimes.re_static);
+        if [send, sync].into_iter().all(|bound| {
+            infcx
+                .type_implements_trait(bound, [object], ty::ParamEnv::empty())
+                .must_apply_modulo_regions()
+        }) && infcx
+            .type_implements_trait(unsize, [concrete, object], ty::ParamEnv::empty())
+            .must_apply_modulo_regions()
+        {
+            variants.push(tcx.erase_and_anonymize_regions(object));
+        }
+    }
+    variants
+}
+
 fn insertion_for<'tcx>(
     tcx: TyCtxt<'tcx>,
     concrete: Ty<'tcx>,
@@ -731,14 +941,14 @@ fn insertion_for<'tcx>(
             let (hir_module, span, _) = tcx.hir_get_module(LocalModDefId::new_unchecked(*module));
             !span.from_expansion()
                 && !hir_module.spans.inject_use_span.from_expansion()
-                && accessible(tcx, concrete, *module)
-                && accessible(tcx, interface, *module)
+                && crate::type_source::accessible(tcx, concrete, *module)
+                && crate::type_source::accessible(tcx, interface, *module)
         })
         .ok_or_else(|| {
             format!(
-                "no supported source module can name both {} and {} for a legal automatic binding; macro-generated modules require a compiler hygiene bridge",
-                type_source(concrete),
-                type_source(interface)
+                "no supported source module in the current crate can name both {} and {} for a legal automatic binding; private upstream types require an existing producer capability for this exact interface shape; macro-generated modules require a compiler hygiene bridge",
+                binding.concrete,
+                binding.interface
             )
         })?;
     let (module, span, _) = tcx.hir_get_module(LocalModDefId::new_unchecked(owner));
@@ -790,48 +1000,4 @@ fn module_for(
         }
         owner = tcx.local_parent(owner);
     }
-}
-
-fn accessible(tcx: TyCtxt<'_>, ty: Ty<'_>, module: LocalDefId) -> bool {
-    let visible = |mut definition: DefId| {
-        loop {
-            if !tcx.visibility(definition).is_accessible_from(module, tcx) {
-                return false;
-            }
-            // The type printer uses rustc's public reexport graph for foreign
-            // definitions. Check that same graph, not a private definition-site
-            // module which may not occur in the emitted type path at all.
-            let parent = if definition.is_local() {
-                tcx.opt_parent(definition)
-            } else {
-                tcx.visible_parent_map(())
-                    .get(&definition)
-                    .copied()
-                    .or_else(|| tcx.opt_parent(definition))
-            };
-            let Some(parent) = parent else {
-                return true;
-            };
-            definition = parent;
-            if tcx.def_kind(definition) != DefKind::Mod {
-                return false;
-            }
-        }
-    };
-    for argument in ty.walk() {
-        if let ty::GenericArgKind::Type(nested) = argument.kind() {
-            match nested.kind() {
-                ty::Adt(definition, _) if !visible(definition.did()) => return false,
-                ty::Dynamic(predicates, _)
-                    if predicates
-                        .principal_def_id()
-                        .is_some_and(|trait_id| !visible(trait_id)) =>
-                {
-                    return false;
-                }
-                _ => {}
-            }
-        }
-    }
-    true
 }

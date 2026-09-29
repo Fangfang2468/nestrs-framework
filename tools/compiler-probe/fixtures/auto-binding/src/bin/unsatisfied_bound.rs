@@ -4,6 +4,9 @@ use nestrs::injectable;
 use nestrs_core::{__private::REFLECTED_BINDINGS, ServiceProvider};
 use std::marker::PhantomData;
 
+#[path = "../automatic_assertions.rs"]
+mod automatic_assertions;
+
 struct NoOrd;
 
 trait Port: Send + Sync {}
@@ -40,6 +43,7 @@ async fn main() {
             .is_none()
     );
     assert_eq!(REFLECTED_BINDINGS.len(), 0);
+    automatic_assertions::assert_count::<dyn Port>(0);
     provider.dispose_async().await.unwrap();
     println!("auto-binding unsatisfied bound: no invalid candidate generated");
 }

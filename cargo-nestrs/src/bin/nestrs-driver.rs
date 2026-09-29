@@ -21,6 +21,8 @@ mod autobind_codegen;
 mod autobind_semantic;
 #[path = "../compiler/graph_entry.rs"]
 mod graph_entry;
+#[path = "../compiler/type_source.rs"]
+mod type_source;
 
 use autobind_codegen::OverlayFileLoader;
 use autobind_semantic::Analysis;
@@ -111,7 +113,7 @@ impl Callbacks for Discover {
 struct Generate {
     loader: Option<OverlayFileLoader>,
     snapshots: BTreeMap<PathBuf, String>,
-    expected: (usize, usize, usize),
+    expected: (usize, usize, usize, usize),
     validation: Option<Result<(), String>>,
 }
 
@@ -144,7 +146,7 @@ impl Callbacks for Generate {
     ) -> Compilation {
         graph_entry::validate(tcx);
         self.validation = Some(autobind_semantic::analyze(tcx).and_then(|analysis| {
-            let observed = (analysis.providers, analysis.requests, analysis.explicit_bindings);
+            let observed = (analysis.providers, analysis.requests, analysis.explicit_bindings, analysis.automatic_bindings);
             if analysis.generated_bindings != 0 || observed != self.expected {
                 Err(format!(
                     "DI semantic inputs changed between compiler passes: expected {:?}, observed {:?}, still missing {} bindings",
@@ -363,7 +365,8 @@ fn run() -> Result<ExitCode, String> {
     let expected = (
         analysis.providers,
         analysis.requests,
-        analysis.explicit_bindings + analysis.generated_bindings,
+        analysis.explicit_bindings,
+        analysis.automatic_bindings + analysis.generated_bindings,
     );
     let loader = OverlayFileLoader::from_insertions(analysis.insertions, &artifacts)
         .map_err(|error| error.to_string())?;
@@ -474,12 +477,13 @@ fn analysis_json(crate_name: &str, analysis: &Analysis) -> String {
         }
     }
     format!(
-        "{{\"crate\":{},\"providers\":{},\"requests\":{},\"generated_bindings\":{},\"explicit_bindings\":{},\"bindings\":[{}]}}\n",
+        "{{\"crate\":{},\"providers\":{},\"requests\":{},\"generated_bindings\":{},\"explicit_bindings\":{},\"automatic_bindings\":{},\"bindings\":[{}]}}\n",
         json(crate_name),
         analysis.providers,
         analysis.requests,
         analysis.generated_bindings,
         analysis.explicit_bindings,
+        analysis.automatic_bindings,
         bindings.join(","),
     )
 }

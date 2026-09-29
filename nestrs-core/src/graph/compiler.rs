@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use crate::{
     ServiceLifetime,
     registration::{
-        binding::{REFLECTED_BINDINGS, TraitBinding},
+        binding::{REFLECTED_AUTOMATIC_BINDINGS, REFLECTED_BINDINGS, TraitBinding},
         dependency::{ClosedProviderCallback, Delivery, DependencyRequest, ProviderSource},
         provider::{Provider, ProviderCommon, REFLECTED_PROVIDERS},
         root::{REFLECTED_ROOTS, RootDeclaration},
@@ -46,21 +46,35 @@ impl From<Provider> for Declaration {
 
 impl GraphCompiler {
     pub(crate) fn compile_static() -> Result<ValidatedGraph, GraphError> {
-        Self::compile_snapshot(
+        Self::compile_with_automatic_bindings(
             REFLECTED_PROVIDERS
                 .iter()
                 .map(|declare| declare())
                 .collect(),
             REFLECTED_BINDINGS.iter().map(|declare| declare()).collect(),
             REFLECTED_ROOTS.iter().map(|declare| declare()).collect(),
+            REFLECTED_AUTOMATIC_BINDINGS
+                .iter()
+                .map(|declare| declare())
+                .collect(),
         )
     }
 
     /// An owned snapshot lets graph tests stay isolated from process-wide linkme slices.
+    #[cfg(test)]
     pub(crate) fn compile_snapshot(
+        providers: Vec<Provider>,
+        bindings: Vec<TraitBinding>,
+        roots: Vec<RootDeclaration>,
+    ) -> Result<ValidatedGraph, GraphError> {
+        Self::compile_with_automatic_bindings(providers, bindings, roots, vec![])
+    }
+
+    pub(crate) fn compile_with_automatic_bindings(
         providers: Vec<Provider>,
         mut bindings: Vec<TraitBinding>,
         mut roots: Vec<RootDeclaration>,
+        mut automatic_bindings: Vec<TraitBinding>,
     ) -> Result<ValidatedGraph, GraphError> {
         let mut diagnostics = Vec::new();
         let mut declarations: Vec<Declaration> = providers.into_iter().map(Into::into).collect();
@@ -93,6 +107,28 @@ impl GraphCompiler {
         }
         let mut declarations = unique;
         let explicit_count = declarations.len();
+
+        // A projection exported by a dependency is a capability, not a request to register
+        // every interface it implements. Activate it only when the linked graph needs that
+        // interface. Sibling crates may emit the same automatic pair independently; select
+        // one deterministically without hiding duplicate *explicit* declarations below.
+        automatic_bindings.sort_by_key(binding_order);
+        let mut known_pairs: HashSet<_> = bindings
+            .iter()
+            .map(|binding| (binding.trait_type, binding.concrete_type))
+            .collect();
+        let mut automatic_by_interface: HashMap<ServiceType, Vec<TraitBinding>> = HashMap::new();
+        for binding in automatic_bindings {
+            if known_pairs.insert((binding.trait_type, binding.concrete_type)) {
+                automatic_by_interface
+                    .entry(binding.trait_type)
+                    .or_default()
+                    .push(binding);
+            }
+        }
+        let mut requested_interfaces: VecDeque<_> =
+            roots.iter().map(|root| root.service_type).collect();
+        let mut visited_interfaces = HashSet::new();
 
         // A closed bind self type is also a declaration-time anchor. Querying only dyn Trait
         // must discover its generic concrete provider before orphan-binding validation.
@@ -127,13 +163,37 @@ impl GraphCompiler {
             );
         }
 
-        // The growing vector is a FIFO queue: every newly discovered descriptor is examined
-        // exactly once. A callback only describes a provider; no constructor is invoked here.
+        // Two work queues close both concrete blueprints and demanded interface projections.
+        // An activated projection may reveal a generic provider whose dependencies demand
+        // another interface. Every descriptor and interface is examined once, without recursion.
         let mut cursor = 0;
-        while cursor < declarations.len() {
+        while cursor < declarations.len() || !requested_interfaces.is_empty() {
+            if let Some(interface) = requested_interfaces.pop_front() {
+                if visited_interfaces.insert(interface)
+                    && let Some(automatic) = automatic_by_interface.remove(&interface)
+                {
+                    for binding in automatic {
+                        if let Some(callback) = binding.materialize {
+                            materialize(
+                                binding.concrete_type,
+                                callback,
+                                binding.source,
+                                &mut materialized,
+                                &mut declarations,
+                                &mut catalog,
+                                explicit_count,
+                                &mut diagnostics,
+                            );
+                        }
+                        bindings.push(binding);
+                    }
+                }
+                continue;
+            }
             let requests = declarations[cursor].dependencies.clone();
             let request_source = declarations[cursor].common.source;
             for request in requests {
+                requested_interfaces.push_back(request.token.service_type);
                 if catalog
                     .get(&request.token)
                     .is_none_or(|&index| index >= explicit_count)
@@ -177,13 +237,7 @@ impl GraphCompiler {
                 .push(provider);
         }
 
-        bindings.sort_by_key(|binding| {
-            (
-                binding.trait_type.name,
-                binding.concrete_type.name,
-                binding.source,
-            )
-        });
+        bindings.sort_by_key(binding_order);
         let mut binding_index = HashMap::new();
         let mut candidates: HashMap<ServiceIdentifier, Vec<(ProviderId, TraitBinding)>> =
             HashMap::new();
@@ -577,6 +631,14 @@ fn same_metadata(left: &Declaration, right: &Declaration) -> bool {
                     && std::mem::discriminant(&left.provider_source)
                         == std::mem::discriminant(&right.provider_source)
             })
+}
+
+fn binding_order(binding: &TraitBinding) -> (&'static str, &'static str, ServiceSource) {
+    (
+        binding.trait_type.name,
+        binding.concrete_type.name,
+        binding.source,
+    )
 }
 
 fn sort_declarations(declarations: &mut [Declaration]) {

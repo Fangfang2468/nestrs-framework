@@ -4,6 +4,9 @@ use nestrs::injectable;
 use nestrs_core::{__private::REFLECTED_BINDINGS, ServiceProvider};
 use std::marker::PhantomData;
 
+#[path = "../automatic_assertions.rs"]
+mod automatic_assertions;
+
 mod generated {
     use nestrs::injectable;
     use nestrs_core::ServiceProvider;
@@ -38,6 +41,7 @@ mod generated {
     define_service!(MacroService);
 
     pub(super) async fn assert_projection(provider: &ServiceProvider) {
+        super::automatic_assertions::assert_count::<dyn MacroPort>(1);
         let concrete = nestrs_core::get_required_service!(provider, MacroService)
             .await
             .unwrap();
@@ -134,7 +138,9 @@ async fn main() {
         .unwrap();
     assert_eq!(buffer_port.capacity(), 8);
     assert_eq!(buffer_port.identity(), buffer as *const Buffer<8> as usize);
-    assert_eq!(REFLECTED_BINDINGS.len(), 3);
+    assert_eq!(REFLECTED_BINDINGS.len(), 0);
+    automatic_assertions::assert_count::<dyn RepositoryPort<std::string::String>>(1);
+    automatic_assertions::assert_count::<dyn BufferPort<8>>(1);
 
     provider.dispose_async().await.unwrap();
     println!("auto-binding source forms: macro type/std String/const generic identities passed");

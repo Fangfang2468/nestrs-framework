@@ -5,8 +5,9 @@
 //! remain calls in encoded MIR so downstream closed generic blueprints can be
 //! analyzed before monomorphization; LLVM can still eliminate their empty bodies.
 //! Keeping
-//! separate identities lets the compiler distinguish providers, requests and
-//! explicit bindings after macro expansion and type checking.
+//! separate identities lets the compiler distinguish providers, requests,
+//! explicit bindings and automatic projection capabilities after macro
+//! expansion and type checking.
 
 /// Static key payload recognized by the versioned compiler adapter.
 ///
@@ -32,6 +33,16 @@ pub const fn compiler_request<T: ?Sized>() {
 
 #[inline(never)]
 pub const fn compiler_binding<C: ?Sized, I: ?Sized>() {
+    let _ = (
+        core::marker::PhantomData::<C>,
+        core::marker::PhantomData::<I>,
+    );
+}
+
+/// A precompiled projection capability, which does not itself demand either
+/// type or activate the concrete type's provider blueprint.
+#[inline(never)]
+pub const fn compiler_automatic_binding<C: ?Sized, I: ?Sized>() {
     let _ = (
         core::marker::PhantomData::<C>,
         core::marker::PhantomData::<I>,

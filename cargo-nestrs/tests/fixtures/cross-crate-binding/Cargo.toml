@@ -1,0 +1,28 @@
+[package]
+name = "nestrs-cross-crate-binding"
+version = "0.0.0"
+edition = "2024"
+publish = false
+default-run = "downstream_demand"
+
+[workspace]
+resolver = "3"
+members = ["contracts", "primary-provider", "fallback-provider", "upstream-consumer", "sibling-consumer"]
+
+[workspace.dependencies]
+nestrs-core = { path = "../../../../nestrs-core" }
+contracts = { package = "nestrs-cross-contracts", path = "contracts" }
+primary-provider = { package = "nestrs-cross-primary-provider", path = "primary-provider" }
+fallback-provider = { package = "nestrs-cross-fallback-provider", path = "fallback-provider" }
+upstream-consumer = { package = "nestrs-cross-upstream-consumer", path = "upstream-consumer" }
+sibling-consumer = { package = "nestrs-cross-sibling-consumer", path = "sibling-consumer" }
+tokio = { version = "1.53.1", default-features = false, features = ["rt", "macros"] }
+
+[dependencies]
+nestrs-core.workspace = true
+contracts.workspace = true
+primary-provider.workspace = true
+fallback-provider.workspace = true
+upstream-consumer.workspace = true
+sibling-consumer.workspace = true
+tokio.workspace = true

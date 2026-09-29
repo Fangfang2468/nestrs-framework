@@ -1,0 +1,10 @@
+[package]
+name = "nestrs-cross-upstream-consumer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+nestrs-core.workspace = true
+contracts.workspace = true
+primary-provider.workspace = true

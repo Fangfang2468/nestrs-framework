@@ -4,6 +4,9 @@ use nestrs::{factory, injectable};
 use nestrs_core::{__private::REFLECTED_BINDINGS, ServiceKey, ServiceProvider};
 use std::marker::PhantomData;
 
+#[path = "../automatic_assertions.rs"]
+mod automatic_assertions;
+
 struct User;
 
 trait Port: Send + Sync {
@@ -37,7 +40,8 @@ fn factory_repository() -> Repository<User> {
 #[tokio::main]
 async fn main() {
     let provider = ServiceProvider::build().await.unwrap();
-    assert_eq!(REFLECTED_BINDINGS.len(), 1);
+    assert_eq!(REFLECTED_BINDINGS.len(), 0);
+    automatic_assertions::assert_count::<dyn Port>(1);
     let default = nestrs_core::get_required_service!(provider, Repository<User>)
         .await
         .unwrap();

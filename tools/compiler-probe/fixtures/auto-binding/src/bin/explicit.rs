@@ -3,6 +3,9 @@
 use nestrs::{bind, injectable};
 use nestrs_core::{__private::REFLECTED_BINDINGS, ServiceProvider};
 
+#[path = "../automatic_assertions.rs"]
+mod automatic_assertions;
+
 trait Port: Send + Sync {
     fn identity(&self) -> usize;
 }
@@ -23,6 +26,7 @@ impl Port for Service {
 #[tokio::main]
 async fn main() {
     assert_eq!(REFLECTED_BINDINGS.len(), 1);
+    automatic_assertions::assert_count::<dyn Port>(0);
     let provider = ServiceProvider::build().await.unwrap();
     let concrete = nestrs_core::get_required_service!(provider, Service)
         .await

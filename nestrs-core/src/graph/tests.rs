@@ -106,6 +106,200 @@ fn compile(providers: Vec<Provider>) -> Result<ValidatedGraph, GraphError> {
     GraphCompiler::compile_snapshot(providers, vec![], vec![])
 }
 
+fn audit_root() -> RootDeclaration {
+    RootDeclaration {
+        service_type: ServiceType::create::<dyn Audit>(),
+        materialize: None,
+        source: source(),
+    }
+}
+
+#[test]
+fn unused_automatic_capabilities_do_not_create_routes_or_materialize_blueprints() {
+    let mut unused = binding::<Alpha>();
+    unused.materialize = Some(|| panic!("an unused capability must not materialize a provider"));
+    let graph = GraphCompiler::compile_with_automatic_bindings(
+        vec![
+            provider::<Alpha>(None, ServiceLifetime::Singleton, vec![]),
+            provider::<Beta>(None, ServiceLifetime::Singleton, vec![]),
+        ],
+        vec![],
+        vec![],
+        vec![unused, binding::<Beta>()],
+    )
+    .unwrap();
+    assert_eq!(graph.nodes.len(), 2);
+    assert!(!graph.routes.contains_key(&token::<dyn Audit>(None)));
+}
+
+#[test]
+fn sibling_automatic_capabilities_are_idempotent_and_deterministic() {
+    let mut later = binding::<Alpha>();
+    later.source = ServiceSource::new("z-sibling.rs", 2, 1);
+    for automatic in [
+        vec![later, binding::<Alpha>()],
+        vec![binding::<Alpha>(), later],
+    ] {
+        let graph = GraphCompiler::compile_with_automatic_bindings(
+            vec![provider::<Alpha>(None, ServiceLifetime::Singleton, vec![])],
+            vec![],
+            vec![audit_root(), audit_root()],
+            automatic,
+        )
+        .unwrap();
+        assert_eq!(graph.nodes.len(), 1);
+        assert_eq!(
+            graph.routes[&token::<Alpha>(None)].provider,
+            graph.routes[&token::<dyn Audit>(None)].provider,
+        );
+    }
+}
+
+#[test]
+fn explicit_binding_wins_over_automatic_without_hiding_explicit_duplicates() {
+    let mut ignored = binding::<Alpha>();
+    ignored.materialize = Some(|| panic!("explicit projection must supersede automatic blueprint"));
+    for count in [1, 2] {
+        let result = GraphCompiler::compile_with_automatic_bindings(
+            vec![provider::<Alpha>(None, ServiceLifetime::Singleton, vec![])],
+            vec![binding::<Alpha>(); count],
+            vec![audit_root()],
+            vec![ignored, ignored],
+        );
+        if count == 1 {
+            assert!(result.is_ok());
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("重复 trait binding")
+            );
+        }
+    }
+}
+
+#[test]
+fn automatic_capabilities_activate_from_registered_provider_dependencies() {
+    let graph = GraphCompiler::compile_with_automatic_bindings(
+        vec![
+            provider::<Alpha>(None, ServiceLifetime::Singleton, vec![]),
+            provider::<Consumer>(
+                None,
+                ServiceLifetime::Singleton,
+                vec![trait_dependency(false, None)],
+            ),
+        ],
+        vec![],
+        vec![],
+        vec![binding::<Alpha>()],
+    )
+    .unwrap();
+    let consumer = graph.routes[&token::<Consumer>(None)].provider;
+    let alpha = graph.routes[&token::<Alpha>(None)].provider;
+    assert_eq!(graph.nodes[consumer].dependencies[0].target, Some(alpha));
+}
+
+#[test]
+fn automatic_materialization_closes_new_concrete_and_interface_dependencies() {
+    trait Store: Send + Sync {}
+    impl Store for Gamma {}
+    let store = TraitBinding {
+        trait_type: ServiceType::create::<dyn Store>(),
+        concrete_type: ServiceType::create::<Gamma>(),
+        materialize: Some(|| provider::<Gamma>(None, ServiceLifetime::Singleton, vec![])),
+        key_policy: BoundKeyPolicy::InheritRequestedKey,
+        prepare_required: |slot, value| {
+            prepare_bound_required::<Gamma, dyn Store>(slot, value, |value| value)
+        },
+        prepare_optional: |slot, value| {
+            prepare_bound_optional::<Gamma, dyn Store>(slot, value, |value| value)
+        },
+        source: source(),
+    };
+    let mut audit = binding::<Alpha>();
+    audit.materialize = Some(|| {
+        let mut request = trait_dependency(false, None);
+        request.token = token::<dyn Store>(None);
+        provider::<Alpha>(None, ServiceLifetime::Singleton, vec![request])
+    });
+    let graph = GraphCompiler::compile_with_automatic_bindings(
+        vec![],
+        vec![],
+        vec![audit_root()],
+        vec![store, audit],
+    )
+    .unwrap();
+    assert_eq!(graph.nodes.len(), 2);
+    let alpha = graph.routes[&token::<Alpha>(None)].provider;
+    let gamma = graph.routes[&token::<Gamma>(None)].provider;
+    assert_eq!(graph.nodes[alpha].dependencies[0].target, Some(gamma));
+    assert_eq!(graph.topological_order, vec![gamma, alpha]);
+}
+
+#[test]
+fn optional_automatic_requests_cannot_hide_ambiguity_or_lifetime_errors() {
+    let ambiguous = GraphCompiler::compile_with_automatic_bindings(
+        vec![
+            provider::<Alpha>(None, ServiceLifetime::Singleton, vec![]),
+            provider::<Beta>(None, ServiceLifetime::Singleton, vec![]),
+            provider::<Consumer>(
+                None,
+                ServiceLifetime::Singleton,
+                vec![trait_dependency(true, None)],
+            ),
+        ],
+        vec![],
+        vec![],
+        vec![binding::<Alpha>(), binding::<Beta>()],
+    )
+    .unwrap_err();
+    assert!(ambiguous.to_string().contains("AmbiguousTrait"));
+    let scoped = GraphCompiler::compile_with_automatic_bindings(
+        vec![
+            provider::<Alpha>(None, ServiceLifetime::Scoped, vec![]),
+            provider::<Consumer>(
+                None,
+                ServiceLifetime::Singleton,
+                vec![trait_dependency(true, None)],
+            ),
+        ],
+        vec![],
+        vec![],
+        vec![binding::<Alpha>()],
+    )
+    .unwrap_err();
+    assert!(scoped.to_string().contains("ScopeRequired"));
+}
+
+#[test]
+fn automatic_capabilities_keep_keyed_routes_and_exact_explicit_provider_priority() {
+    let named = Some(ServiceKey::Named("audit".into()));
+    let mut audit = binding::<Alpha>();
+    audit.materialize = Some(|| {
+        provider::<Alpha>(
+            Some(ServiceKey::Named("audit".into())),
+            ServiceLifetime::Scoped,
+            vec![dependency::<Gamma>(0, None)],
+        )
+    });
+    let graph = GraphCompiler::compile_with_automatic_bindings(
+        vec![provider::<Alpha>(
+            named.clone(),
+            ServiceLifetime::Singleton,
+            vec![],
+        )],
+        vec![],
+        vec![audit_root()],
+        vec![audit],
+    )
+    .unwrap();
+    assert_eq!(graph.nodes.len(), 1);
+    assert!(graph.routes.contains_key(&token::<dyn Audit>(named)));
+    assert!(!graph.routes.contains_key(&token::<dyn Audit>(None)));
+    assert_eq!(graph.nodes[0].common.lifetime, ServiceLifetime::Singleton);
+}
+
 #[test]
 fn snapshot_order_is_deterministic_and_optional_absence_is_frozen() {
     let mut absent = dependency::<Gamma>(1, None);

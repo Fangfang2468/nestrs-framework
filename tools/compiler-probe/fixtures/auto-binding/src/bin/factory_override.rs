@@ -4,6 +4,9 @@ use nestrs::{factory, injectable};
 use nestrs_core::{__private::REFLECTED_BINDINGS, ServiceKey, ServiceProvider};
 use std::marker::PhantomData;
 
+#[path = "../automatic_assertions.rs"]
+mod automatic_assertions;
+
 struct User;
 
 trait Port: Send + Sync {}
@@ -62,6 +65,9 @@ fn indexed_repository() -> IndexedRepository<User> {
 async fn main() {
     let provider = ServiceProvider::build().await.unwrap();
     assert_eq!(REFLECTED_BINDINGS.len(), 0);
+    // A concrete producer may export its projection without creating a demand
+    // from the generic blueprints superseded by these exact type/key factories.
+    automatic_assertions::assert_count::<dyn Port>(1);
     let default = nestrs_core::get_required_service!(provider, DefaultRepository<User>)
         .await
         .unwrap();

@@ -13,14 +13,14 @@ async fn main() {
     let repository = get_required_service!(provider, UserRepository)
         .await
         .unwrap();
-    let port = get_required_service!(provider, dyn RepositoryPort)
+    let port = get_required_service!(provider, dyn RepositoryPort<User>)
         .await
         .unwrap();
     assert_eq!(repository.count(), 1);
     assert_eq!(port.count(), 1);
     assert!(std::ptr::addr_eq(
         repository as *const UserRepository,
-        port as *const dyn RepositoryPort,
+        port as *const dyn RepositoryPort<User>,
     ));
     // The Cache dependency was obtained from encoded MIR and expanded through
     // the same finite queue as local generic provider declarations.

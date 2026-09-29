@@ -1,4 +1,4 @@
-//! bind 宏生成的 concrete-to-trait 投影元数据 ABI。
+//! 显式绑定与编译器生成的 concrete-to-trait 投影元数据 ABI。
 
 use linkme::distributed_slice;
 
@@ -33,3 +33,12 @@ pub enum BoundKeyPolicy {
 /// 当前链接单元内由 bind 宏声明的 trait binding。
 #[distributed_slice]
 pub static REFLECTED_BINDINGS: [fn() -> TraitBinding] = [..];
+
+/// 编译器预生成的类型投影能力目录，独立于显式绑定声明。
+///
+/// 目录可以包含上游 crate 的私有 concrete/interface：回调已经在能够合法命名
+/// 它们的模块内编译，下游只需使用类型化的准备函数，不必暴露这些类型的可见性。
+/// 图编译器仅激活实际 trait 请求命中的能力；未激活条目不是泛型物化根，也不会
+/// 令未请求接口的多个实现成为图歧义。重复自动 pair 幂等，显式绑定保留原有诊断。
+#[distributed_slice]
+pub static REFLECTED_AUTOMATIC_BINDINGS: [fn() -> TraitBinding] = [..];

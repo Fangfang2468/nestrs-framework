@@ -76,6 +76,7 @@ def main() -> int:
         tested = invoke(["cargo", "test", *package, "--bin", "nestrs-driver"], compile_environment, root, output / "driver-tests")
         require(tested.returncode == 0, f"Production source-overlay/snapshot tests failed; inspect {output / 'driver-tests.stderr.txt'}")
         required_tests = {
+            "autobind_codegen::tests::generated_projection_is_a_latent_capability_not_an_explicit_binding",
             "autobind_codegen::tests::overlays_multiple_offsets_without_editing_the_original_or_its_line_count",
             "autobind_codegen::tests::rejects_offsets_inside_a_multibyte_character_and_beyond_the_file",
             "autobind_codegen::tests::eof_insertions_cannot_be_swallowed_by_an_unterminated_line_comment",
@@ -113,11 +114,16 @@ def main() -> int:
         fixture = directory / "fixtures" / "auto-binding"
         before = source_hashes(fixture)
         manifest = fixture / "Cargo.toml"
-        expected_counts = {"positive": 7, "ambiguity": 2, "unsatisfied_bound": 0,
-                           "explicit": 0, "duplicate_explicit": 0, "cfg_selected": 1,
-                           "semantic_edges": 3, "unreferenced_generic": 0,
-                           "factory_override": 0, "factory_other_key": 1, "source_forms": 3,
-                           "explicit_generic_root": 1, "higher_ranked": 1}
+        # Producers now publish latent projection capabilities even when an
+        # interface is requested only downstream. Count actual DI demand, not
+        # every precompiled Send/Sync spelling of those capabilities. The Rust
+        # fixtures additionally check exact TypeId pairs and runtime behavior.
+        expected_requests = {"positive": 6, "ambiguity": 1, "unsatisfied_bound": 1,
+                             "explicit": 1, "duplicate_explicit": 0, "cfg_selected": 1,
+                             "semantic_edges": 3, "unreferenced_generic": 0,
+                             "factory_override": 0, "factory_other_key": 1, "source_forms": 3,
+                             "explicit_generic_root": 1, "higher_ranked": 3}
+        expected_explicit = {"explicit": 1, "duplicate_explicit": 1, "explicit_generic_root": 1}
         for phase, extra in (("default", ["--bins"]), ("alternate", ["--features", "alternate", "--bin", "cfg_selected"])):
             cargo_base = output / "cargo" / phase
             isolated = cache_directory(cargo_base, expected["release"], expected["commit_hash"], actual["host"], fingerprint)
@@ -138,7 +144,7 @@ def main() -> int:
                 message = json.loads(line)
                 if message.get("reason") == "compiler-artifact" and message.get("executable"):
                     executables[message["target"]["name"]] = message["executable"]
-            wanted = set(expected_counts) if phase == "default" else {"cfg_selected"}
+            wanted = set(expected_requests) if phase == "default" else {"cfg_selected"}
             require(set(executables) == wanted, f"Unexpected fixture binary set: expected {wanted}, found {set(executables)}")
             analyses = {}
             for path in generated.rglob("analysis.json"):
@@ -149,15 +155,22 @@ def main() -> int:
                 analyses[analysis["crate"]] = (analysis, path)
             for name, executable in sorted(executables.items()):
                 analysis, analysis_file = analyses[name.replace("-", "_")]
-                require(analysis["generated_bindings"] == expected_counts[name],
-                        f"{name}: expected {expected_counts[name]} generated bindings, got {analysis['generated_bindings']}")
+                require(analysis["requests"] == expected_requests[name],
+                        f"{name}: expected {expected_requests[name]} actual interface requests, got {analysis['requests']}")
+                require(analysis["explicit_bindings"] == expected_explicit.get(name, 0),
+                        f"{name}: explicit binding pairs changed unexpectedly")
+                pairs = [(binding["concrete"], binding["interface"]) for binding in analysis["bindings"]]
+                require(len(pairs) == analysis["generated_bindings"],
+                        f"{name}: generated capability count and source records disagree")
+                require(len(set(pairs)) == len(pairs), f"{name}: generated duplicate local capability pairs")
                 executed = invoke([executable], environment, root, output / f"run-{phase}-{name}")
                 require(executed.returncode == 0, f"Runtime assertions failed: {phase}/{name}; inspect its run log")
                 report["cases"].append({"name": name, "phase": phase, "passed": True,
                                         "generated_bindings": analysis["generated_bindings"],
+                                        "requests": analysis["requests"],
                                         "explicit_bindings": analysis["explicit_bindings"],
                                         "analysis": str(analysis_file), "stdout": executed.stdout})
-                print(f"PASS {phase}/{name} ({analysis['generated_bindings']} generated bindings)")
+                print(f"PASS {phase}/{name} ({analysis['requests']} interface requests; {analysis['generated_bindings']} projection capabilities)")
         require(source_hashes(fixture) == before, "Application sources changed during the two-pass build")
         require(len(report["cases"]) == 14, "Expected all 14 automatic-binding integration executions")
         report["application_sources_unchanged"] = True

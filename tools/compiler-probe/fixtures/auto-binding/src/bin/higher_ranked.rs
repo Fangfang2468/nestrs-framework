@@ -2,9 +2,16 @@
 use nestrs::injectable;
 use nestrs_core::ServiceProvider;
 
+#[path = "../automatic_assertions.rs"]
+mod automatic_assertions;
+
 trait TextPort<T>: Send + Sync {
     fn measure(&self, value: T) -> usize;
     fn identity(&self) -> usize;
+}
+
+trait NestedPort<T>: Send + Sync {
+    fn nested_identity(&self) -> usize;
 }
 
 #[injectable]
@@ -23,10 +30,20 @@ impl<'a> TextPort<&'a str> for Reader {
     }
 }
 
+impl<T> NestedPort<T> for Reader {
+    fn nested_identity(&self) -> usize {
+        self as *const Self as usize
+    }
+}
+
 #[injectable]
 struct Consumer {
     #[inject]
     reader: dyn for<'a> TextPort<&'a str>,
+    #[inject]
+    nested: dyn for<'a> NestedPort<(&'a str, for<'b> fn(&'b str))>,
+    #[inject]
+    capturing: dyn for<'a> NestedPort<fn(&'a str, &str)>,
 }
 
 #[tokio::main]
@@ -46,7 +63,12 @@ async fn main() {
     assert_eq!(consumer.reader.measure(&owned_text), 12);
     assert_eq!(interface.identity(), concrete as *const Reader as usize);
     assert_eq!(consumer.reader.identity(), interface.identity());
-    assert_eq!(nestrs_core::__private::REFLECTED_BINDINGS.len(), 1);
+    assert_eq!(consumer.nested.nested_identity(), interface.identity());
+    assert_eq!(consumer.capturing.nested_identity(), interface.identity());
+    assert_eq!(nestrs_core::__private::REFLECTED_BINDINGS.len(), 0);
+    automatic_assertions::assert_count::<dyn for<'a> TextPort<&'a str>>(1);
+    automatic_assertions::assert_count::<dyn for<'a> NestedPort<(&'a str, for<'b> fn(&'b str))>>(1);
+    automatic_assertions::assert_count::<dyn for<'a> NestedPort<fn(&'a str, &str)>>(1);
     provider.dispose_async().await.unwrap();
     println!("auto-binding higher-ranked interface: query/injection/identity passed");
 }

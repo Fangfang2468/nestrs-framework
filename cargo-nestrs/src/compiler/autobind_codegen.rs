@@ -11,7 +11,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// A semantic concrete/interface pair selected by the first compiler pass.
+/// A semantic concrete/interface capability selected by the first compiler pass.
 #[derive(Clone, Debug)]
 pub struct BindingSpec {
     /// A fully qualified, closed, source-expressible concrete type.
@@ -39,6 +39,8 @@ pub struct SourceInsertion {
 /// The local alias gives the trait object its normal `'static` alias lifetime.
 /// Input preparers keep the existing strong leases; no raw vtable construction
 /// or reference-lifetime conversion is introduced by the compiler adapter.
+/// Capabilities remain separate from explicit registrations until graph
+/// compilation activates an interface demanded by the actual link unit.
 pub fn binding_source(binding: &BindingSpec) -> String {
     let concrete = &binding.concrete;
     let interface = &binding.interface;
@@ -58,12 +60,12 @@ const _: () = {{
     }}
 
     #[::nestrs_core::__private::linkme::distributed_slice(
-        ::nestrs_core::__private::REFLECTED_BINDINGS
+        ::nestrs_core::__private::REFLECTED_AUTOMATIC_BINDINGS
     )]
     #[linkme(crate = ::nestrs_core::__private::linkme)]
     #[allow(clippy::needless_borrow)]
-    fn __nestrs_reflect_trait_binding() -> ::nestrs_core::__private::TraitBinding {{
-        ::nestrs_core::__private::compiler_binding::<{concrete}, __NestrsBoundInterface>();
+    fn __nestrs_reflect_automatic_binding() -> ::nestrs_core::__private::TraitBinding {{
+        ::nestrs_core::__private::compiler_automatic_binding::<{concrete}, __NestrsBoundInterface>();
         use ::nestrs_core::__private::ProbeProvider as _;
         let __nestrs_probe = ::nestrs_core::__private::Probe::<{concrete}>::new();
         ::nestrs_core::__private::TraitBinding {{
@@ -301,6 +303,66 @@ mod tests {
                 source_column: 1,
             }],
         }
+    }
+
+    #[test]
+    fn generated_projection_is_a_latent_capability_not_an_explicit_binding() {
+        use zyn::syn::{self, Expr, Item, Stmt};
+
+        let spec = BindingSpec {
+            concrete: "crate::private::Repository<std::string::String>".into(),
+            interface: "dyn crate::Port<Entity = std::string::String> + Send + Sync".into(),
+            source_file: "source/with \"quotes\"/service.rs".into(),
+            source_line: 17,
+            source_column: 9,
+        };
+        let file = syn::parse_file(&binding_source(&spec)).unwrap();
+        let Item::Const(generated) = &file.items[0] else {
+            panic!("generated projection must remain inside its private anonymous const");
+        };
+        let Expr::Block(block) = &*generated.expr else {
+            panic!("generated anonymous const must contain the projection items");
+        };
+        let callback = block
+            .block
+            .stmts
+            .iter()
+            .find_map(|statement| match statement {
+                Stmt::Item(Item::Fn(function))
+                    if function.sig.ident == "__nestrs_reflect_automatic_binding" =>
+                {
+                    Some(function)
+                }
+                _ => None,
+            })
+            .expect("automatic capability callback should exist");
+        let registration = callback
+            .attrs
+            .iter()
+            .find(|attribute| {
+                attribute
+                    .path()
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "distributed_slice")
+            })
+            .expect("callback must enter a distributed registration slice");
+        let slice: syn::Path = registration.parse_args().unwrap();
+        assert_eq!(
+            slice.segments.last().unwrap().ident,
+            "REFLECTED_AUTOMATIC_BINDINGS"
+        );
+
+        let Stmt::Expr(Expr::Call(marker), _) = &callback.block.stmts[0] else {
+            panic!("callback must retain a type-bearing capability marker");
+        };
+        let Expr::Path(marker) = &*marker.func else {
+            panic!("capability marker must be a direct function call");
+        };
+        assert_eq!(
+            marker.path.segments.last().unwrap().ident,
+            "compiler_automatic_binding"
+        );
     }
 
     #[test]

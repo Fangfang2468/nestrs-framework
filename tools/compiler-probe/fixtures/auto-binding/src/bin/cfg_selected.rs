@@ -3,6 +3,9 @@
 use nestrs::injectable;
 use nestrs_core::{__private::REFLECTED_BINDINGS, ServiceProvider};
 
+#[path = "../automatic_assertions.rs"]
+mod automatic_assertions;
+
 trait Port: Send + Sync {
     fn selected(&self) -> &'static str;
 }
@@ -31,7 +34,8 @@ impl Port for AlternateService {
 
 #[tokio::main]
 async fn main() {
-    assert_eq!(REFLECTED_BINDINGS.len(), 1);
+    assert_eq!(REFLECTED_BINDINGS.len(), 0);
+    automatic_assertions::assert_count::<dyn Port>(1);
     let provider = ServiceProvider::build().await.unwrap();
     let service = nestrs_core::get_required_service!(provider, dyn Port)
         .await

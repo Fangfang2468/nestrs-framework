@@ -11,10 +11,12 @@ mod implementation {
         #[inject]
         cache: Cache<T>,
     }
-    pub trait RepositoryPort: Send + Sync {
+    // Keep the entity type in the interface: both the known upstream root and
+    // new downstream roots may be linked into the same container.
+    pub trait RepositoryPort<T>: Send + Sync {
         fn count(&self) -> usize;
     }
-    impl<T: Send + Sync + 'static> RepositoryPort for InternalRepository<T> {
+    impl<T: Send + Sync + 'static> RepositoryPort<T> for InternalRepository<T> {
         fn count(&self) -> usize {
             let _ = &self.cache;
             1

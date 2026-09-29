@@ -98,3 +98,6 @@ jobs:
               "cargo", "clippy", "-p", "cargo-nestrs", "--features", "compiler-driver",
               "--all-targets", "--", "-D", "warnings",
           ], env=environment, check=True)
+
+      - name: Verify cross-crate DI discovery, private projections, and graph export
+        run: python tools/verify-cross-crate-binding.py --skip-build
