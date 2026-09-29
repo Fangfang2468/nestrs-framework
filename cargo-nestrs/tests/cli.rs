@@ -2,8 +2,9 @@
 #![cfg(unix)]
 
 use std::{
+    ffi::{OsStr, OsString},
     fs,
-    os::unix::fs::PermissionsExt,
+    os::unix::{ffi::OsStrExt, fs::PermissionsExt},
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
@@ -329,6 +330,88 @@ fn help_as_a_cargo_option_value_is_forwarded_unchanged() {
 }
 
 #[test]
+fn future_cargo_options_keep_their_original_order_and_values() {
+    let fixture = Fixture::new();
+    for command in ["check", "build", "run", "test"] {
+        let args = [
+            command,
+            "--future-cargo-option",
+            "two words",
+            "--locked",
+            "-Zfuture-cargo-option",
+            "--future-assignment=value",
+            "--bin",
+            "help",
+        ];
+        let output = fixture.command().args(args).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(37),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let forwarded = fs::read_to_string(fixture.0.join("args")).unwrap();
+        let environment = fs::read_to_string(fixture.0.join("environment")).unwrap();
+        let target = environment.lines().next().unwrap();
+        assert_eq!(
+            forwarded,
+            format!("{}\n--target-dir\n{target}\n", args.join("\n"))
+        );
+    }
+}
+
+#[test]
+fn non_utf8_and_empty_arguments_survive_cargo_and_application_passthrough() {
+    let fixture = Fixture::new();
+    // A NUL-delimited recording keeps empty values and embedded newlines observable.
+    script(
+        &fixture.0.join("cargo"),
+        "printf '%s\\000' \"$@\" > \"$RECORD_ARGS\"\nexit 37\n",
+    );
+    let manifest = OsStr::from_bytes(b"project-\xff/Cargo.toml");
+    let application_value = OsStr::from_bytes(b"application-\xfe\nvalue");
+    let output = fixture
+        .command()
+        .args([OsStr::new("run"), OsStr::new("--manifest-path"), manifest])
+        .args(["--future-cargo-option", "", "--"])
+        .arg(application_value)
+        .args(["", "--help", "--output=help"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(37),
+        "{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let recorded = fs::read(fixture.0.join("args")).unwrap();
+    let forwarded: Vec<_> = recorded.split(|byte| *byte == 0).collect();
+    assert_eq!(
+        &forwarded[..6],
+        &[
+            b"run".as_slice(),
+            b"--manifest-path",
+            manifest.as_bytes(),
+            b"--future-cargo-option",
+            b"",
+            b"--target-dir",
+        ],
+    );
+    assert!(Path::new(OsStr::from_bytes(forwarded[6])).starts_with(fixture.0.join("target")));
+    assert_eq!(
+        &forwarded[7..],
+        &[
+            b"--".as_slice(),
+            application_value.as_bytes(),
+            b"",
+            b"--help",
+            b"--output=help",
+            b"",
+        ],
+    );
+}
+
+#[test]
 fn help_as_graph_output_and_binary_names_exports_the_graph() {
     let fixture = Fixture::new();
     let output = fixture
@@ -581,6 +664,75 @@ fn graph_builds_a_selected_binary_and_writes_offline_html() {
     assert!(args.starts_with("build\n"));
     assert!(args.contains("--message-format=json"));
     assert!(!args.contains("--output"));
+}
+
+#[test]
+fn graph_output_after_cargo_options_uses_the_last_destination() {
+    let fixture = Fixture::new();
+    let previous = fixture.0.join("previous.html");
+    let destination = fixture.0.join("selected.html");
+    fs::write(&previous, "preserve the previous destination").unwrap();
+    let mut assigned = OsString::from("--output=");
+    assigned.push(&destination);
+    let output = fixture
+        .graph_command(r#"{"version":1,"nodes":[]}"#)
+        .args(["-p", "app", "--output"])
+        .arg(&previous)
+        .args(["--bin", "service", "--locked"])
+        .arg(assigned)
+        .args(["--features", "billing"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        fs::read_to_string(destination)
+            .unwrap()
+            .contains("graph-data")
+    );
+    assert_eq!(
+        fs::read_to_string(previous).unwrap(),
+        "preserve the previous destination",
+    );
+    let forwarded = fs::read_to_string(fixture.0.join("args")).unwrap();
+    assert!(!forwarded.contains("--output"), "{forwarded}");
+    assert!(
+        forwarded.contains("--locked\n--features\nbilling\n"),
+        "{forwarded}"
+    );
+}
+
+#[test]
+fn graph_output_accepts_non_utf8_paths_in_both_option_forms() {
+    for assigned in [false, true] {
+        let fixture = Fixture::new();
+        let destination = fixture.0.join(OsStr::from_bytes(b"graph-\xff.html"));
+        let mut command = fixture.graph_command(r#"{"version":1,"nodes":[]}"#);
+        command.args(["--bin", "service", "--locked"]);
+        if assigned {
+            let mut option = OsString::from("--output=");
+            option.push(&destination);
+            command.arg(option);
+        } else {
+            command.arg("--output").arg(&destination);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "assigned={assigned}: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(
+            fs::read_to_string(destination)
+                .unwrap()
+                .contains("graph-data")
+        );
+        let forwarded = fs::read_to_string(fixture.0.join("args")).unwrap();
+        assert!(!forwarded.contains("--output"), "{forwarded}");
+    }
 }
 
 #[test]

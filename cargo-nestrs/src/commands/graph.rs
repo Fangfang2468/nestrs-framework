@@ -13,30 +13,6 @@ use crate::toolchain::{
     Toolchain, cargo_program, library_path_variable, runtime_library_directories,
 };
 
-pub(super) const HELP: &str =
-    "Usage: cargo nestrs graph [CARGO BUILD OPTIONS] [--bin NAME] [--output PATH]
-
-Without --bin, export one project report containing every binary in the selected
-package (or --workspace). Each entry is built and validated independently. Entries
-requiring disabled features are reported as skipped. Errors remain visible in the
-report and return a nonzero exit status; valid entries are retained.
-Use -p PACKAGE --features FEATURES for feature selection across multiple packages;
---workspace --features is not supported. --all-features applies per package.
-
-With --bin, export only that binary's validated graph. Failure preserves any previous
-output. Both modes avoid the business main and service constructors.
-Default output: <Cargo target directory>/nestrs-di.html
-
-Options:
-  -p, --package PACKAGE  Select a package
-  --workspace           Include all workspace packages with binary entries
-  --bin NAME            Limit the report to one binary
-  --output PATH         Write HTML to this file
-  -h, --help            Show this help
-
-Equivalent help: cargo nestrs help graph / cargo nestrs graph help
-";
-
 #[derive(Clone, Debug)]
 struct GraphTarget {
     package_id: String,
@@ -67,8 +43,11 @@ impl From<String> for EntryFailure {
     }
 }
 
-pub(super) fn run(args: Vec<OsString>) -> Result<u8, String> {
-    let (args, output) = extract_output(args)?;
+pub(super) fn run(options: super::cli::GraphOptions) -> Result<u8, String> {
+    let super::cli::GraphOptions {
+        output,
+        cargo_args: args,
+    } = options;
     if before_separator(&args).len() != args.len() {
         return Err("graph does not run the application and takes no arguments after --".into());
     }
@@ -627,34 +606,6 @@ fn validate_selectors(args: &[OsString]) -> Result<(), String> {
         return Err("graph accepts only one --target selector".into());
     }
     Ok(())
-}
-
-fn extract_output(args: Vec<OsString>) -> Result<(Vec<OsString>, Option<PathBuf>), String> {
-    let mut cargo = Vec::new();
-    let mut output = None;
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        if arg == "--" {
-            cargo.push(arg);
-            cargo.extend(args);
-            break;
-        }
-        if arg == "--output" {
-            output = Some(PathBuf::from(
-                args.next()
-                    .filter(|arg| !arg.is_empty() && arg != "--")
-                    .ok_or("--output requires a file path")?,
-            ));
-        } else if let Some(path) = arg.to_str().and_then(|arg| arg.strip_prefix("--output=")) {
-            if path.is_empty() {
-                return Err("--output requires a file path".into());
-            }
-            output = Some(PathBuf::from(path));
-        } else {
-            cargo.push(arg);
-        }
-    }
-    Ok((cargo, output))
 }
 
 #[cfg(test)]

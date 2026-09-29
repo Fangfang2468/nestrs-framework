@@ -18,63 +18,20 @@ use crate::{
     toolchain::{Toolchain, cargo_program},
 };
 
-pub(super) const HELP: &str =
-    "Usage: cargo nestrs init [--vscode] [--output FILE] [CARGO CHECK OPTIONS]
-       cargo nestrs init <COMMAND>
-
-Initialize an existing Rust project's Nestrs development environment. Check the
-selected targets and generate rust-analyzer project data and client settings using
-the same compiler, features, cfg and private declaration bridge as cargo nestrs check.
-Application Cargo.toml and source files are not modified; no project is created.
-
-Default output: <Cargo target>/nestrs/ide/rust-project.json
-Client settings: adjacent rust-analyzer-settings.json; load these in your LSP client.
---vscode  Merge the generated project and check command into workspace .vscode/settings.json
-          Existing settings and comments are preserved; diagnostics remain enabled.
-
-Commands:
-  check   Emit Cargo JSON diagnostics and refresh the model after a successful check
-  help    Show this help, or help for a subcommand
-
-Use cargo nestrs init check --help (or init check help / help init check)
-for check-on-save options. Use -h or --help to show this help.
-
-By default all workspace targets are included. Cargo selection and feature flags
-are forwarded. Rerun init to refresh the environment after changing features or tools.
-The original source files remain live in rust-analyzer, including unsaved edits.
-";
-
-pub(super) const CHECK_HELP: &str =
-    "Usage: cargo nestrs init check [--output FILE] [CARGO CHECK OPTIONS]
-
-Emit Cargo JSON diagnostics for the selected targets and refresh the rust-analyzer
-project model after a successful check. Generated check-on-save commands use this
-entry automatically. A failed check preserves the last successful model.
-
-Options:
-  --output FILE  Write the project model to this path
-                 Default: <Cargo target>/nestrs/ide/rust-project.json
-  -h, --help     Show this help
-
-Cargo selection, feature and profile flags are forwarded. By default all workspace
-targets are checked. Use cargo check --help for the complete Cargo option list.
-This command does not modify editor settings and does not accept --vscode.
-For initial setup, use cargo nestrs init (or cargo nestrs init --vscode).
-
-Equivalent help: cargo nestrs help init check / cargo nestrs init check help
-";
-
-pub(super) fn run(mut args: Vec<OsString>) -> Result<u8, String> {
-    let check_mode = args.first().is_some_and(|arg| arg == "check");
-    if check_mode {
-        args.remove(0);
-    }
-    let (vscode, output, mut cargo_args) = options(args)?;
-    if check_mode && vscode {
-        return Err(
-            "init check does not modify editor settings; use cargo nestrs init --vscode for setup"
-                .into(),
-        );
+pub(super) fn run(options: super::cli::InitOptions) -> Result<u8, String> {
+    let super::cli::InitOptions {
+        check: check_mode,
+        vscode,
+        output,
+        mut cargo_args,
+    } = options;
+    if cargo_args.iter().any(|arg| {
+        arg == "--"
+            || arg
+                .to_str()
+                .is_some_and(|arg| arg.starts_with("--message-format"))
+    }) {
+        return Err("cargo nestrs init manages its own Cargo JSON output and does not accept program arguments".into());
     }
     let toolchain = Toolchain::discover()?;
     super::reject_wrappers(&toolchain)?;
@@ -341,61 +298,9 @@ fn normalize_locations(
     Ok(normalized)
 }
 
-fn options(args: Vec<OsString>) -> Result<(bool, Option<PathBuf>, Vec<OsString>), String> {
-    let mut vscode = false;
-    let mut output = None;
-    let mut forwarded = Vec::new();
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        if arg == "--vscode" {
-            vscode = true;
-        } else if arg == "--output" {
-            output = Some(PathBuf::from(
-                args.next()
-                    .filter(|arg| arg != "--")
-                    .ok_or("--output requires a path")?,
-            ));
-        } else if let Some(value) = arg.to_str().and_then(|arg| arg.strip_prefix("--output=")) {
-            if value.is_empty() {
-                return Err("--output requires a path".into());
-            }
-            output = Some(PathBuf::from(value));
-        } else if arg == "--"
-            || arg
-                .to_str()
-                .is_some_and(|arg| arg.starts_with("--message-format"))
-        {
-            return Err("cargo nestrs init manages its own Cargo JSON output and does not accept program arguments".into());
-        } else {
-            forwarded.push(arg);
-        }
-    }
-    Ok((vscode, output, forwarded))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn editor_options_do_not_consume_cargo_features_or_split_paths() {
-        let (vscode, output, args) = options(
-            [
-                "--vscode",
-                "--output",
-                "some directory/model.json",
-                "--features",
-                "a,b",
-            ]
-            .map(OsString::from)
-            .to_vec(),
-        )
-        .unwrap();
-        assert!(vscode);
-        assert_eq!(output.unwrap(), PathBuf::from("some directory/model.json"));
-        assert_eq!(args, [OsString::from("--features"), OsString::from("a,b")]);
-        assert!(options(vec!["--message-format=short".into()]).is_err());
-    }
 
     #[test]
     fn save_time_options_preserve_package_and_config_selection() {

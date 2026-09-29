@@ -127,6 +127,11 @@ Cargo 仍管理依赖、features、cfg、profile、target 和 build.rs。CLI 转
 
 ## 按命令层级查看帮助
 
+CLI 使用 clap 统一定义命令层级、Nestrs 自有选项及帮助内容。缺失选项值、
+空的输出路径和不允许的选项组合会在加载工具链前报告，并附上当前命令的用法。
+clap 参数诊断的退出码为 `2`；帮助和版本信息为 `0`，实际 Cargo 子进程的退出码
+继续透传。
+
 `cargo nestrs help` 展示命令总览。可以把 `help` 放在命令路径前后，或使用
 `--help` / `-h`，查看对应层级的用法：
 
@@ -155,6 +160,17 @@ JSON 诊断输出、成功后刷新项目模型，以及不能使用 `--vscode` 
 不存在的命令路径会报错并指向相应父级帮助，不会退回命令总览。
 `create` 尚未实现，查询 `cargo nestrs create help` 会明确提示这一点，
 并指向现有项目的 `init` 用法。
+
+Nestrs 的选项可以放在 Cargo 选项之后，例如：
+
+```bash
+cargo nestrs graph -p nestrs-di-example --output target/checkout-di.html
+cargo nestrs init --all-targets --output target/editor/rust-project.json --vscode
+```
+
+`--output PATH` 和 `--output=PATH` 均支持；重复指定时采用最后一个值。
+其余 Cargo 参数保持原有顺序和系统字符串编码，CLI 不会重建一套 Cargo 选项表来
+限制可用参数。`graph` 的目标选择规则和 `init check` 禁止 `--vscode` 的规则继续适用。
 
 ## 编译、图验证和资源初始化
 

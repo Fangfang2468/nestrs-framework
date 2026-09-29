@@ -214,3 +214,79 @@ fn create_help_reports_that_scaffolding_is_not_implemented() {
     }
     assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
 }
+
+#[test]
+fn version_aliases_do_not_load_a_project_or_toolchain() {
+    let workspace = EmptyWorkspace::new();
+    for args in [
+        vec!["--version"],
+        vec!["-V"],
+        vec!["nestrs", "--version"],
+        vec!["nestrs", "-V"],
+    ] {
+        let output = workspace.invoke(&args);
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{args:?}: {output:?}");
+        let version = String::from_utf8_lossy(&output.stdout);
+        assert!(version.contains("cargo-nestrs"), "{args:?}: {version}");
+        assert!(
+            version.contains(env!("CARGO_PKG_VERSION")),
+            "{args:?}: {version}",
+        );
+    }
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+}
+
+#[test]
+fn missing_or_empty_output_is_rejected_before_loading_tools() {
+    let workspace = EmptyWorkspace::new();
+    for command in [vec!["graph"], vec!["init"], vec!["init", "check"]] {
+        for context in [vec![], vec!["-p", "missing", "--locked"]] {
+            for option in [vec!["--output"], vec!["--output", ""], vec!["--output="]] {
+                let args: Vec<_> = command
+                    .iter()
+                    .chain(&context)
+                    .chain(&option)
+                    .copied()
+                    .collect();
+                let output = workspace.invoke(&args);
+                assert!(!output.status.success(), "{args:?}: {output:?}");
+                assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+                let diagnostic = String::from_utf8_lossy(&output.stderr);
+                assert!(diagnostic.contains("--output"), "{args:?}: {diagnostic}");
+                assert!(!diagnostic.contains("missing-"), "{args:?}: {diagnostic}");
+            }
+        }
+    }
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+}
+
+#[test]
+fn init_check_rejects_editor_configuration_before_loading_tools() {
+    let workspace = EmptyWorkspace::new();
+    for args in [
+        vec!["init", "check", "--vscode"],
+        vec!["init", "check", "-p", "missing", "--vscode"],
+    ] {
+        let output = workspace.invoke(&args);
+        assert!(!output.status.success(), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(diagnostic.contains("--vscode"), "{args:?}: {diagnostic}");
+        assert!(!diagnostic.contains("missing-"), "{args:?}: {diagnostic}");
+    }
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+}
+
+#[test]
+fn doctor_rejects_unknown_options_before_loading_tools() {
+    let workspace = EmptyWorkspace::new();
+    let args = ["doctor", "--unexpected-option"];
+    let output = workspace.invoke(&args);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(diagnostic.contains("--unexpected-option"), "{diagnostic}");
+    assert!(!diagnostic.contains("missing-"), "{diagnostic}");
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+}

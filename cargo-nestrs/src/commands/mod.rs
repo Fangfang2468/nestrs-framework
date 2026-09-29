@@ -9,22 +9,11 @@ use std::{
 
 use crate::toolchain::{Toolchain, cargo_program};
 
+mod cli;
 mod graph;
-mod help;
 mod init;
 
-#[derive(Debug, PartialEq, Eq)]
-enum Invocation {
-    Help(help::Topic),
-    Version,
-    Doctor,
-    Graph(Vec<OsString>),
-    Init(Vec<OsString>),
-    Cargo {
-        command: String,
-        args: Vec<OsString>,
-    },
-}
+use cli::{Invocation, parse};
 
 pub fn run() -> ExitCode {
     match execute(env::args_os().skip(1).collect()) {
@@ -37,11 +26,19 @@ pub fn run() -> ExitCode {
 }
 
 fn execute(args: Vec<OsString>) -> Result<u8, String> {
-    match parse(args)? {
-        Invocation::Help(topic) => help::show(topic),
-        Invocation::Version => {
-            println!("cargo-nestrs {}", env!("CARGO_PKG_VERSION"));
-            Ok(0)
+    let invocation = match parse(args) {
+        Ok(invocation) => invocation,
+        Err(error) => {
+            let code = error.exit_code() as u8;
+            error
+                .print()
+                .map_err(|error| format!("cannot print CLI diagnostic: {error}"))?;
+            return Ok(code);
+        }
+    };
+    match invocation {
+        Invocation::CargoHelp(command) => {
+            spawn(Command::new(cargo_program()).args([&command, "--help"]))
         }
         Invocation::Doctor => {
             let toolchain = Toolchain::discover()?;
@@ -61,42 +58,6 @@ fn execute(args: Vec<OsString>) -> Result<u8, String> {
         Invocation::Cargo { command, args } => run_cargo(&command, args),
         Invocation::Graph(args) => graph::run(args),
         Invocation::Init(args) => init::run(args),
-    }
-}
-
-fn parse(mut args: Vec<OsString>) -> Result<Invocation, String> {
-    // Cargo calls `cargo-nestrs nestrs ...`; direct invocations omit this word.
-    if args.first().is_some_and(|arg| arg == "nestrs") {
-        args.remove(0);
-    }
-    // Resolve help before discovering tools or doing any project work.
-    if let Some(topic) = help::resolve(&args)? {
-        return Ok(Invocation::Help(topic));
-    }
-    let Some(command) = args.first().and_then(|arg| arg.to_str()) else {
-        return Err("command must be valid UTF-8".into());
-    };
-    match command {
-        "-V" | "--version" => Ok(Invocation::Version),
-        "doctor" if args.len() == 1 => Ok(Invocation::Doctor),
-        "doctor" => Err("doctor does not take Cargo arguments".into()),
-        "graph" => {
-            args.remove(0);
-            Ok(Invocation::Graph(args))
-        }
-        "init" => {
-            args.remove(0);
-            Ok(Invocation::Init(args))
-        }
-        "ide" => Err("cargo nestrs ide has been renamed to cargo nestrs init; rerun init with your previous options to refresh generated editor commands".into()),
-        "check" | "build" | "run" | "test" => {
-            let command = command.to_owned();
-            args.remove(0);
-            Ok(Invocation::Cargo { command, args })
-        }
-        unknown => Err(format!(
-            "unknown Nestrs command {unknown:?}; run cargo nestrs --help"
-        )),
     }
 }
 
@@ -307,36 +268,18 @@ mod tests {
             parse(arguments(&["build", "--locked"])).unwrap()
         );
         assert_eq!(
-            parse(Vec::new()).unwrap(),
-            Invocation::Help(help::Topic::Root)
+            parse(Vec::new()).unwrap_err().kind(),
+            clap::error::ErrorKind::DisplayHelp
         );
         assert!(parse(arguments(&["install"])).is_err());
     }
 
     #[test]
-    fn init_routes_cargo_options_without_reinterpreting_them() {
-        let args = [
-            "--manifest-path",
-            "app/Cargo.toml",
-            "--features",
-            "server",
-            "--vscode",
-        ];
-        let mut command = vec![OsString::from("nestrs"), OsString::from("init")];
-        command.extend(arguments(&args));
-        assert_eq!(
-            parse(command.clone()).unwrap(),
-            Invocation::Init(arguments(&args))
-        );
-        command.remove(0);
-        assert_eq!(parse(command).unwrap(), Invocation::Init(arguments(&args)));
-        assert_eq!(
-            parse(arguments(&["init", "check", "--locked"])).unwrap(),
-            Invocation::Init(arguments(&["check", "--locked"]))
-        );
+    fn obsolete_ide_command_retains_migration_guidance() {
         assert!(
             parse(arguments(&["ide"]))
                 .unwrap_err()
+                .to_string()
                 .contains("renamed to cargo nestrs init")
         );
     }
