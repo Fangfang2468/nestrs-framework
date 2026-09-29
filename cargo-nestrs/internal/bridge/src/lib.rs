@@ -13,6 +13,16 @@ pub fn injectable(
     cargo_nestrs::codegen::expand_injectable(args.into(), input.into()).into()
 }
 
+/// 内部字段条件编译阶段；用户不直接调用。
+#[doc(hidden)]
+#[proc_macro_derive(
+    __NestrsConfiguredInjectable,
+    attributes(__nestrs_declaration, __nestrs_type, __nestrs_attribute)
+)]
+pub fn configured_injectable(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    cargo_nestrs::codegen::expand_configured_injectable(input.into()).into()
+}
+
 /// 声明同步或异步工厂，生成借用真实 activation frame 的参数签名。
 #[proc_macro_attribute]
 pub fn factory(

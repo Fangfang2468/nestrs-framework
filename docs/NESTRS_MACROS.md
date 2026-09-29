@@ -539,6 +539,25 @@ struct NotificationWorker;
 有相应声明。切换 feature 时，对构建和 `init` 使用一致的 `--features` 参数；
 rust-analyzer 以初始化生成的项目配置为准。
 
+`#[injectable]` 的具名字段和元组字段也支持条件编译，包括通过 `cfg_attr` 选择
+`inject` 或 `value`。例如：
+
+```rust
+#[injectable]
+struct Diagnostics {
+    #[cfg(feature = "audit")]
+    #[inject]
+    audit: AuditLog,
+    #[cfg_attr(debug_assertions, value("debug"))]
+    #[cfg_attr(not(debug_assertions), value("release"))]
+    mode: &'static str,
+}
+```
+
+只有当前配置启用的字段参与类型改写、实例构造与依赖图。未启用的字段不要求其
+类型存在，也不会执行其 `value` 表达式或占用注入槽位。条件由目标 crate 的 rustc
+统一处理；应用不需要额外导入条件编译辅助宏。
+
 普通 `#[derive(...)]` 仍遵循 Rust 的类型要求。含注入字段的结构体会被改写，不能
 因为原始字段类型实现了 `Clone`、`Default` 或 `Debug`，就假设整个服务也能派生这些
 trait。优先把这类派生放在普通数据类型上，服务只按业务需要实现 trait。

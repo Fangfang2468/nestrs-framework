@@ -7,6 +7,7 @@
 //! 输入直接使用带 span 的 `proc_macro2::TokenStream`，可以在普通进程中调用，
 //! 无需过程宏执行上下文，也不通过字符串往返解析 token。
 
+mod conditional_fields;
 mod injection;
 
 mod utility;
@@ -312,7 +313,22 @@ fn bind(item: syn::ItemImpl, args: Args) -> zyn::Output {
 /// 展开 `#[injectable]`，供过程宏和编译器适配层共享。
 #[doc(hidden)]
 pub fn expand_injectable(args: zyn::TokenStream, input: zyn::TokenStream) -> zyn::TokenStream {
+    if let Ok(item) = syn::parse2::<syn::ItemStruct>(input.clone())
+        && conditional_fields::needs_filtering(&item)
+    {
+        return conditional_fields::defer(args, item)
+            .unwrap_or_else(syn::Error::into_compile_error);
+    }
     expand_attribute(args, input, injectable)
+}
+
+/// 由标准 derive 展开取得 rustc 已筛选的字段，再调用同一声明后端。
+#[doc(hidden)]
+pub fn expand_configured_injectable(input: zyn::TokenStream) -> zyn::TokenStream {
+    match conditional_fields::restore(input) {
+        Ok((args, item)) => expand_attribute(args, zyn::quote::quote!(#item), injectable),
+        Err(error) => error.into_compile_error(),
+    }
 }
 
 /// 展开 `#[factory]`，供过程宏和编译器适配层共享。
