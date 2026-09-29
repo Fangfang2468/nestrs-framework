@@ -15,7 +15,7 @@ use rustc_hir::def_id::{DefId, DefIndex, LocalDefId, LocalModDefId};
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::mir;
-use rustc_middle::ty::{self, Ty, TyCtxt, TypeVisitableExt};
+use rustc_middle::ty::{self, Ty, TyCtxt, TypeVisitableExt, Upcast as _};
 use rustc_span::{FileName, Span};
 use rustc_trait_selection::{
     infer::InferCtxtExt,
@@ -826,15 +826,28 @@ fn interface_variants<'tcx>(
     concrete: Ty<'tcx>,
     principal: ty::TraitRef<'tcx>,
 ) -> Vec<Ty<'tcx>> {
-    let mut predicates = vec![ty::ExistentialPredicate::Trait(
+    let mut predicates = vec![ty::Binder::dummy(ty::ExistentialPredicate::Trait(
         ty::ExistentialTraitRef::erase_self_ty(tcx, principal),
-    )];
+    ))];
+    let infcx = tcx
+        .infer_ctxt()
+        .ignoring_regions()
+        .build(ty::TypingMode::non_body_analysis());
+    let ocx = ObligationCtxt::new(&infcx);
+    let clause: ty::Clause<'tcx> = principal.upcast(tcx);
+    let implied: Vec<_> =
+        traits::elaborate(tcx, [clause])
+            .filter_only_self()
+            .filter_map(|clause| clause.as_projection_clause())
+            .map(|projection| {
+                tcx.erase_and_anonymize_regions(projection.map_bound(|projection| {
+                    ty::ExistentialProjection::erase_self_ty(tcx, projection)
+                }))
+            })
+            .collect();
     for supertrait in traits::supertraits(tcx, ty::Binder::dummy(principal)) {
-        let Some(supertrait) = supertrait.no_bound_vars() else {
-            return Vec::new();
-        };
         for item in tcx
-            .associated_items(supertrait.def_id)
+            .associated_items(supertrait.skip_binder().def_id)
             .in_definition_order()
         {
             if !matches!(tcx.def_kind(item.def_id), DefKind::AssocTy)
@@ -842,26 +855,48 @@ fn interface_variants<'tcx>(
             {
                 continue;
             }
-            if tcx.generics_of(item.def_id).count() != supertrait.args.len() {
+            if tcx.generics_of(item.def_id).count() != supertrait.skip_binder().args.len() {
                 return Vec::new();
             }
-            let projection = Ty::new_projection(tcx, ty::IsRigid::No, item.def_id, supertrait.args);
-            let Ok(value) = tcx.try_normalize_erasing_regions(
-                ty::TypingEnv::fully_monomorphized(),
+            // A supertrait may quantify lifetimes independently of the
+            // principal. Normalize inside that binder: erasing its lifetimes
+            // would conflate e.g. View<'a>::Item = &'a str with a static item.
+            let projection = supertrait.map_bound(|trait_ref| {
+                Ty::new_projection(tcx, ty::IsRigid::No, item.def_id, trait_ref.args)
+            });
+            let value = ocx.normalize(
+                &ObligationCause::dummy(),
+                ty::ParamEnv::empty(),
                 ty::Unnormalized::new_wip(projection),
-            ) else {
-                return Vec::new();
-            };
-            if !closed(value) || matches!(value.kind(), ty::Alias(..)) {
+            );
+            if !ocx.evaluate_obligations_error_on_ambiguity().is_empty() {
                 return Vec::new();
             }
-            let binding = ty::ExistentialProjection::new(
+            let value = infcx.resolve_vars_if_possible(value);
+            if value.has_infer()
+                || value.has_non_region_param()
+                || value.has_escaping_bound_vars()
+                || matches!(value.skip_binder().kind(), ty::Alias(..))
+            {
+                return Vec::new();
+            }
+            let binding = supertrait.rebind(ty::ExistentialProjection::new(
                 tcx,
                 item.def_id,
-                supertrait.args.iter().skip(1),
-                value.into(),
-            );
-            predicates.push(ty::ExistentialPredicate::Projection(binding));
+                supertrait.skip_binder().args.iter().skip(1),
+                value.skip_binder().into(),
+            ));
+            // A lifetime introduced only by a supertrait cannot be written in
+            // the principal's associated-type arguments. An equality already
+            // implied by that principal is representable (and rustc's typed
+            // source printer omits it); do not invent a lifetime or substitute
+            // 'static for other, unnameable, higher-ranked projections.
+            if binding.skip_binder().term.has_escaping_bound_vars()
+                && !implied.contains(&tcx.erase_and_anonymize_regions(binding))
+            {
+                return Vec::new();
+            }
+            predicates.push(binding.map_bound(ty::ExistentialPredicate::Projection));
         }
     }
     let (Some(send), Some(sync), Some(unsize)) = (
@@ -871,25 +906,19 @@ fn interface_variants<'tcx>(
     ) else {
         return Vec::new();
     };
-    let infcx = tcx
-        .infer_ctxt()
-        .ignoring_regions()
-        .build(ty::TypingMode::non_body_analysis());
     let mut variants = Vec::new();
     for mask in 0..4 {
         let mut predicates = predicates.clone();
         if mask & 1 != 0 {
-            predicates.push(ty::ExistentialPredicate::AutoTrait(send));
+            predicates.push(ty::Binder::dummy(ty::ExistentialPredicate::AutoTrait(send)));
         }
         if mask & 2 != 0 {
-            predicates.push(ty::ExistentialPredicate::AutoTrait(sync));
+            predicates.push(ty::Binder::dummy(ty::ExistentialPredicate::AutoTrait(sync)));
         }
         use rustc_middle::ty::ExistentialPredicateStableCmpExt as _;
-        predicates.sort_by(|left, right| left.stable_cmp(tcx, right));
+        predicates.sort_by(|left, right| left.skip_binder().stable_cmp(tcx, &right.skip_binder()));
         predicates.dedup();
-        let predicates = tcx.mk_poly_existential_predicates_from_iter(
-            predicates.into_iter().map(ty::Binder::dummy),
-        );
+        let predicates = tcx.mk_poly_existential_predicates_from_iter(predicates.into_iter());
         let object = Ty::new_dynamic(tcx, predicates, tcx.lifetimes.re_static);
         if [send, sync].into_iter().all(|bound| {
             infcx

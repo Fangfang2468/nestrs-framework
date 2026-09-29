@@ -138,6 +138,11 @@ Lazy/Eager 策略实例化；后续查询也只使用冻结计划。
   不会仅凭一个开放的 `impl<T> Store<T> for Repository<T>` 枚举所有可能的 `T`。
 - 接口中的已确定泛型参数、关联类型和父接口由 Rust 类型检查器分析；Cargo 依赖别名
   和公开重导出不改变类型身份。生成位置必须满足正常 Rust 可见性规则。
+- 支持含 `for<'a>` 父接口的公开 trait，即使 provider 是上游私有类型。
+  父接口关联类型在各自的生命周期绑定范围内求解，例如
+  `trait Port: for<'a> View<'a, Item = &'a str> + Send + Sync {}`；不会把 `'a`
+  替换成 `'static`。无法通过合法 Rust trait object 类型表达的关联类型组合不进入
+  上游能力目录，不能依靠投影扩大借用生命周期。
 - 上游预生成目录覆盖业务接口的合法 `Send`/`Sync` 组合。额外添加 `Unpin`、
   `UnwindSafe` 等 auto trait 会形成不同的 trait object 类型；若需要的精确形状
   尚未由上游生成，公开实现可由下游补投影，私有实现不能绕过可见性。不要将此视为

@@ -38,6 +38,7 @@ declare ordinary injected fields.
 | `transitive_reuse` | Demands repeated in two consumer crates and the binary reuse the same instances and one logical route per actual concrete/interface pair, including the private factory projection |
 | `alias_identity` | Renamed trait/type exports use legal public paths, same-named types from different crates remain distinct, and one projection pair serves default and named concrete providers |
 | `generic_capabilities` | Downstream dyn-only queries materialize a private closed generic and its private trait dependency; associated types, generic trait arguments, supertrait methods and explicit Send/Sync shapes share one instance |
+| `higher_ranked_capabilities` | A private upstream provider implements interfaces with `for<'a>` supertraits; unbound and lifetime-dependent associated types retain their binders, all valid projections share one instance, and a request for an incompatible `'static` associated type remains absent |
 | `ambiguous_candidates` | Expected CLI failure: two cross-crate providers implement the requested interface at the same key without a primary; the executable proves both construction counters remain zero and exits nonzero, while graph export preserves an existing file |
 
 All pointer-identity assertions use nonzero-sized concrete types. The inspection

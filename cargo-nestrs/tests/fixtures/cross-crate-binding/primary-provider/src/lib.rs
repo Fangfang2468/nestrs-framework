@@ -181,6 +181,56 @@ mod implementation {
         }
     }
 
+    // The consumer sees only contracts. No request in this crate can trigger
+    // demand-driven generation, and its private provider cannot be named there.
+    #[injectable]
+    struct PrivateHrtbService {
+        #[value(String::from("higher-ranked view"))]
+        text: String,
+    }
+
+    impl<'a> contracts::TextView<'a> for PrivateHrtbService {
+        fn text(&'a self) -> &'a str {
+            &self.text
+        }
+    }
+
+    impl contracts::TextPort for PrivateHrtbService {
+        fn identity(&self) -> usize {
+            self as *const Self as usize
+        }
+    }
+
+    impl<'a> contracts::CountView<'a> for PrivateHrtbService {
+        type Item = usize;
+
+        fn count(&'a self) -> Self::Item {
+            self.text.len()
+        }
+    }
+
+    impl contracts::CountPort for PrivateHrtbService {
+        fn identity(&self) -> usize {
+            self as *const Self as usize
+        }
+    }
+
+    impl<'a> contracts::BorrowedView<'a> for PrivateHrtbService {
+        type Item = &'a str;
+
+        fn borrowed(&'a self) -> Self::Item {
+            &self.text
+        }
+    }
+
+    impl contracts::BorrowedPort for PrivateHrtbService {
+        fn identity(&self) -> usize {
+            self as *const Self as usize
+        }
+    }
+
+    impl contracts::UnspecifiedBorrowedPort for PrivateHrtbService {}
+
     struct Conflict;
 
     impl AmbiguousPort for Conflict {}

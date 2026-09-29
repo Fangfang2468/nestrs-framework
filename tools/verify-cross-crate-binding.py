@@ -20,6 +20,7 @@ BINARIES = {
     "transitive_reuse": "cross-crate transitive reuse: repeated automatic pairs share one logical route",
     "alias_identity": "cross-crate aliases: reexports, distinct crate identities and keyed projection reuse passed",
     "generic_capabilities": "cross-crate generics: private closed blueprint, nested private trait, associated type and supertrait passed",
+    "higher_ranked_capabilities": "cross-crate higher-ranked traits: private provider, shared identity and bound associated types passed",
 }
 
 
@@ -111,6 +112,13 @@ def verify_graph(path, binary):
         dependencies = inputs(repository)
         assert dependencies["connection"]["target"] == connection["id"]
         assert "PrivateRepositoryDependency" in dependencies["connection"]["requested"]
+    if binary == "higher_ranked_capabilities":
+        service = select("nestrs_cross_primary_provider::implementation::PrivateHrtbService")
+        dependencies = inputs(select("higher_ranked_capabilities::Reader"))
+        for label in ["text", "count", "borrowed"]:
+            assert dependencies[label]["target"] == service["id"]
+        assert dependencies["incompatible"]["optional"]
+        assert dependencies["incompatible"]["target"] is None
     return {"nodes": len(nodes), "dormant_generic_absent": True}
 
 

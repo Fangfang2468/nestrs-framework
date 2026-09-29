@@ -58,6 +58,37 @@ mod ports {
         fn identity(&self) -> usize;
     }
 
+    pub trait TextView<'a> {
+        fn text(&'a self) -> &'a str;
+    }
+
+    pub trait TextPort: for<'a> TextView<'a> + Send + Sync {
+        fn identity(&self) -> usize;
+    }
+
+    pub trait CountView<'a> {
+        type Item;
+        fn count(&'a self) -> Self::Item;
+    }
+
+    pub trait CountPort: for<'a> CountView<'a> + Send + Sync {
+        fn identity(&self) -> usize;
+    }
+
+    pub trait BorrowedView<'a> {
+        type Item;
+        fn borrowed(&'a self) -> Self::Item;
+    }
+
+    pub trait BorrowedPort: for<'a> BorrowedView<'a, Item = &'a str> + Send + Sync {
+        fn identity(&self) -> usize;
+    }
+
+    // Its concrete Item depends on the hidden parent lifetime. Rust has no
+    // principal-object spelling for that equality unless it is stated here.
+    // This unrequested capability must not poison the producer's compilation.
+    pub trait UnspecifiedBorrowedPort: for<'a> BorrowedView<'a> + Send + Sync {}
+
     pub trait AmbiguousPort: Send + Sync {}
 
     /// No crate implements this optional integration.
@@ -67,7 +98,8 @@ mod ports {
 // The compiler's definition path contains a private module. Downstream code
 // must use this real public path, and must preserve the renamed trait's identity.
 pub use ports::{
-    AmbiguousPort, ConnectionPort, ConnectionView, DeliveryPort, DormantPort, EntityReader,
-    FraudPlugin, IdentityPort, InventoryPort as CatalogPort, RepositoryPort, TrackingPort,
-    UserEntity,
+    AmbiguousPort, BorrowedPort, BorrowedView, ConnectionPort, ConnectionView, CountPort,
+    CountView, DeliveryPort, DormantPort, EntityReader, FraudPlugin, IdentityPort,
+    InventoryPort as CatalogPort, RepositoryPort, TextPort, TextView, TrackingPort,
+    UnspecifiedBorrowedPort, UserEntity,
 };
