@@ -1,10 +1,15 @@
 //! 稳定实例的内部强 lease 与非递归同步释放。
 
 use std::{
+    any::Any,
+    cell::RefCell,
     collections::VecDeque,
+    future::Future,
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+    pin::Pin,
     ptr::NonNull,
     sync::{Arc, Mutex},
+    task::{Context, Poll, Waker},
 };
 
 use super::{ErasedService, ErasedServiceRef};
@@ -18,7 +23,7 @@ pub(crate) struct ReleaseDomain {
 
 #[derive(Default)]
 struct ReleaseState {
-    pending: VecDeque<InstancePayload>,
+    pending: VecDeque<PendingRelease>,
     draining: bool,
 }
 
@@ -28,43 +33,162 @@ impl ReleaseDomain {
     }
 
     fn release(&self, payload: InstancePayload) {
+        let active = ACTIVE_RELEASE
+            .try_with(|active| active.borrow().clone())
+            .ok()
+            .flatten();
+        let nested = active.is_some();
+        let group = active.unwrap_or_default();
+        self.enqueue(payload, group.clone());
+        // Reentrant dependency drops contribute to their initiating release. A queued
+        // release from another thread has its own result and must not poison this caller.
+        if !nested
+            && !std::thread::panicking()
+            && let Some(failures) = group.take_completed()
+            && let Some(failure) = failures.into_iter().next()
+        {
+            resume_unwind(failure.panic);
+        }
+    }
+
+    fn release_tracked(&self, payload: InstancePayload) -> ReleaseCompletion {
+        let group = Arc::new(ReleaseGroup::default());
+        self.enqueue(payload, group.clone());
+        ReleaseCompletion(group)
+    }
+
+    fn enqueue(&self, payload: InstancePayload, group: Arc<ReleaseGroup>) {
+        group.begin();
         {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            state.pending.push_back(payload);
+            state.pending.push_back(PendingRelease { payload, group });
             if state.draining {
                 return;
             }
             state.draining = true;
         }
-
-        let already_panicking = std::thread::panicking();
-        let mut first_panic = None;
         loop {
-            let payload = {
+            let pending = {
                 let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
                 match state.pending.pop_front() {
-                    Some(payload) => payload,
+                    Some(pending) => pending,
                     None => {
                         state.draining = false;
                         break;
                     }
                 }
             };
+            let PendingRelease { payload, group } = pending;
+            let service = payload.service.service_type().name;
+            // No queue lock is held during user destructors. Any dependency payloads
+            // they enqueue join this release group, preserving iterative destruction.
+            let context = ReleaseContext::enter(group.clone());
+            let panic = catch_unwind(AssertUnwindSafe(|| drop(payload))).err();
+            drop(context);
+            group.finish(panic.map(|panic| ReleaseFailure { service, panic }));
+        }
+    }
+}
 
-            // No queue lock is held while arbitrary user destructors run. Reentrant record
-            // destruction only appends another payload; it never recursively drops a service.
-            if let Err(panic) = catch_unwind(AssertUnwindSafe(|| drop(payload)))
-                && first_panic.is_none()
-            {
-                first_panic = Some(panic);
+struct PendingRelease {
+    payload: InstancePayload,
+    group: Arc<ReleaseGroup>,
+}
+
+thread_local! {
+    static ACTIVE_RELEASE: RefCell<Option<Arc<ReleaseGroup>>> = const { RefCell::new(None) };
+}
+
+struct ReleaseContext(Option<Arc<ReleaseGroup>>);
+impl ReleaseContext {
+    fn enter(group: Arc<ReleaseGroup>) -> Self {
+        Self(
+            ACTIVE_RELEASE
+                .try_with(|active| active.replace(Some(group)))
+                .ok()
+                .flatten(),
+        )
+    }
+}
+impl Drop for ReleaseContext {
+    fn drop(&mut self) {
+        let _ = ACTIVE_RELEASE.try_with(|active| active.replace(self.0.take()));
+    }
+}
+
+struct ReleaseFailure {
+    service: &'static str,
+    panic: Box<dyn Any + Send>,
+}
+
+#[derive(Default)]
+struct ReleaseProgress {
+    pending: usize,
+    failures: Vec<ReleaseFailure>,
+    waker: Option<Waker>,
+}
+
+#[derive(Default)]
+struct ReleaseGroup(Mutex<ReleaseProgress>);
+impl ReleaseGroup {
+    fn begin(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .pending += 1;
+    }
+
+    fn finish(&self, failure: Option<ReleaseFailure>) {
+        let waker = {
+            let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+            state.failures.extend(failure);
+            state.pending -= 1;
+            if state.pending == 0 {
+                state.waker.take()
+            } else {
+                None
             }
+        };
+        if let Some(waker) = waker {
+            waker.wake();
         }
+    }
 
-        if let Some(panic) = first_panic
-            && !already_panicking
-        {
-            resume_unwind(panic);
-        }
+    fn take_completed(&self) -> Option<Vec<ReleaseFailure>> {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        (state.pending == 0).then(|| std::mem::take(&mut state.failures))
+    }
+}
+
+/// An executor-independent receipt for the payload and its reentrant dependency releases.
+/// Dropping the receipt does not cancel destruction. It never retains an instance lease.
+pub(crate) struct ReleaseCompletion(Arc<ReleaseGroup>);
+impl Future for ReleaseCompletion {
+    type Output = Vec<String>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let failures = {
+            let mut state = self.0.0.lock().unwrap_or_else(|error| error.into_inner());
+            if state.pending != 0 {
+                state.waker = Some(context.waker().clone());
+                return Poll::Pending;
+            }
+            std::mem::take(&mut state.failures)
+        };
+        Poll::Ready(
+            failures
+                .into_iter()
+                .map(|failure| {
+                    let detail = failure
+                        .panic
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| failure.panic.downcast_ref::<&str>().copied())
+                        .unwrap_or("未提供字符串 panic 信息");
+                    format!("{}: {detail}", failure.service)
+                })
+                .collect(),
+        )
     }
 }
 
@@ -104,6 +228,18 @@ impl DependencyLease {
             }),
             domain,
         }))
+    }
+
+    /// Only a last lease starts tracked destruction. An escaped lease keeps the
+    /// allocation alive but must not make logical owner shutdown wait for its holder.
+    pub(crate) fn release_tracked(self) -> Option<ReleaseCompletion> {
+        Arc::into_inner(self.0).map(|mut record| {
+            let payload = record
+                .payload
+                .take()
+                .expect("a last lease owns its payload");
+            record.domain.release_tracked(payload)
+        })
     }
 
     fn service(&self) -> &ErasedService {
@@ -227,5 +363,54 @@ mod tests {
             domain,
         ));
         assert_eq!(drops.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn tracked_release_observes_reentrant_dependency_panics_and_does_not_wait_for_escape() {
+        struct Panics;
+        impl Drop for Panics {
+            fn drop(&mut self) {
+                panic!("dependency destructor sentinel");
+            }
+        }
+        let domain = ReleaseDomain::new();
+        let dependency = DependencyLease::new(ErasedService::new(Panics), vec![], domain.clone());
+        let parent =
+            DependencyLease::new(ErasedService::new(1_u32), vec![dependency], domain.clone());
+        let escaped = parent.clone();
+        assert!(parent.release_tracked().is_none());
+        let errors = escaped.release_tracked().unwrap().await;
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("Panics: dependency destructor sentinel"));
+        let last = DependencyLease::new(ErasedService::new(1_u32), vec![], domain);
+        assert!(last.release_tracked().unwrap().await.is_empty());
+    }
+
+    #[test]
+    fn escaped_leases_release_during_thread_local_teardown() {
+        thread_local! {
+            static HELD: std::cell::RefCell<Option<DependencyLease>> = const { std::cell::RefCell::new(None) };
+        }
+        let drops = Arc::new(AtomicUsize::new(0));
+        let observed = drops.clone();
+        std::thread::spawn(move || {
+            let domain = ReleaseDomain::new();
+            HELD.with(|held| {
+                *held.borrow_mut() = Some(DependencyLease::new(
+                    ErasedService::new(Counted(observed)),
+                    vec![],
+                    domain.clone(),
+                ))
+            });
+            // Initialize the release context later so TLS destroys it before HELD.
+            drop(DependencyLease::new(
+                ErasedService::new(0_u32),
+                vec![],
+                domain,
+            ));
+        })
+        .join()
+        .unwrap();
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
 }

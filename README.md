@@ -220,6 +220,8 @@ Singleton/Scoped 初始化失败缓存至 owner 关闭，后续查询共享失�
 
 取消查询只取消等待，协调器已经接受的初始化继续执行并收纳结果。关闭开始后拒绝新解析，先处理已接受任务，再按每个 owner 的实例成功发布时间逆序清理。每个 owner 同时仅运行一个 cleanup，完成 hook 并释放本项后才推进下一项；root 等全部 scopes 清理结束再清理自身。现有无参数 async cleanup 对每个成功发布的实例执行一次，panic 汇总为 `DisposeError`，其余 cleanup 继续。
 
+多个 scope 并发关闭时，排队释放不等于析构完成。如果 owner 释放的是最后一个实例 lease，关闭流程会等待该实例及其同步触发的依赖析构结束，再推进本 owner 的下一项 cleanup。析构 panic 归入发起该次释放的 owner，不会记到正在执行共享释放队列的其他 scope 中。
+
 `dispose_async(self).await` 等待完整关闭。取消其等待也不会取消已发起的关闭。普通 `Drop` 非阻塞地向已有协调器发出幂等关闭请求；运行时仍活跃时尽力异步清理，Tokio 已退出时只能同步安全释放，不能保证执行 async cleanup。库不会在 Drop 中创建 runtime 或 `block_on`。
 
 注入 token 即使被安全代码截留，或在消费者 Drop 中移出，仍保活原实例及必要依赖。它不会阻塞逻辑关闭；关闭后不再承诺服务业务可用。最终内存释放由独立于 Tokio 的迭代队列处理，避免深依赖的嵌套 Drop 造成框架递归栈增长。

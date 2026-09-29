@@ -804,11 +804,10 @@ async fn cleanup(entry: Published, graph: Arc<ValidatedGraph>) -> Vec<String> {
             }
         }
     }
-    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(entry.lease))) {
-        errors.push(describe(
-            "service Drop panic",
-            panic_message(payload.as_ref()),
-        ));
+    if let Some(completion) = entry.lease.release_tracked() {
+        for detail in completion.await {
+            errors.push(describe("service Drop panic", detail));
+        }
     }
     errors
 }
