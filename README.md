@@ -30,8 +30,9 @@ cargo nestrs graph -p nestrs-di-example
 准备 Nestrs 开发环境，生成原版 rust-analyzer 的项目模型和保存检查配置；
 `--vscode` 才将设置写入 VS Code。初始化不关闭诊断、不改写应用源码。CLI 的本机适配包括
 Linux `x86_64-unknown-linux-gnu` 与 Windows `x86_64-pc-windows-msvc`；两种 host
-分别使用匹配的 driver 和过程宏动态库。完整跨 crate 候选汇总与跨 target 的 graph/IDE
-仍有明确支持边界。详见 [工具链说明](docs/NESTRS_CARGO_TOOLCHAIN.md) 与
+分别使用匹配的 driver 和过程宏动态库。跨 crate DI 支持上游服务、私有实现投影与
+兄弟 crate 需求汇总，具体边界见 [跨 crate DI](docs/NESTRS_CROSS_CRATE_DI.md)；
+跨 target 的 graph/IDE 仍有明确支持边界。详见 [工具链说明](docs/NESTRS_CARGO_TOOLCHAIN.md) 与
 [IDE 接入](docs/NESTRS_IDE.md)。
 
 Windows 源码构建使用 PowerShell，需要 Rustup、Python 和 Visual Studio C++
@@ -191,7 +192,7 @@ let repository = nestrs_core::get_required_service!(provider, Repository<User>).
 
 查询宏支持函数体内使用、宏别名和服务类型别名。对具有 `ProviderDefinition` 的类型，根声明提供闭合蓝图；factory-only 类型、普通未注册类型及 trait 查询不会因此被要求实现该 trait。重复根会去重，并保留蓝图自己的 lifetime/key；精确类型与 key 的显式 provider 优先。动态 key 只在查询时求值，不会创建新 provider、改变蓝图的 key 或扩展冻结图。
 
-编译器根据普通 trait impl 和已知闭合类型生成 binding 及可选蓝图。因此，只查询或注入 trait 时也可纳入已确定的闭合泛型实现；不会猜测泛型实参或枚举无限类型空间。绑定只负责类型投影，多个接口继续共享同一 concrete provider 的生命周期与实例缓存。自动发现目前主要以同 crate 为范围，完整跨 crate 汇总仍有边界，详见工具链说明。
+编译器根据普通 trait impl 和已知闭合类型生成自动投影目录及可选蓝图，图编译器按实际接口需求启用它们。因此，只查询或注入 trait 时也可纳入已确定的闭合泛型实现；不会猜测泛型实参或枚举无限类型空间。绑定只负责类型投影，多个接口继续共享同一 concrete provider 的生命周期与实例缓存。跨 crate 时，私有实现的投影在所属 crate 生成，最终程序汇总需求；兄弟 crate 的重复自动投影幂等合并，详见 [跨 crate DI](docs/NESTRS_CROSS_CRATE_DI.md)。
 
 当前链接单元中的所有查询根保守合并；未执行分支里的宏同样会贡献类型声明，Eager 会预热其中的 Singleton。它们不与某一个 provider 变量绑定。required/optional 仍是查询语义：一个没有 provider 的 required 查询不会仅因出现在源码中就导致 build panic，实际查询时才返回缺失错误；optional 查询返回 `None`。
 

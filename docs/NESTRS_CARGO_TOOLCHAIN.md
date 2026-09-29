@@ -188,10 +188,22 @@ core/构建工具的 Clippy 检查可以独立运行。
 用 trait solver / Unsize 检查投影。FileLoader 将辅助 Rust 代码放入合法模块的
 虚拟编译输入，第二轮重新展开和检查；磁盘上的业务源码不被改写。
 
-外部闭合蓝图读取编码 MIR；`always_encode_mir` 使 metadata-only check 产物也
-包含必要描述。公开重导出使用真实可访问路径，上游已有的精确绑定会被复用，
-显式重复仍由 core 图检查报错。候选范围、精确 key、primary、optional 和生命周期
-规则保持不变。有限外部蓝图和已有配对复用不等于任意依赖 crate 间的完整候选汇总。
+跨 crate 分析读取上游注册回调、查询根和闭合蓝图的编码 MIR；
+`always_encode_mir` 使 metadata-only check 产物也包含必要描述。类型匹配使用
+rustc 的真实身份，公开重导出和 Cargo 依赖别名使用实际可访问的生成路径。
+
+服务所属 crate 为已声明的 provider、factory 成功类型及可确定的闭合泛型生成
+**自动投影能力目录**。投影代码仍在能合法访问实现类型的模块中编译，所以私有
+实现也能通过公开接口提供给下游。目录不公开业务实现类型，也不实例化服务。
+core 在 build 时合并当前链接单元的需求，仅启用查询根或 provider 依赖实际需要
+的接口；未请求的能力不会产生路由、触发歧义或物化泛型。启用后仍在实例化前完成
+整个依赖闭包的验证，成功后冻结图。
+
+来自兄弟 crate 的同一自动投影按 concrete/interface 类型对幂等合并。已有显式
+投影优先，两个显式投影重复仍报图错误；不同 concrete 实现不会因为接口相同而
+被合并。精确 key、primary、optional、生命周期和实例缓存规则保持不变。
+
+业务项目的拆分方式与支持边界见 [跨 crate DI](NESTRS_CROSS_CRATE_DI.md)。
 
 producer metadata 会记录 bridge 的实际 crate 身份。工具不仅注入 `--extern nestrs`，
 还为下游 rustc/rustdoc 添加 bridge 目录的 `-L dependency=...`；即使 consumer 没有
@@ -269,6 +281,7 @@ cargo nestrs check --workspace --all-targets
 cargo nestrs test --workspace
 cargo nestrs test --manifest-path cargo-nestrs/tests/fixtures/di/Cargo.toml --all-targets
 python3 tools/verify-macro-toolchain.py --skip-build
+python3 tools/verify-cross-crate-binding.py --skip-build
 python3 tools/verify-ide.py --skip-build
 python3 tools/verify-graph.py --skip-build
 python3 tools/compiler-probe/verify_autobind.py
@@ -278,6 +291,8 @@ DI fixture 保留原 52 个 UI 基线，加 3 个宏/helper 误用和 1 个导�
 字段与工厂参数拒绝 `#[inject(key = ...)]` 的两个用例，当前共 58 个。它们经过工具
 提供的 bridge，检查完整错误代码、消息和重复次数。跨 crate verifier
 覆盖 metadata-only check 及 6 次 debug/release 运行，自动绑定探针保留 14 次运行。
+另有跨 crate DI verifier 覆盖独立接口库、私有 class/factory、兄弟 crate 需求、
+精确 key、primary、关联类型、闭合泛型及真实 HTML 图，并验证歧义在构造前失败。
 图 verifier 检查副作用哨兵、目标缓存、普通运行正对照、单图失败保留输出，以及项目
 部分/全部失败、跨 package 同名入口、feature 跳过与开启和 library-only 项目。
 IDE verifier 记录真实 LSP 消息与断言，不能以关闭诊断代替成功。

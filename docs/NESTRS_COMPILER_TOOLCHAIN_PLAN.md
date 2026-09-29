@@ -82,11 +82,15 @@ coercion 与既有 required/optional preparer。隐私、对象安全性、auto 
 时继续检查歧义、循环和生命周期。新增实现可能改变 optional 是否出现，也可能
 导致歧义，这些是自动发现必须报告的行为。
 
-同 crate 是主要验证范围。公开外部闭合蓝图通过编码 MIR 分析，公开重导出可提供
-合法生成路径，上游已有精确绑定可复用。metadata-only check 也编码需要的 MIR。
-这些能力与上游注册的正常链接，不等于任意上游 provider 都会因下游新接口需求
-自动产生绑定。完整跨 crate 汇总仍需版本化事实协议、合法投影位置和候选去重，
-不能将临时 DefId 数值或类型指针持久化为稳定身份。
+跨 crate 汇总读取上游注册回调、查询根和闭合蓝图的类型化 MIR，metadata-only check
+也编码所需描述。已知服务所属 crate 生成潜在接口投影，保存到独立自动能力目录；
+私有类型的投影留在合法模块中。潜在闭合泛型及其依赖只补齐能力，不把未使用蓝图
+变成实际图根。实际接口请求才触发必要的泛型展开。
+
+最终 core 图编译器按根和依赖需求迭代启用能力，随后完成验证、冻结。
+兄弟 crate 的同一自动 pair 幂等合并，显式 pair 优先而显式重复仍报错；不同 concrete
+继续参与同 key 的 primary 选择。公开重导出与别名使用合法路径，不把临时 DefId
+数值或类型指针持久化为稳定身份。支持范围见 [跨 crate DI](NESTRS_CROSS_CRATE_DI.md)。
 
 ## 5. IDE 与文档工具
 
@@ -164,12 +168,13 @@ script 不在这份文本快照的事务保证之内，不能将当前缓存表�
 
 | 范围 | 当前状态 |
 | --- | --- |
-| rustc 语义与同 crate 自动绑定 | 两次完整编译、typed projection 和实际 DI 运行已形成闭环 |
+| rustc 语义与自动绑定 | 两次完整编译、typed projection 和实际 DI 运行已形成闭环 |
 | 声明后端与前端 | codegen 唯一实现位于 CLI，标准 proc-macro bridge 为工具内部工件 |
 | Cargo、文档与 HTML | check/build/run/test、真实 rustdoc 转发和 binary 图诊断已实现 |
 | 有限外部泛型 | 编码 MIR、公开重导出、key、上游绑定复用及下游 metadata 加载已验证 |
+| 跨 crate DI | 上游需求汇总、私有实现能力目录、兄弟 crate 自动 pair 合并和有限闭合泛型 |
 | 编辑器 | 原版 rust-analyzer 项目模型、保存检查及实际 LSP 交互已验证 |
-| 后续边界 | 完整跨 crate 汇总、应用 Clippy、其他平台与更多目标/宏组合仍需实现或验收 |
+| 后续边界 | 更多泛型/auto trait/投影位置、应用 Clippy、其他平台与更多目标/宏组合仍需实现或验收 |
 
 当前回归入口：
 
@@ -185,6 +190,7 @@ cargo nestrs check --workspace --all-targets
 cargo nestrs test --workspace
 cargo nestrs test --manifest-path cargo-nestrs/tests/fixtures/di/Cargo.toml --all-targets
 python3 tools/verify-macro-toolchain.py --skip-build
+python3 tools/verify-cross-crate-binding.py --skip-build
 python3 tools/verify-ide.py --skip-build
 python3 tools/verify-graph.py --skip-build
 python3 tools/compiler-probe/verify_autobind.py
@@ -197,7 +203,7 @@ python3 tools/compiler-probe/verify_autobind.py
 
 后续验收应分别覆盖：
 
-- 完整跨 crate provider/需求汇总、私有实现桥接及任意合法投影位置。
+- 跨 crate 额外 auto trait 形状、泛型约束组合及更多合法投影位置。
 - 第三方属性/derive 的更多组合、属性重命名协调和宏生成 main。
 - 更多 build.rs 外部输入、feature/target/profile 组合与增量失效规则。
 - lib/test/example 等独立链接集合的图导出。
