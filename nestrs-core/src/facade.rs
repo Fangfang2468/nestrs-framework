@@ -1,10 +1,6 @@
 //! 静态注册、先验证后激活的 DI 门面。
 
-use std::{
-    fmt,
-    num::NonZeroUsize,
-    sync::{Arc, Mutex},
-};
+use std::{fmt, num::NonZeroUsize, sync::Arc};
 
 use crate::{
     ServiceKey, ServiceLifetime,
@@ -51,32 +47,42 @@ pub enum BuildError {
     },
 }
 
-#[derive(Debug)]
 struct ResolveFailure {
     detail: Arc<str>,
-    path: Arc<Mutex<Vec<FailureFrame>>>,
-    tail: Option<usize>,
+    path: Option<Arc<FailureFrame>>,
 }
 
-#[derive(Debug)]
 struct FailureFrame {
     identifier: ServiceIdentifier,
     source: ServiceSource,
-    parent: Option<usize>,
+    parent: Option<Arc<FailureFrame>>,
+}
+
+impl Drop for FailureFrame {
+    fn drop(&mut self) {
+        // Shared suffixes belong to other errors. Reclaim unique prefixes iteratively so
+        // dropping a deep failure path never consumes one Rust stack frame per dependency.
+        let mut parent = self.parent.take();
+        while let Some(frame) = parent {
+            let Some(mut frame) = Arc::into_inner(frame) else {
+                break;
+            };
+            parent = frame.parent.take();
+        }
+    }
 }
 
 /// 获取或激活失败，保留失败原因和带 key、源码位置的依赖路径。
 ///
 /// Singleton/Scoped 的失败被缓存，后续调用共享原始失败记录。
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ResolveError(Arc<ResolveFailure>);
 
 impl ResolveError {
     pub(crate) fn new(detail: String) -> Self {
         Self(Arc::new(ResolveFailure {
             detail: detail.into(),
-            path: Arc::new(Mutex::new(Vec::new())),
-            tail: None,
+            path: None,
         }))
     }
 
@@ -97,22 +103,13 @@ impl ResolveError {
         source: ServiceSource,
         dependency: Self,
     ) -> Self {
-        let mut frames = dependency
-            .0
-            .path
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let tail = frames.len();
-        frames.push(FailureFrame {
-            identifier: identifier.clone(),
-            source,
-            parent: dependency.0.tail,
-        });
-        drop(frames);
         Self(Arc::new(ResolveFailure {
             detail: dependency.0.detail.clone(),
-            path: dependency.0.path.clone(),
-            tail: Some(tail),
+            path: Some(Arc::new(FailureFrame {
+                identifier: identifier.clone(),
+                source,
+                parent: dependency.0.path.clone(),
+            })),
         }))
     }
 }
@@ -120,19 +117,14 @@ impl ResolveError {
 impl fmt::Display for ResolveError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "服务解析失败: {}", self.0.detail)?;
-        let frames = self
-            .0
-            .path
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let mut current = self.0.tail;
-        while let Some(index) = current {
+        let mut current = self.0.path.as_deref();
+        while let Some(frame) = current {
             let FailureFrame {
                 identifier,
                 source,
                 parent,
-            } = &frames[index];
-            current = *parent;
+            } = frame;
+            current = parent.as_deref();
             write!(
                 formatter,
                 "\n  {} key={:?} ({}:{}:{})",
@@ -144,6 +136,12 @@ impl fmt::Display for ResolveError {
             )?;
         }
         Ok(())
+    }
+}
+impl fmt::Debug for ResolveError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Formatting must be iterative too, including errors embedded in BuildError.
+        fmt::Display::fmt(self, formatter)
     }
 }
 impl std::error::Error for ResolveError {}
