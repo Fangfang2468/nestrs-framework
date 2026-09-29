@@ -113,7 +113,7 @@ impl Callbacks for Discover {
 struct Generate {
     loader: Option<OverlayFileLoader>,
     snapshots: BTreeMap<PathBuf, String>,
-    expected: (usize, usize, usize, usize),
+    expected: (usize, usize, usize, usize, usize),
     validation: Option<Result<(), String>>,
 }
 
@@ -146,11 +146,12 @@ impl Callbacks for Generate {
     ) -> Compilation {
         graph_entry::validate(tcx);
         self.validation = Some(autobind_semantic::analyze(tcx).and_then(|analysis| {
-            let observed = (analysis.providers, analysis.requests, analysis.explicit_bindings, analysis.automatic_bindings);
-            if analysis.generated_bindings != 0 || observed != self.expected {
+            let observed = (analysis.providers, analysis.requests, analysis.explicit_bindings, analysis.automatic_bindings, analysis.blueprints);
+            if analysis.generated_bindings != 0 || analysis.generated_blueprints != 0 || observed != self.expected {
                 Err(format!(
-                    "DI semantic inputs changed between compiler passes: expected {:?}, observed {:?}, still missing {} bindings",
-                    self.expected, observed, analysis.generated_bindings,
+                    "DI semantic inputs changed between compiler passes: expected {:?}, observed {:?}, still missing {} bindings and {} blueprints: {:?}",
+                    self.expected, observed, analysis.generated_bindings, analysis.generated_blueprints,
+                    analysis.insertions.iter().flat_map(|insertion| &insertion.blueprints).map(|blueprint| (&blueprint.service, &blueprint.path)).collect::<Vec<_>>(),
                 ))
             } else {
                 Ok(())
@@ -367,6 +368,7 @@ fn run() -> Result<ExitCode, String> {
         analysis.requests,
         analysis.explicit_bindings,
         analysis.automatic_bindings + analysis.generated_bindings,
+        analysis.blueprints + analysis.generated_blueprints,
     );
     let loader = OverlayFileLoader::from_insertions(analysis.insertions, &artifacts)
         .map_err(|error| error.to_string())?;

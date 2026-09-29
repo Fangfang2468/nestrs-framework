@@ -6,7 +6,7 @@ use crate::{
         binding::{REFLECTED_AUTOMATIC_BINDINGS, REFLECTED_BINDINGS, TraitBinding},
         dependency::{ClosedProviderCallback, Delivery, DependencyRequest, ProviderSource},
         provider::{Provider, ProviderCommon, REFLECTED_PROVIDERS},
-        root::{REFLECTED_ROOTS, RootDeclaration},
+        root::{REFLECTED_BLUEPRINTS, REFLECTED_ROOTS, RootDeclaration},
     },
     service::{ServiceIdentifier, ServiceSource, ServiceType},
 };
@@ -46,7 +46,7 @@ impl From<Provider> for Declaration {
 
 impl GraphCompiler {
     pub(crate) fn compile_static() -> Result<ValidatedGraph, GraphError> {
-        Self::compile_with_automatic_bindings(
+        Self::compile_with_catalog(
             REFLECTED_PROVIDERS
                 .iter()
                 .map(|declare| declare())
@@ -54,6 +54,10 @@ impl GraphCompiler {
             REFLECTED_BINDINGS.iter().map(|declare| declare()).collect(),
             REFLECTED_ROOTS.iter().map(|declare| declare()).collect(),
             REFLECTED_AUTOMATIC_BINDINGS
+                .iter()
+                .map(|declare| declare())
+                .collect(),
+            REFLECTED_BLUEPRINTS
                 .iter()
                 .map(|declare| declare())
                 .collect(),
@@ -70,12 +74,34 @@ impl GraphCompiler {
         Self::compile_with_automatic_bindings(providers, bindings, roots, vec![])
     }
 
+    #[cfg(test)]
     pub(crate) fn compile_with_automatic_bindings(
+        providers: Vec<Provider>,
+        bindings: Vec<TraitBinding>,
+        roots: Vec<RootDeclaration>,
+        automatic_bindings: Vec<TraitBinding>,
+    ) -> Result<ValidatedGraph, GraphError> {
+        Self::compile_with_catalog(providers, bindings, roots, automatic_bindings, vec![])
+    }
+
+    pub(crate) fn compile_with_catalog(
         providers: Vec<Provider>,
         mut bindings: Vec<TraitBinding>,
         mut roots: Vec<RootDeclaration>,
         mut automatic_bindings: Vec<TraitBinding>,
+        mut blueprints: Vec<RootDeclaration>,
     ) -> Result<ValidatedGraph, GraphError> {
+        blueprints.sort_by_key(|entry| (entry.service_type.name, entry.source));
+        let mut blueprint_catalog: HashMap<ServiceType, Vec<ClosedProviderCallback>> =
+            HashMap::new();
+        for blueprint in blueprints {
+            if let Some(callback) = blueprint.materialize {
+                blueprint_catalog
+                    .entry(blueprint.service_type)
+                    .or_default()
+                    .push(callback);
+            }
+        }
         let mut diagnostics = Vec::new();
         let mut declarations: Vec<Declaration> = providers.into_iter().map(Into::into).collect();
         sort_declarations(&mut declarations);
@@ -141,26 +167,27 @@ impl GraphCompiler {
         }));
         roots.sort_by_key(|root| (root.service_type.name, root.source));
         let mut materialized = HashSet::new();
-        let mut declared_roots = HashSet::new();
         for root in roots {
-            // A factory/trait/optional query may carry no definition. It must not consume
-            // this type's deduplication entry before another query supplies a callback.
-            let Some(callback) = root.materialize else {
-                continue;
-            };
-            if !declared_roots.insert(root.service_type) {
-                continue;
+            // Capabilities are idempotent by their actual callback, never by
+            // registration order. Distinct callbacks still validate metadata.
+            for callback in root.materialize.into_iter().chain(
+                blueprint_catalog
+                    .get(&root.service_type)
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            ) {
+                materialize(
+                    root.service_type,
+                    callback,
+                    root.source,
+                    &mut materialized,
+                    &mut declarations,
+                    &mut catalog,
+                    explicit_count,
+                    &mut diagnostics,
+                );
             }
-            materialize(
-                root.service_type,
-                callback,
-                root.source,
-                &mut materialized,
-                &mut declarations,
-                &mut catalog,
-                explicit_count,
-                &mut diagnostics,
-            );
         }
 
         // Two work queues close both concrete blueprints and demanded interface projections.
@@ -197,18 +224,29 @@ impl GraphCompiler {
                 if catalog
                     .get(&request.token)
                     .is_none_or(|&index| index >= explicit_count)
-                    && let ProviderSource::Materialize(callback) = request.provider_source
                 {
-                    materialize(
-                        request.token.service_type,
-                        callback,
-                        request_source,
-                        &mut materialized,
-                        &mut declarations,
-                        &mut catalog,
-                        explicit_count,
-                        &mut diagnostics,
-                    );
+                    let callback = match request.provider_source {
+                        ProviderSource::Materialize(callback) => Some(callback),
+                        ProviderSource::Registered => None,
+                    };
+                    for callback in callback.into_iter().chain(
+                        blueprint_catalog
+                            .get(&request.token.service_type)
+                            .into_iter()
+                            .flatten()
+                            .copied(),
+                    ) {
+                        materialize(
+                            request.token.service_type,
+                            callback,
+                            request_source,
+                            &mut materialized,
+                            &mut declarations,
+                            &mut catalog,
+                            explicit_count,
+                            &mut diagnostics,
+                        );
+                    }
                 }
             }
             cursor += 1;
@@ -397,8 +435,10 @@ impl GraphCompiler {
                         .at(&declaration.identifier, declaration.common.source),
                     );
                 }
-                if !matches!(request.delivery, Delivery::Direct(_))
-                    && matches!(request.provider_source, ProviderSource::Materialize(_))
+                if !matches!(
+                    request.delivery,
+                    Delivery::Direct(_) | Delivery::Selected(_)
+                ) && matches!(request.provider_source, ProviderSource::Materialize(_))
                 {
                     diagnostics.push(
                         GraphDiagnostic::new(
@@ -421,6 +461,11 @@ impl GraphCompiler {
                     );
                 }
                 let prepare = match request.delivery {
+                    Delivery::Selected(prepare)
+                        if route.is_none_or(|route| route.projection.is_none()) =>
+                    {
+                        Some(prepare)
+                    }
                     Delivery::Direct(prepare) => {
                         if route.is_some_and(|route| route.projection.is_some()) {
                             diagnostics.push(
@@ -433,7 +478,9 @@ impl GraphCompiler {
                         }
                         Some(prepare)
                     }
-                    Delivery::RequiresBinding | Delivery::RequiresBindingOrAbsent(_) => {
+                    Delivery::Selected(_)
+                    | Delivery::RequiresBinding
+                    | Delivery::RequiresBindingOrAbsent(_) => {
                         if let Some(route) = route {
                             let concrete_type = provider_types[route.provider];
                             let binding =

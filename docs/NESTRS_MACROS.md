@@ -494,6 +494,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `Repository<Order>` 和 `Repository<User>` 是两个不同的服务类型，各自遵循声明的
 生命周期。框架不会枚举所有可能的 `T`。
 
+注入字段和工厂参数支持等价的类型别名，包括 `type Store = dyn StorePort`。
+工厂返回的闭合泛型也可以直接注入，不需要再为该类型添加 `#[injectable]`。
+当泛型服务的字段写为 `#[inject] service: T` 时，例如查询
+`Wrapper<Repository<Order>>`，工具会按实际闭合类型展开 `T` 及其必要依赖；
+不会因为字段源码中没有写出 `Repository<Order>` 而漏掉它的声明。
+这些类型仍在容器 `build` 前收集，构建完成后的查询不扩展依赖图。
+
 查询宏的类型必须能在调用处独立命名，不能捕获外层泛型参数 `T`、const 泛型参数，
 或 `impl` 的 `Self`。例如在 `impl OrderService` 内查询自身时写 `OrderService`，
 不要写 `Self`。一个通用的 `async fn load<T>(...)` 不能靠查询宏动态注册任意 `T`；

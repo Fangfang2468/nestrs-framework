@@ -50,6 +50,11 @@ pub enum Delivery {
     /// [`ProviderSource`]，不在值的交付方式。
     Direct(InputPreparer),
 
+    /// The source type may be an alias or an unsized generic parameter. Use
+    /// the exact typed address for a concrete route, or its selected binding
+    /// preparer for an interface route. No pointer metadata is synthesized.
+    Selected(InputPreparer),
+
     /// 必选 trait object：输入准备函数必须由匹配到的 `#[bind]` 提供。
     ///
     /// 消费点只知道 trait，无法生成 concrete-to-trait 的 typed projector，因此这里

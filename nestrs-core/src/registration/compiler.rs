@@ -31,6 +31,25 @@ pub const fn compiler_request<T: ?Sized>() {
     let _ = core::marker::PhantomData::<T>;
 }
 
+/// A closed blueprint capability, not an active dependency request.
+#[inline(never)]
+pub const fn compiler_blueprint<T: ?Sized>() {
+    let _ = core::marker::PhantomData::<T>;
+}
+
+#[inline(never)]
+pub const fn compiler_dependency<T: ?Sized, const SLOT: usize>() {
+    let _ = core::marker::PhantomData::<T>;
+}
+
+#[inline(never)]
+pub const fn compiler_blueprint_path<Anchor: ?Sized, Path>() {
+    let _ = (
+        core::marker::PhantomData::<Anchor>,
+        core::marker::PhantomData::<Path>,
+    );
+}
+
 #[inline(never)]
 pub const fn compiler_binding<C: ?Sized, I: ?Sized>() {
     let _ = (

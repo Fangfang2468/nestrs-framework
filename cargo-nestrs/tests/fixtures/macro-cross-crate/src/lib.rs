@@ -7,6 +7,47 @@ mod implementation {
         marker: PhantomData<T>,
     }
     #[injectable]
+    pub struct Wrapper<T: Send + Sync + 'static + ?Sized> {
+        #[inject]
+        service: T,
+    }
+    impl<T: Send + Sync + 'static + ?Sized> Wrapper<T> {
+        pub fn service(&self) -> &T {
+            &self.service
+        }
+    }
+
+    #[injectable]
+    struct PrivateWrapper<T: Send + Sync + 'static> {
+        #[inject]
+        service: T,
+    }
+    #[injectable]
+    pub struct NestedWrapper<T: Send + Sync + 'static> {
+        #[inject]
+        private: PrivateWrapper<T>,
+    }
+    impl<T: Send + Sync + 'static> NestedWrapper<T> {
+        pub fn service(&self) -> &T {
+            &self.private.service
+        }
+    }
+    #[injectable]
+    struct PrivateRepository<T: Send + Sync + 'static> {
+        marker: PhantomData<T>,
+    }
+    #[injectable]
+    pub struct PrivateArgument<T: Send + Sync + 'static> {
+        #[inject]
+        wrapper: Wrapper<PrivateRepository<T>>,
+    }
+    impl<T: Send + Sync + 'static> PrivateArgument<T> {
+        pub fn resolved(&self) -> bool {
+            let _ = &self.wrapper.service().marker;
+            true
+        }
+    }
+    #[injectable]
     pub struct InternalRepository<T> {
         #[inject]
         cache: Cache<T>,
@@ -53,6 +94,6 @@ mod implementation {
     }
 }
 pub use implementation::{
-    Cache, Indexed, InternalRepository as Repository, KnownPort, KnownUser, Named, RepositoryPort,
-    known_request,
+    Cache, Indexed, InternalRepository as Repository, KnownPort, KnownUser, Named, NestedWrapper,
+    PrivateArgument, RepositoryPort, Wrapper, known_request,
 };

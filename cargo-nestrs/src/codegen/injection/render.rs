@@ -6,7 +6,7 @@
 
 use crate::codegen::injection::{
     macros_attrs::{cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKeySpec},
-    sub_macros::inject::{DependencyRequest, DependencyShape, classify},
+    sub_macros::inject::{DependencyRequest, is_trait_object},
 };
 use zyn::{syn, zyn};
 
@@ -18,9 +18,7 @@ use zyn::{syn, zyn};
 #[zyn::element]
 pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenStream {
     let service_type = request.service_type.clone();
-    let shape = classify(&service_type);
-    let is_trait_object = shape == DependencyShape::TraitObject;
-    let materializes = shape == DependencyShape::ClosedGeneric;
+    let is_trait_object = is_trait_object(&service_type);
     let key = request.key.clone();
     let optional = request.optional;
     let declaration_position = request.declaration_position;
@@ -34,7 +32,7 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
             token: ::nestrs_core::__private::ServiceIdentifier::new(
                 @RenderServiceKey(key = key.clone()),
                 {
-                    ::nestrs_core::__private::compiler_request::<{{ service_type.clone() }}>();
+                    ::nestrs_core::__private::compiler_dependency::<{{ service_type.clone() }}, {{ input_slot }}>();
                     ::nestrs_core::__private::ServiceType::create::<{{ service_type.clone() }}>()
                 },
             ),
@@ -47,7 +45,6 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
             ),
             provider_source: @RenderProviderSource(
                 service_type = service_type.clone(),
-                materializes = materializes,
             ),
         }
     }
@@ -55,9 +52,9 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
 
 /// 渲染依赖值准备为构造输入槽位载荷的方式。
 ///
-/// concrete 与闭合泛型都由消费点自己单态化 preparer；trait object 的 projector 只能
-/// 由匹配到的 `#[bind]` 提供，因此必选形态不携带 preparer，可选形态只携带一个
-/// 「只接受缺席」的兜底函数项。
+/// 已知 dyn 写法使用 binding；其余类型路径可能是别名或泛型参数，由冻结后的实际
+/// 路由选择准确的 concrete preparer 或 binding。typed address 检查支持 ?Sized，
+/// 不需要从源码拼写猜测一个路径是否代表 trait object。
 #[zyn::element]
 fn render_delivery(
     service_type: syn::Type,
@@ -75,7 +72,7 @@ fn render_delivery(
                 ::nestrs_core::__private::Delivery::RequiresBinding
             }
         } @else {
-            ::nestrs_core::__private::Delivery::Direct(
+            ::nestrs_core::__private::Delivery::Selected(
                 @if (*optional) {
                     ::nestrs_core::__private::prepare_optional::<{{ service_type }}>
                 } @else {
@@ -89,18 +86,20 @@ fn render_delivery(
 
 /// 渲染解析期寻找 provider 的方式。
 ///
-/// `TypeId` 不能还原开放泛型的 origin 或实参；闭合泛型因此在这里嵌入一个返回精确
-/// provider 的 callback，运行时只在缺少显式注册时调用它。
+/// 具体类型处探测可选蓝图，factory-only 服务无需 ProviderDefinition 约束。
+/// 泛型体中的探测不重新特化；driver 补充真实闭合类型和类型安全依赖路径的被动
+/// 蓝图目录，graph 在显式注册缺席时读取它，冻结后不再访问目录。
 #[zyn::element]
-fn render_provider_source(service_type: syn::Type, materializes: bool) -> zyn::TokenStream {
+fn render_provider_source(service_type: syn::Type) -> zyn::TokenStream {
     zyn! {
-        @if (*materializes) {
-            ::nestrs_core::__private::ProviderSource::Materialize(
-                ::nestrs_core::__private::provider_definition::<{{ service_type }}>
-                    as ::nestrs_core::__private::ClosedProviderCallback
-            )
-        } @else {
-            ::nestrs_core::__private::ProviderSource::Registered
+        {
+            use ::nestrs_core::__private::ProbeProvider as _;
+            let probe = ::nestrs_core::__private::Probe::<{{ service_type }}>::new();
+            #[allow(clippy::needless_borrow)]
+            match (&&probe).provider_callback() {
+                Some(callback) => ::nestrs_core::__private::ProviderSource::Materialize(callback),
+                None => ::nestrs_core::__private::ProviderSource::Registered,
+            }
         }
     }
 }

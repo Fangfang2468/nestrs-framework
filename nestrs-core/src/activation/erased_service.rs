@@ -84,7 +84,7 @@ impl ErasedServiceRef {
 
     pub(crate) fn cast<T>(self) -> Result<(NonNull<T>, DependencyLease), ServiceType>
     where
-        T: Injectable,
+        T: Injectable + ?Sized,
     {
         match self.lease.pointer::<T>() {
             Some(pointer) => Ok((pointer, self.lease)),

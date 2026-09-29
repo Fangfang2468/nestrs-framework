@@ -22,7 +22,7 @@ pub fn prepare_required<T>(
     input: Option<ErasedServiceRef>,
 ) -> Result<PreparedInput, ConstructionError>
 where
-    T: Injectable,
+    T: Injectable + ?Sized,
 {
     let input = input.ok_or(ConstructionError::RequiredDependencyAbsent { slot })?;
     let (pointer, lease) = cast_input::<T>(slot, input)?;
@@ -40,7 +40,7 @@ pub fn prepare_optional<T>(
     input: Option<ErasedServiceRef>,
 ) -> Result<PreparedInput, ConstructionError>
 where
-    T: Injectable,
+    T: Injectable + ?Sized,
 {
     let token = input
         .map(|input| cast_input::<T>(slot, input))
@@ -119,7 +119,7 @@ fn cast_input<T>(
     input: ErasedServiceRef,
 ) -> Result<(NonNull<T>, DependencyLease), ConstructionError>
 where
-    T: Injectable,
+    T: Injectable + ?Sized,
 {
     input
         .cast::<T>()

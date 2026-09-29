@@ -133,49 +133,11 @@ pub(crate) const FACTORY_MESSAGES: GrammarMessages = GrammarMessages {
     optional_shape: "`#[factory]` 可选参数必须写为 Option<T>",
 };
 
-/// 一个已通过校验的服务请求的静态形状。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DependencyShape {
-    /// 普通 concrete 服务类型。
-    Concrete,
-
-    /// 带实参的 concrete 类型路径。
-    ///
-    /// `TypeId` 无法从它反推泛型实参，因此缺少显式注册时需要由
-    /// `ProviderDefinition` 在消费点按需物化 provider。
-    ClosedGeneric,
-
-    /// `dyn Trait`：交付依赖 `#[bind]` 在解析期提供的 typed projector。
-    TraitObject,
-}
-
-/// 分类一个服务请求类型。
-///
-/// 调用方必须先用 [`validate_service_type`] 校验同一类型；两者共同保证返回值只会是
-/// `Concrete`、`ClosedGeneric` 或 `TraitObject`。
-pub(crate) fn classify(service_type: &Type) -> DependencyShape {
-    match unparenthesized_type(service_type) {
-        Type::TraitObject(_) => DependencyShape::TraitObject,
-        Type::Path(type_path) if has_angle_bracketed_arguments(type_path) => {
-            DependencyShape::ClosedGeneric
-        }
-        _ => DependencyShape::Concrete,
-    }
-}
-
-/// 该请求是否需要在缺少显式注册时按需物化 provider。
-pub(crate) fn requires_materialization(service_type: &Type) -> bool {
-    classify(service_type) == DependencyShape::ClosedGeneric
-}
-
-fn has_angle_bracketed_arguments(type_path: &syn::TypePath) -> bool {
-    type_path.qself.is_none()
-        && type_path.path.segments.iter().any(|segment| {
-            matches!(
-                &segment.arguments,
-                PathArguments::AngleBracketed(arguments) if !arguments.args.is_empty()
-            )
-        })
+/// Only an explicit `dyn` spelling proves the request requires a projection.
+/// A path may be a concrete type, type parameter, or trait alias; its actual
+/// delivery and blueprint capabilities are resolved separately.
+pub(crate) fn is_trait_object(service_type: &Type) -> bool {
+    matches!(unparenthesized_type(service_type), Type::TraitObject(_))
 }
 
 /// 剥离唯一允许的最外层 `Option<T>`，返回实际服务请求类型与可选性。
@@ -413,28 +375,13 @@ mod tests {
     }
 
     #[test]
-    fn classifies_concrete_closed_generic_and_trait_requests() {
-        assert_eq!(classify(&parse_quote!(Database)), DependencyShape::Concrete);
-        assert_eq!(
-            classify(&parse_quote!((Database))),
-            DependencyShape::Concrete
-        );
-        assert_eq!(
-            classify(&parse_quote!(Repository<User>)),
-            DependencyShape::ClosedGeneric
-        );
-        assert_eq!(
-            classify(&parse_quote!(dyn Audit)),
-            DependencyShape::TraitObject
-        );
-        assert_eq!(
-            classify(&parse_quote!(dyn Repository<User>)),
-            DependencyShape::TraitObject
-        );
-
-        assert!(requires_materialization(&parse_quote!(Repository<User>)));
-        assert!(!requires_materialization(&parse_quote!(Database)));
-        assert!(!requires_materialization(&parse_quote!(dyn Audit)));
+    fn recognizes_only_explicit_trait_object_syntax() {
+        assert!(!is_trait_object(&parse_quote!(Database)));
+        assert!(!is_trait_object(&parse_quote!((Database))));
+        assert!(!is_trait_object(&parse_quote!(Repository<User>)));
+        assert!(!is_trait_object(&parse_quote!(Alias)));
+        assert!(is_trait_object(&parse_quote!(dyn Audit)));
+        assert!(is_trait_object(&parse_quote!(dyn Repository<User>)));
     }
 
     #[test]

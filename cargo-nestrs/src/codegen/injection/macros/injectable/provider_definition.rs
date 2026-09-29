@@ -11,9 +11,7 @@ use super::{
     field_analyze::{AnalyzedFields, FieldStrategy},
     provider::EmitClassProviderFields,
 };
-use crate::codegen::injection::{
-    render::EmitCompilerKey, sub_macros::inject::requires_materialization,
-};
+use crate::codegen::injection::render::EmitCompilerKey;
 use zyn::{quote::quote, syn, zyn};
 
 /// 为一个开放泛型 provider 输出其按需具体化的 provider definition。
@@ -32,8 +30,10 @@ pub(crate) fn define_generic_injectable_provider(
     let (impl_generics, type_generics, where_clause) =
         provider_definition_generics.split_for_impl();
     let service_type = quote!(Self);
+    let dependency_paths = dependency_paths(analysis);
 
     zyn! {
+        {{ dependency_paths }}
         impl {{ impl_generics }} ::nestrs_core::__private::ProviderDefinition
             for {{ service }} {{ type_generics }} {{ where_clause }}
         {
@@ -57,6 +57,48 @@ pub(crate) fn define_generic_injectable_provider(
             }
         }
     }
+}
+
+/// Hidden type paths let downstream compiler output reach private nested
+/// services using a public outer blueprint without exposing associated types.
+fn dependency_paths(analysis: &AnalyzedFields) -> zyn::TokenStream {
+    let service = &analysis.item.ident;
+    let (_, type_generics, _) = analysis.item.generics.split_for_impl();
+    let mut output = zyn::TokenStream::new();
+    for spec in &analysis.specs {
+        let FieldStrategy::Inject { service_type, .. } = &spec.strategy else {
+            continue;
+        };
+        let slot = spec.input_slot.expect("injected field slot");
+        let mut generics = provider_definition_generics(analysis);
+        // This parameter is local to a generated impl, never to the user's item.
+        let mut path_name = String::from("__NestrsDependencyPath");
+        while generics.params.iter().any(|parameter| match parameter {
+            syn::GenericParam::Type(parameter) => parameter.ident == path_name,
+            syn::GenericParam::Const(parameter) => parameter.ident == path_name,
+            syn::GenericParam::Lifetime(_) => false,
+        }) {
+            path_name.push('_');
+        }
+        let path = syn::Ident::new(&path_name, service.span());
+        generics.params.push(syn::parse_quote!(#path));
+        generics
+            .make_where_clause()
+            .predicates
+            .push(syn::parse_quote!(
+                #service_type: ::nestrs_core::__private::DependencyPath<#path>
+            ));
+        let (impl_generics, _, where_clause) = generics.split_for_impl();
+        output.extend(quote! {
+            impl #impl_generics ::nestrs_core::__private::DependencyPath<(
+                ::nestrs_core::__private::DependencySlot<#slot>, #path,
+            )> for #service #type_generics #where_clause {
+                const BLUEPRINT: fn() -> ::nestrs_core::__private::RootDeclaration =
+                    <#service_type as ::nestrs_core::__private::DependencyPath<#path>>::BLUEPRINT;
+            }
+        });
+    }
+    output
 }
 
 /// 保留原有泛型声明并额外约束闭合 `Self` 必须满足 injectable ABI。
@@ -83,12 +125,6 @@ fn provider_definition_generics(analysis: &AnalyzedFields) -> syn::Generics {
         where_clause.predicates.push(syn::parse_quote!(
             #service_type: ::nestrs_core::__private::Injectable
         ));
-
-        if requires_materialization(service_type) {
-            where_clause.predicates.push(syn::parse_quote!(
-                #service_type: ::nestrs_core::__private::ProviderDefinition
-            ));
-        }
     }
 
     generics

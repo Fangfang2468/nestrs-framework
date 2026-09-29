@@ -234,7 +234,7 @@ fn factory_collects_common_configuration_and_parameter_injections() {
         ServiceIdentifier::from(ServiceType::create::<Database>())
     );
     assert!(!database.optional);
-    assert!(matches!(database.delivery, Delivery::Direct(_)));
+    assert!(matches!(database.delivery, Delivery::Selected(_)));
     assert!(matches!(
         database.provider_source,
         ProviderSource::Registered
@@ -249,7 +249,7 @@ fn factory_collects_common_configuration_and_parameter_injections() {
         ServiceIdentifier::from(ServiceType::create::<Cache>())
     );
     assert!(!cache.optional);
-    assert!(matches!(cache.delivery, Delivery::Direct(_)));
+    assert!(matches!(cache.delivery, Delivery::Selected(_)));
 
     let audit = &dependencies[2];
     assert_eq!(audit.declaration_position, 2);
@@ -263,7 +263,7 @@ fn factory_collects_common_configuration_and_parameter_injections() {
         )
     );
     assert!(audit.optional);
-    assert!(matches!(audit.delivery, Delivery::Direct(_)));
+    assert!(matches!(audit.delivery, Delivery::Selected(_)));
     assert!(matches!(audit.provider_source, ProviderSource::Registered));
 }
 

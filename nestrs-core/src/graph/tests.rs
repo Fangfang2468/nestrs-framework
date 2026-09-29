@@ -928,3 +928,109 @@ fn twenty_thousand_node_graph_compiles_on_a_small_stack() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn closed_blueprint_catalog_is_passive_and_exact_explicit_dependencies_win() {
+    static CALLED: AtomicUsize = AtomicUsize::new(0);
+    let blueprint = RootDeclaration {
+        service_type: ServiceType::create::<Alpha>(),
+        materialize: Some(|| {
+            CALLED.fetch_add(1, Ordering::SeqCst);
+            provider::<Alpha>(
+                None,
+                ServiceLifetime::Singleton,
+                vec![dependency::<Gamma>(0, None)],
+            )
+        }),
+        source: source(),
+    };
+    let unused =
+        GraphCompiler::compile_with_catalog(vec![], vec![], vec![], vec![], vec![blueprint])
+            .unwrap();
+    assert!(unused.nodes.is_empty());
+    let explicit = GraphCompiler::compile_with_catalog(
+        vec![
+            provider::<Alpha>(None, ServiceLifetime::Singleton, vec![]),
+            provider::<Consumer>(
+                None,
+                ServiceLifetime::Singleton,
+                vec![dependency::<Alpha>(0, None)],
+            ),
+        ],
+        vec![],
+        vec![],
+        vec![],
+        vec![blueprint],
+    )
+    .unwrap();
+    assert_eq!(explicit.nodes.len(), 2);
+    assert_eq!(CALLED.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn closed_blueprint_catalog_expands_dependencies_without_changing_their_keys() {
+    let blueprint = RootDeclaration {
+        service_type: ServiceType::create::<Alpha>(),
+        materialize: Some(|| {
+            provider::<Alpha>(
+                Some(ServiceKey::Indexed(7)),
+                ServiceLifetime::Singleton,
+                vec![],
+            )
+        }),
+        source: source(),
+    };
+    let mut absent = dependency::<Alpha>(1, None);
+    absent.optional = true;
+    absent.delivery = Delivery::Selected(prepare_optional::<Alpha>);
+    let graph = GraphCompiler::compile_with_catalog(
+        vec![provider::<Consumer>(
+            None,
+            ServiceLifetime::Singleton,
+            vec![dependency::<Alpha>(0, Some(ServiceKey::Indexed(7))), absent],
+        )],
+        vec![],
+        vec![],
+        vec![],
+        vec![blueprint, blueprint],
+    )
+    .unwrap();
+    assert_eq!(graph.nodes.len(), 2);
+    assert!(
+        graph
+            .routes
+            .contains_key(&token::<Alpha>(Some(ServiceKey::Indexed(7))))
+    );
+    assert!(!graph.routes.contains_key(&token::<Alpha>(None)));
+    let consumer = &graph.nodes[graph.routes[&token::<Consumer>(None)].provider];
+    assert!(consumer.dependencies[0].target.is_some());
+    assert!(consumer.dependencies[1].target.is_none());
+}
+
+#[test]
+fn demanded_blueprint_catalog_rejects_conflicting_callbacks_in_any_order() {
+    let singleton = RootDeclaration {
+        service_type: ServiceType::create::<Alpha>(),
+        materialize: Some(|| provider::<Alpha>(None, ServiceLifetime::Singleton, vec![])),
+        source: source(),
+    };
+    let transient = RootDeclaration {
+        materialize: Some(|| provider::<Alpha>(None, ServiceLifetime::Transient, vec![])),
+        ..singleton
+    };
+    for blueprints in [vec![singleton, transient], vec![transient, singleton]] {
+        let error = GraphCompiler::compile_with_catalog(
+            vec![provider::<Consumer>(
+                None,
+                ServiceLifetime::Singleton,
+                vec![dependency::<Alpha>(0, None)],
+            )],
+            vec![],
+            vec![],
+            vec![],
+            blueprints,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("闭合 Provider 回调声明冲突"));
+    }
+}

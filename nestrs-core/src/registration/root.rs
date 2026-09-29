@@ -27,6 +27,30 @@ pub struct RootDeclaration {
 #[distributed_slice]
 pub static REFLECTED_ROOTS: [fn() -> RootDeclaration] = [..];
 
+/// Compiler-discovered closed blueprints. Unlike roots these are passive:
+/// graph compilation only calls a blueprint demanded by a root or dependency.
+#[distributed_slice]
+pub static REFLECTED_BLUEPRINTS: [fn() -> RootDeclaration] = [..];
+
+/// A type-level dependency path keeps a producer's private field types behind
+/// an ordinary, compiler-checked callback. The const is forwarded at compile
+/// time; looking up a deep path never recursively walks it at runtime.
+#[doc(hidden)]
+pub struct DependencySlot<const SLOT: usize>;
+
+#[doc(hidden)]
+pub trait DependencyPath<Path> {
+    const BLUEPRINT: fn() -> RootDeclaration;
+}
+
+impl<T: ProviderDefinition> DependencyPath<()> for T {
+    const BLUEPRINT: fn() -> RootDeclaration = || RootDeclaration {
+        service_type: ServiceType::create::<T>(),
+        materialize: Some(provider_definition::<T>),
+        source: ServiceSource::new(file!(), line!(), column!()),
+    };
+}
+
 /// 查询与绑定宏专用的 autoref 探测令牌。
 ///
 /// 必须在宏展开的具体类型处调用 `(&&Probe::<T>::new()).provider_callback()`；

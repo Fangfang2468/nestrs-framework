@@ -117,7 +117,7 @@ fn injectable_collects_class_providers_and_dependency_specs() {
         database.token,
         ServiceIdentifier::from(ServiceType::create::<Database>())
     );
-    assert!(matches!(database.delivery, Delivery::Direct(_)));
+    assert!(matches!(database.delivery, Delivery::Selected(_)));
     assert!(matches!(
         database.provider_source,
         ProviderSource::Registered

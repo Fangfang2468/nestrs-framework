@@ -50,8 +50,8 @@ pub mod __private {
     };
     /// Type-bearing markers for the versioned compiler adapter; not a user API.
     pub use crate::registration::compiler::{
-        CompilerKey, compiler_automatic_binding, compiler_binding, compiler_provider,
-        compiler_request,
+        CompilerKey, compiler_automatic_binding, compiler_binding, compiler_blueprint,
+        compiler_blueprint_path, compiler_dependency, compiler_provider, compiler_request,
     };
     /// 仅供宏写入和读取的依赖请求 ABI。
     pub use crate::registration::dependency::{
@@ -62,7 +62,10 @@ pub mod __private {
         ClassProvider, CleanupFuture, CleanupHook, FactoryInvoker, FactoryProvider, Provider,
         ProviderCommon, ProviderDefinition, REFLECTED_PROVIDERS, provider_definition,
     };
-    pub use crate::registration::root::{Probe, ProbeProvider, REFLECTED_ROOTS, RootDeclaration};
+    pub use crate::registration::root::{
+        DependencyPath, DependencySlot, Probe, ProbeProvider, REFLECTED_BLUEPRINTS,
+        REFLECTED_ROOTS, RootDeclaration,
+    };
     /// 仅供宏为泛型 provider definition 声明其必要的服务约束。
     pub use crate::service::Injectable;
     /// 宏生成注册 metadata 所需的服务 token ABI。

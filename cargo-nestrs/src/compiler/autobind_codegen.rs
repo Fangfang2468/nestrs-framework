@@ -32,6 +32,59 @@ pub struct SourceInsertion {
     pub offset: usize,
     pub expected_source: String,
     pub bindings: Vec<BindingSpec>,
+    pub blueprints: Vec<BlueprintSpec>,
+}
+
+/// A finite closed ProviderDefinition discovered through rustc substitution.
+#[derive(Clone, Debug)]
+pub struct BlueprintSpec {
+    pub service: String,
+    /// A path from an accessible outer type to an inaccessible nested type.
+    pub path: Option<Vec<usize>>,
+    pub source_file: String,
+    pub source_line: u32,
+    pub source_column: u32,
+}
+
+fn blueprint_source(blueprint: &BlueprintSpec) -> String {
+    let service = &blueprint.service;
+    let source_file = format!("{:?}", blueprint.source_file);
+    let source_line = blueprint.source_line;
+    let source_column = blueprint.source_column;
+    if let Some(slots) = &blueprint.path {
+        let mut path = String::from("()");
+        for slot in slots.iter().rev() {
+            path = format!("(::nestrs_core::__private::DependencySlot<{slot}>, {path})");
+        }
+        return format!(
+            r#"const _: () = {{
+    #[::nestrs_core::__private::linkme::distributed_slice(::nestrs_core::__private::REFLECTED_BLUEPRINTS)]
+    #[linkme(crate = ::nestrs_core::__private::linkme)]
+    fn __nestrs_reflect_blueprint_path() -> ::nestrs_core::__private::RootDeclaration {{
+        ::nestrs_core::__private::compiler_blueprint_path::<{service}, {path}>();
+        let mut declaration = (<{service} as ::nestrs_core::__private::DependencyPath<{path}>>::BLUEPRINT)();
+        declaration.source = ::nestrs_core::__private::ServiceSource::new({source_file}, {source_line}, {source_column});
+        declaration
+    }}
+}};
+"#
+        );
+    }
+    format!(
+        r#"const _: () = {{
+    #[::nestrs_core::__private::linkme::distributed_slice(::nestrs_core::__private::REFLECTED_BLUEPRINTS)]
+    #[linkme(crate = ::nestrs_core::__private::linkme)]
+    fn __nestrs_reflect_blueprint() -> ::nestrs_core::__private::RootDeclaration {{
+        ::nestrs_core::__private::compiler_blueprint::<{service}>();
+        ::nestrs_core::__private::RootDeclaration {{
+            service_type: ::nestrs_core::__private::ServiceType::create::<{service}>(),
+            materialize: Some(::nestrs_core::__private::provider_definition::<{service}>),
+            source: ::nestrs_core::__private::ServiceSource::new({source_file}, {source_line}, {source_column}),
+        }}
+    }}
+}};
+"#
+    )
 }
 
 /// Reuse the existing audited binding ABI; rustc checks each ordinary coercion.
@@ -121,7 +174,7 @@ impl OverlayFileLoader {
     ) -> io::Result<Self> {
         let mut grouped: BTreeMap<PathBuf, Vec<SourceInsertion>> = BTreeMap::new();
         for insertion in insertions {
-            if insertion.bindings.is_empty() {
+            if insertion.bindings.is_empty() && insertion.blueprints.is_empty() {
                 continue;
             }
             let path = insertion.path.canonicalize()?;
@@ -164,8 +217,12 @@ impl OverlayFileLoader {
                     // source whose line numbers could be affected.
                     replacement.push('\n');
                 }
-                for binding in insertion.bindings {
-                    let source = binding_source(&binding);
+                for source in insertion
+                    .bindings
+                    .iter()
+                    .map(binding_source)
+                    .chain(insertion.blueprints.iter().map(blueprint_source))
+                {
                     generated.push_str(&source);
                     generated.push('\n');
 
@@ -302,6 +359,7 @@ mod tests {
                 source_line: 1,
                 source_column: 1,
             }],
+            blueprints: vec![],
         }
     }
 
