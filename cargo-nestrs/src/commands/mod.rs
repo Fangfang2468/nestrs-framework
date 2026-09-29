@@ -10,34 +10,12 @@ use std::{
 use crate::toolchain::{Toolchain, cargo_program};
 
 mod graph;
+mod help;
 mod init;
-
-const HELP: &str = "Nestrs compiler toolchain
-
-Usage: cargo nestrs <COMMAND> [CARGO OPTIONS] [-- APPLICATION ARGUMENTS]
-
-Commands:
-  check    Check Nestrs declarations and generated bindings
-  build    Build an application with the Nestrs compiler driver
-  run      Build and run an application
-  test     Build and run unit and integration tests
-  graph    Export project dependency graphs as offline HTML; --bin selects one entry
-  init     Initialize an existing project's Nestrs development environment
-  doctor   Verify the pinned compiler, rustc-dev and driver installation
-
-Cargo options, including --features, --target, --manifest-path, --locked and
---offline, are forwarded. Arguments after -- are forwarded without changes.
-Artifacts use <Cargo target directory>/nestrs/<compiler identity>/<driver+bridge hash>.
-Rustc incremental compilation is disabled; Cargo still reuses unchanged artifacts.
-
-NESTRS_RUSTC selects an explicit compiler (its full identity must match the pin).
-NESTRS_DRIVER selects an explicit driver; otherwise the sibling nestrs-driver is used.
-NESTRS_MACRO_BRIDGE selects the private proc-macro library shipped with the driver.
-";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Invocation {
-    Help,
+    Help(help::Topic),
     Version,
     Doctor,
     Graph(Vec<OsString>),
@@ -60,10 +38,7 @@ pub fn run() -> ExitCode {
 
 fn execute(args: Vec<OsString>) -> Result<u8, String> {
     match parse(args)? {
-        Invocation::Help => {
-            print!("{HELP}");
-            Ok(0)
-        }
+        Invocation::Help(topic) => help::show(topic),
         Invocation::Version => {
             println!("cargo-nestrs {}", env!("CARGO_PKG_VERSION"));
             Ok(0)
@@ -94,15 +69,14 @@ fn parse(mut args: Vec<OsString>) -> Result<Invocation, String> {
     if args.first().is_some_and(|arg| arg == "nestrs") {
         args.remove(0);
     }
+    // Resolve help before discovering tools or doing any project work.
+    if let Some(topic) = help::resolve(&args)? {
+        return Ok(Invocation::Help(topic));
+    }
     let Some(command) = args.first().and_then(|arg| arg.to_str()) else {
-        return if args.is_empty() {
-            Ok(Invocation::Help)
-        } else {
-            Err("command must be valid UTF-8".into())
-        };
+        return Err("command must be valid UTF-8".into());
     };
     match command {
-        "-h" | "--help" | "help" => Ok(Invocation::Help),
         "-V" | "--version" => Ok(Invocation::Version),
         "doctor" if args.len() == 1 => Ok(Invocation::Doctor),
         "doctor" => Err("doctor does not take Cargo arguments".into()),
@@ -127,13 +101,6 @@ fn parse(mut args: Vec<OsString>) -> Result<Invocation, String> {
 }
 
 fn run_cargo(command: &str, args: Vec<OsString>) -> Result<u8, String> {
-    // Cargo's help is useful even before the private compiler is installed.
-    if before_separator(&args)
-        .iter()
-        .any(|arg| arg == "--help" || arg == "-h")
-    {
-        return spawn(Command::new(cargo_program()).arg(command).args(args));
-    }
     let toolchain = Toolchain::discover()?;
     reject_wrappers(&toolchain)?;
     let target = target_directory(&args)?;
@@ -339,7 +306,10 @@ mod tests {
             parse(arguments(&["nestrs", "build", "--locked"])).unwrap(),
             parse(arguments(&["build", "--locked"])).unwrap()
         );
-        assert_eq!(parse(Vec::new()).unwrap(), Invocation::Help);
+        assert_eq!(
+            parse(Vec::new()).unwrap(),
+            Invocation::Help(help::Topic::Root)
+        );
         assert!(parse(arguments(&["install"])).is_err());
     }
 

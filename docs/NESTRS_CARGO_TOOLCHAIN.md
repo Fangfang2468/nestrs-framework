@@ -125,6 +125,37 @@ CLI 默认查找同目录的 driver 与 bridge。`NESTRS_DRIVER`、`NESTRS_MACRO
 Cargo 仍管理依赖、features、cfg、profile、target 和 build.rs。CLI 转发 Cargo
 选项和 `--` 后的业务参数，不支持与其他 Rust 编译包装器叠加。
 
+## 按命令层级查看帮助
+
+`cargo nestrs help` 展示命令总览。可以把 `help` 放在命令路径前后，或使用
+`--help` / `-h`，查看对应层级的用法：
+
+```bash
+cargo nestrs help graph
+cargo nestrs graph help
+cargo nestrs graph --help
+
+cargo nestrs help init check
+cargo nestrs init help check
+cargo nestrs init check help
+cargo nestrs init check --help
+```
+
+前三条都展示 `graph` 帮助；后四条都展示 `init check` 的专属帮助，其中说明
+JSON 诊断输出、成功后刷新项目模型，以及不能使用 `--vscode` 的限制。
+`cargo nestrs init help` 则展示初始化选项与可用子命令。
+
+帮助不会检查 Nestrs 工具链、编译项目或生成文件，在没有 `Cargo.toml` 的目录中
+也可以查看。`check`、`build`、`run`、`test` 的帮助调用对应的 `cargo <命令> --help`，
+因此需要可执行的 Cargo，并保留它的完整选项说明；其余帮助由 CLI 直接输出。
+
+裸 `help` 在命令路径中识别，命令路径应写在选项之前。`--bin help`、
+`--output help` 等选项值按原样使用；`--` 后的 `help`、`--help` 和 `-h` 属于
+应用或测试参数。例如 `cargo nestrs run -- --help` 仍运行应用并请求应用自己的帮助。
+不存在的命令路径会报错并指向相应父级帮助，不会退回命令总览。
+`create` 尚未实现，查询 `cargo nestrs create help` 会明确提示这一点，
+并指向现有项目的 `init` 用法。
+
 ## 编译、图验证和资源初始化
 
 | 入口 | 工作与边界 |

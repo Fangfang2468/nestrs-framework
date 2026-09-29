@@ -18,8 +18,9 @@ use crate::{
     toolchain::{Toolchain, cargo_program},
 };
 
-const HELP: &str =
-    "Usage: cargo nestrs init [check] [--vscode] [--output FILE] [CARGO CHECK OPTIONS]
+pub(super) const HELP: &str =
+    "Usage: cargo nestrs init [--vscode] [--output FILE] [CARGO CHECK OPTIONS]
+       cargo nestrs init <COMMAND>
 
 Initialize an existing Rust project's Nestrs development environment. Check the
 selected targets and generate rust-analyzer project data and client settings using
@@ -30,19 +31,40 @@ Default output: <Cargo target>/nestrs/ide/rust-project.json
 Client settings: adjacent rust-analyzer-settings.json; load these in your LSP client.
 --vscode  Merge the generated project and check command into workspace .vscode/settings.json
           Existing settings and comments are preserved; diagnostics remain enabled.
-check     Emit Cargo JSON diagnostics and refresh the model after a successful check.
-          Used automatically by the generated check-on-save command.
+
+Commands:
+  check   Emit Cargo JSON diagnostics and refresh the model after a successful check
+  help    Show this help, or help for a subcommand
+
+Use cargo nestrs init check --help (or init check help / help init check)
+for check-on-save options. Use -h or --help to show this help.
 
 By default all workspace targets are included. Cargo selection and feature flags
 are forwarded. Rerun init to refresh the environment after changing features or tools.
 The original source files remain live in rust-analyzer, including unsaved edits.
 ";
 
+pub(super) const CHECK_HELP: &str =
+    "Usage: cargo nestrs init check [--output FILE] [CARGO CHECK OPTIONS]
+
+Emit Cargo JSON diagnostics for the selected targets and refresh the rust-analyzer
+project model after a successful check. Generated check-on-save commands use this
+entry automatically. A failed check preserves the last successful model.
+
+Options:
+  --output FILE  Write the project model to this path
+                 Default: <Cargo target>/nestrs/ide/rust-project.json
+  -h, --help     Show this help
+
+Cargo selection, feature and profile flags are forwarded. By default all workspace
+targets are checked. Use cargo check --help for the complete Cargo option list.
+This command does not modify editor settings and does not accept --vscode.
+For initial setup, use cargo nestrs init (or cargo nestrs init --vscode).
+
+Equivalent help: cargo nestrs help init check / cargo nestrs init check help
+";
+
 pub(super) fn run(mut args: Vec<OsString>) -> Result<u8, String> {
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        print!("{HELP}");
-        return Ok(0);
-    }
     let check_mode = args.first().is_some_and(|arg| arg == "check");
     if check_mode {
         args.remove(0);

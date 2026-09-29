@@ -13,7 +13,29 @@ use crate::toolchain::{
     Toolchain, cargo_program, library_path_variable, runtime_library_directories,
 };
 
-const HELP: &str = "Usage: cargo nestrs graph [CARGO BUILD OPTIONS] [--bin NAME] [--output PATH]\n\nWithout --bin, export one project report containing every binary in the selected\npackage (or --workspace). Each entry is built and validated independently. Entries\nrequiring disabled features are reported as skipped. Errors remain visible in the\nreport and return a nonzero exit status; valid entries are retained.\nUse -p PACKAGE --features FEATURES for feature selection across multiple packages;\n--workspace --features is not supported. --all-features applies per package.\n\nWith --bin, export only that binary's validated graph. Failure preserves any previous\noutput. Both modes avoid the business main and service constructors.\nDefault output: <Cargo target directory>/nestrs-di.html\n";
+pub(super) const HELP: &str =
+    "Usage: cargo nestrs graph [CARGO BUILD OPTIONS] [--bin NAME] [--output PATH]
+
+Without --bin, export one project report containing every binary in the selected
+package (or --workspace). Each entry is built and validated independently. Entries
+requiring disabled features are reported as skipped. Errors remain visible in the
+report and return a nonzero exit status; valid entries are retained.
+Use -p PACKAGE --features FEATURES for feature selection across multiple packages;
+--workspace --features is not supported. --all-features applies per package.
+
+With --bin, export only that binary's validated graph. Failure preserves any previous
+output. Both modes avoid the business main and service constructors.
+Default output: <Cargo target directory>/nestrs-di.html
+
+Options:
+  -p, --package PACKAGE  Select a package
+  --workspace           Include all workspace packages with binary entries
+  --bin NAME            Limit the report to one binary
+  --output PATH         Write HTML to this file
+  -h, --help            Show this help
+
+Equivalent help: cargo nestrs help graph / cargo nestrs graph help
+";
 
 #[derive(Clone, Debug)]
 struct GraphTarget {
@@ -46,13 +68,6 @@ impl From<String> for EntryFailure {
 }
 
 pub(super) fn run(args: Vec<OsString>) -> Result<u8, String> {
-    if before_separator(&args)
-        .iter()
-        .any(|arg| arg == "--help" || arg == "-h")
-    {
-        print!("{HELP}");
-        return Ok(0);
-    }
     let (args, output) = extract_output(args)?;
     if before_separator(&args).len() != args.len() {
         return Err("graph does not run the application and takes no arguments after --".into());

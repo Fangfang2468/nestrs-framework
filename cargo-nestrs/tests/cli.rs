@@ -196,6 +196,160 @@ fn run_forwards_application_arguments_and_exit_code() {
 }
 
 #[test]
+fn cargo_command_help_aliases_forward_help_without_loading_the_toolchain() {
+    let fixture = Fixture::new();
+    script(
+        &fixture.0.join("cargo"),
+        "printf '%s\\n' \"$@\" > \"$RECORD_ARGS\"\nexit 37\n",
+    );
+    for command in ["check", "build", "run", "test"] {
+        for args in [
+            vec!["help", command],
+            vec![command, "help"],
+            vec![command, "--help"],
+            vec![command, "-h"],
+        ] {
+            let output = fixture
+                .command()
+                .current_dir(&fixture.0)
+                .env("NESTRS_RUSTC", fixture.0.join("missing-rustc"))
+                .env("NESTRS_DRIVER", fixture.0.join("missing-driver"))
+                .args(&args)
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(37),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.0.join("args")).unwrap(),
+                format!("{command}\n--help\n"),
+                "{args:?}",
+            );
+            assert!(!fixture.0.join("target").exists());
+        }
+    }
+}
+
+#[test]
+fn test_filters_are_forwarded_unchanged_instead_of_resolved_as_command_paths() {
+    let fixture = Fixture::new();
+    for args in [
+        ["test", "actual_test", "--locked"],
+        ["test", "module::help", "--locked"],
+        ["test", "--locked", "help"],
+    ] {
+        let output = fixture.command().args(args).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(37),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let forwarded = fs::read_to_string(fixture.0.join("args")).unwrap();
+        assert!(forwarded.starts_with(&format!("{}\n--target-dir\n", args.join("\n"))));
+        assert!(fixture.0.join("environment").is_file());
+    }
+}
+
+#[test]
+fn test_help_flag_ignores_a_later_test_filter_without_loading_the_toolchain() {
+    let fixture = Fixture::new();
+    script(
+        &fixture.0.join("cargo"),
+        "printf '%s\\n' \"$@\" > \"$RECORD_ARGS\"\nexit 37\n",
+    );
+    for flag in ["--help", "-h"] {
+        let output = fixture
+            .command()
+            .env("NESTRS_RUSTC", fixture.0.join("missing-rustc"))
+            .env("NESTRS_DRIVER", fixture.0.join("missing-driver"))
+            .args(["test", flag, "actual_test"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(37),
+            "{}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.0.join("args")).unwrap(),
+            "test\n--help\n",
+        );
+        assert!(!fixture.0.join("target").exists());
+    }
+}
+
+#[test]
+fn help_after_the_separator_remains_an_application_or_test_argument() {
+    let fixture = Fixture::new();
+    for command in ["run", "test"] {
+        let output = fixture
+            .command()
+            .args([command, "--", "help", "--help", "-h"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(37),
+            "{}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let forwarded = fs::read_to_string(fixture.0.join("args")).unwrap();
+        assert!(forwarded.starts_with(&format!("{command}\n--target-dir\n")));
+        assert!(forwarded.ends_with("\n--\nhelp\n--help\n-h\n"));
+        assert!(fixture.0.join("environment").is_file());
+    }
+}
+
+#[test]
+fn help_as_a_cargo_option_value_is_forwarded_unchanged() {
+    let fixture = Fixture::new();
+    for command in ["check", "build", "run", "test"] {
+        let output = fixture
+            .command()
+            .args([command, "--bin", "help", "--features", "help"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(37),
+            "{}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let forwarded = fs::read_to_string(fixture.0.join("args")).unwrap();
+        assert!(forwarded.starts_with(&format!(
+            "{command}\n--bin\nhelp\n--features\nhelp\n--target-dir\n",
+        )));
+        assert!(fixture.0.join("environment").is_file());
+    }
+}
+
+#[test]
+fn help_as_graph_output_and_binary_names_exports_the_graph() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .graph_command_for(r#"{"version":1,"nodes":[]}"#, "help")
+        .current_dir(&fixture.0)
+        .args(["--output", "help", "--bin", "help"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let html = fs::read_to_string(fixture.0.join("help")).unwrap();
+    assert!(html.contains("<html"));
+    let forwarded = fs::read_to_string(fixture.0.join("args")).unwrap();
+    assert!(forwarded.contains("--bin\nhelp\n"));
+    assert!(!forwarded.contains("--output"));
+}
+
+#[test]
 fn doctor_requires_a_matching_full_compiler_identity() {
     let fixture = Fixture::new();
     let output = fixture.command().arg("doctor").output().unwrap();
@@ -489,14 +643,16 @@ fn graph_rejects_foreign_target_before_building() {
 #[test]
 fn graph_does_not_treat_application_help_as_its_own_help() {
     let fixture = Fixture::new();
-    let output = fixture
-        .command()
-        .args(["graph", "--", "--help"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("takes no arguments after --"));
-    assert!(!fixture.0.join("args").exists());
+    for argument in ["help", "--help", "-h"] {
+        let output = fixture
+            .command()
+            .args(["graph", "--", argument])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("takes no arguments after --"));
+        assert!(!fixture.0.join("args").exists());
+    }
 }
 
 #[test]
