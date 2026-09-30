@@ -1628,6 +1628,11 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 
 ## 11. 当前说明与历史记录
 
+后续会话的待办与讨论状态固定在 [后续待办与讨论决策](docs/NESTRS_TODO_PLAN.md)。
+涉及分发、安装或 bootstrap/create 时先核对该清单；其中“待决策”项不是已确认接口，
+`toolchain install` 等拟议命令尚未实现。完成条目需更新状态与实际验收依据，记录计划
+不等于授权发布或提交代码。
+
 当前使用和限制以 [Cargo 工具链说明](docs/NESTRS_CARGO_TOOLCHAIN.md) 为准；
 [完整演进方案](docs/NESTRS_COMPILER_TOOLCHAIN_PLAN.md) 记录后续验收。
 阶段 B、独立 codegen 提取、公开薄宏和原生工具属性路线均属于历史记录。

@@ -13,6 +13,8 @@ CLI 向编译器和 rust-analyzer 提供同一个私有声明桥接，复用 `ca
 首次编写服务时可先阅读[宏使用指南](docs/NESTRS_MACROS.md)，从完整程序开始了解
 服务声明、字段注入、工厂、接口选择和查询宏。
 
+工具链分发、统一安装及未来 bootstrap/create 的讨论状态和待办见
+[后续待办计划](docs/NESTRS_TODO_PLAN.md)；下方仍是当前的源码构建方式。
 维护容器实现时可从 [core 内部阅读指南](docs/NESTRS_CORE_INTERNALS.md) 进入图编译、
 协调器、实例所有权和关闭流程；对应源码包含中文职责说明与安全不变量注释。
 

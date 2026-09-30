@@ -7,6 +7,9 @@
 当前使用方式见 [Cargo 工具链说明](NESTRS_CARGO_TOOLCHAIN.md) 和
 [IDE 接入](NESTRS_IDE.md)。
 
+后续会话的分发、安装和生态待办统一维护在 [后续待办计划](NESTRS_TODO_PLAN.md)，
+该清单区分已完成、待实施与待决策；本文件保留技术演进背景。
+
 ## 1. 已确认的体验与边界
 
 应用通过以下入口工作：
@@ -214,6 +217,9 @@ python3 tools/compiler-probe/verify_autobind.py
 - lib/test/example 等独立链接集合的图导出。
 - 编辑器完整引用重命名、更多客户端 UI 和其他 host 的 LSP 体验。
 - 应用级 Clippy 和跨 target 诊断入口 runner。
+
+工具链预编译包、统一安装、发布与 bootstrap/create 另见
+[后续待办计划](NESTRS_TODO_PLAN.md)，不将拟议安装命令作为当前可用功能。
 
 ## 9. 历史记录
 
