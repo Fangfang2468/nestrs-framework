@@ -17,7 +17,7 @@ use zyn::syn::{self, Attribute, GenericArgument, Lit, Meta, PathArguments, Type}
 
 /// 一个依赖请求的宏期事实。
 ///
-/// 它与 `nestrs_core::__private::DependencyRequest` 一一对应：这里是
+/// 它与 `nestrs_core::registration::dependency::DependencyRequest` 一一对应：这里是
 /// 语法层事实，后者是写进 provider 注册 ABI 的运行时描述。`#[inject]` 字段与 factory
 /// 参数都先归一到这个形状，再共享同一套渲染逻辑。
 #[derive(Clone, Debug)]

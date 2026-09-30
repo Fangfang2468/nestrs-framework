@@ -580,9 +580,13 @@ trait。优先把这类派生放在普通数据类型上，服务只按业务需
 primary 和生命周期规则。完整例子及泛型、可见性边界见
 [跨 crate DI](NESTRS_CROSS_CRATE_DI.md)。
 
-业务测试使用 `cargo nestrs test`。标准声明宏可用于 rustdoc/doctest，但独立 doctest
-中新声明的接口自动绑定不经过完整的绑定流程；包含 trait 注入的完整用例优先放进
-普通单元测试或集成测试，通过 `cargo nestrs test --tests` 验证。
+业务测试使用 `cargo nestrs test`，只执行文档示例时使用 `cargo nestrs test --doc`。
+文档示例可以使用业务库的服务，也可以直接声明 `#[injectable]`、`#[factory]`、普通
+trait impl 和闭合泛型查询。每段示例独立经过完整编译流程，自动绑定与查询根收集
+规则和应用一致；成功编译后才由真实 rustdoc 按代码块设置运行。
+普通方法、trait impl 方法、宏生成项与 `#[doc = include_str!(...)]` 中的示例均有回归。
+示例中的相对 `include!`、`include_str!` 和 `include_bytes!` 仍以原文档所在目录
+读取；通过 `#[doc = include_str!(...)]` 引入文档时，以实际 Markdown 目录为准。
 
 ## 11. 遇到错误时先区分发生阶段
 

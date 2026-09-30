@@ -181,7 +181,7 @@ cargo nestrs init --all-targets --output target/editor/rust-project.json --vscod
 | --- | --- |
 | `cargo nestrs check/build` | 注入标准声明宏，按真实语义生成绑定，完成 Rust 类型与借用检查 |
 | `cargo nestrs init` | 初始化或刷新现有项目的 Nestrs 开发环境，成功检查后生成 rust-analyzer 项目与设置 |
-| `cargo nestrs test` | 执行测试；文档阶段注入同一 bridge 并转发真实 rustdoc |
+| `cargo nestrs test` | 执行测试；文档示例经完整 driver 编译后由真实 rustdoc 运行 |
 | `ServiceProvider::build()` | 构造任何服务前验证当前链接单元的完整注册图，成功后冻结 |
 | `cargo nestrs graph` | 独立验证选定项目的各 binary，导出项目 HTML；`--bin` 限定单入口 |
 | 实际激活 | 执行 constructor/factory；外部资源初始化仍可能失败 |
@@ -225,12 +225,17 @@ debug/release 和增加 CPU 特性可以表示；此限制不影响应用的 che
 恢复，以及 feature、宏生成声明和 build.rs 产物已由 LSP 回归验证。完整使用方式与
 当前平台边界见 [IDE 接入](NESTRS_IDE.md)。这不代表所有编辑器 UI 或任意宏组合均已验收。
 
-CLI 的 `RUSTDOC` 指向 driver 的转发入口。它注入同一 bridge 及元数据搜索目录，
-再调用固定 sysroot 中未经修改的 rustdoc；不使用拒绝 shim，不静默忽略 doctest。
-文档内声明、concrete 查询、闭合泛型和 factory 跨 await 借用有实际运行覆盖。
-独立 doctest 内新声明的 trait 绑定仍不会自动经过两阶段 driver，完整接口图应在
-CLI 集成测试中验证。应用级 Clippy 接入和 `cargo nestrs clippy` 尚未实现；普通
-core/构建工具的 Clippy 检查可以独立运行。
+CLI 的 `RUSTDOC` 指向 driver 的文档入口。真实源码先以 `cfg(doc)` 编译和审计，
+展开后的文档交给固定 sysroot 的原版 rustdoc；每段示例作为独立链接单元经过完整
+driver，再由 rustdoc 按 `compile_fail`、`no_run`、`should_panic` 等设置执行。
+没有直接 core 依赖、只调用上游业务库封装的 DI 函数的 doctest，也经过相同入口。
+文档载体不替代真实业务库，也不静默忽略 doctest。库内服务、示例内新声明与 trait
+自动绑定、闭合泛型、factory 跨 await 借用、方法文档、宏生成项和 crate 测试属性
+均有实际回归。Linux 与 Windows 的实际验证范围见
+[core 重构验收](NESTRS_CORE_REFACTOR_VALIDATION.md)。
+文档位置映射等边界见 [编译器适配](NESTRS_COMPILER_ADAPTER.md#rustdoc-和原版-rust-analyzer)。
+应用级 Clippy 接入和 `cargo nestrs clippy` 尚未实现；普通 core/构建工具的 Clippy
+检查可以独立运行。
 
 ## 自动绑定、元数据与缓存
 

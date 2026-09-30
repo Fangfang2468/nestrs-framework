@@ -1,4 +1,9 @@
-//! 固定槽位的构造输入状态机。
+//! 已准备输入的交付与消费，不包含准备阶段的写入权限。
+//!
+//! [`PreparedInput`] 保存一个已经校验类型、带有真实 lease 的注入令牌；
+//! [`ConstructionInputs`] 则是一组只能各消费一次的固定槽位。必选与可选只在载荷形态
+//! 上不同，统一经过“检查形态和类型，再移出载荷”的流程。任何检查失败都保留原槽位，
+//! 因而诊断错误不会顺带销毁一个仍可正确读取的输入。
 
 use std::{any::Any, mem};
 
@@ -11,28 +16,25 @@ use super::{error::ConstructionError, slot::InputSlot};
 
 /// 已经完成类型化准备、但尚未写入固定槽位的一个输入。
 ///
-/// `InputPreparer` 只会产生此值；实际写入 buffer 与收纳 dependency lease 的动作
-/// 由 activation runtime 集中完成，因此 preparer 无法留下半写入状态。
+/// `InputPreparer` 只会产生此值；实际写入缓冲区与收纳依赖 lease 的动作
+/// 由 `ActivationPreparation` 集中完成，因此 preparer 无法留下半写入状态。
 #[doc(hidden)]
 pub struct PreparedInput {
-    form: InputForm,
+    kind: InputKind,
+    value: Box<dyn Any + Send + Sync>,
+    service_type_name: &'static str,
+    // 令牌自身持有一份 lease；这一份供准备阶段交给实例或工厂帧独立保活。
+    // 不能根据 preparer 的入参推断 owner，因为返回令牌可能来自它保留的另一实例。
     lease: Option<DependencyLease>,
 }
 
-/// 一个已准备输入的交付形态。
+/// 输入载荷的交付形态，与“槽位是否已消费”是两个不同维度。
 ///
-/// 这只是 [`PreparedInput`] 的私有表示细节，不是第二种“输入对象”。保留为独立的
-/// 私有枚举是为了让对外的 `PreparedInput` 维持不透明，外部代码无法伪造已验证的
-/// 构造载荷。
-enum InputForm {
-    Required {
-        value: Box<dyn Any + Send + Sync>,
-        service_type_name: &'static str,
-    },
-    Optional {
-        value: Box<dyn Any + Send + Sync>,
-        service_type_name: &'static str,
-    },
+/// 只有本模块的私有构造函数能组合形态、真实载荷类型与 lease，生成适配器不能伪造。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InputKind {
+    Required,
+    Optional,
 }
 
 impl PreparedInput {
@@ -43,10 +45,9 @@ impl PreparedInput {
     {
         Self {
             lease: Some(token.lease()),
-            form: InputForm::Required {
-                value: Box::new(token),
-                service_type_name: std::any::type_name::<T>(),
-            },
+            kind: InputKind::Required,
+            value: Box::new(token),
+            service_type_name: std::any::type_name::<T>(),
         }
     }
 
@@ -57,10 +58,9 @@ impl PreparedInput {
     {
         Self {
             lease: token.as_ref().map(Injection::lease),
-            form: InputForm::Optional {
-                value: Box::new(token),
-                service_type_name: std::any::type_name::<T>(),
-            },
+            kind: InputKind::Optional,
+            value: Box::new(token),
+            service_type_name: std::any::type_name::<T>(),
         }
     }
 
@@ -73,95 +73,55 @@ impl PreparedInput {
     where
         T: Injectable + ?Sized,
     {
-        match self.form {
-            InputForm::Required {
-                value,
-                service_type_name,
-            } => value
-                .downcast::<Injection<T>>()
-                .map(|token| *token)
-                .map_err(|_| ConstructionError::InputTypeMismatch {
-                    slot,
-                    expected: std::any::type_name::<T>(),
-                    actual: service_type_name,
-                }),
-            InputForm::Optional { .. } => Err(ConstructionError::RequiredInputExpected { slot }),
-        }
-    }
-}
-
-/// runtime 在调用 adapter 前使用的固定长度输入写入器。
-///
-/// buffer 不会按槽位号扩容：每个 slot 都必须在 [`Self::finish`] 前恰好写入一次。
-pub(super) struct InputBuffer {
-    slots: Vec<BufferSlot>,
-}
-
-enum BufferSlot {
-    Empty,
-    Ready(PreparedInput),
-}
-
-impl InputBuffer {
-    pub(super) fn new(slot_count: usize) -> Self {
-        Self {
-            slots: std::iter::repeat_with(|| BufferSlot::Empty)
-                .take(slot_count)
-                .collect(),
-        }
+        self.validate::<Injection<T>>(slot, InputKind::Required, std::any::type_name::<T>())?;
+        Ok(self.into_value())
     }
 
-    /// 写入一个已经准备好的输入。
-    ///
-    /// 写入失败时 `input` 会直接被销毁，buffer 本身不发生变化。
-    pub(super) fn insert(
-        &mut self,
+    /// 只读验证；调用者确认成功后，才可以改变槽位的消费状态。
+    fn validate<Value: Any>(
+        &self,
         slot: InputSlot,
-        input: PreparedInput,
+        kind: InputKind,
+        expected: &'static str,
     ) -> Result<(), ConstructionError> {
-        let slot_count = self.slots.len();
-        let Some(target) = self.slots.get_mut(slot.index()) else {
-            return Err(ConstructionError::SlotOutOfBounds { slot, slot_count });
-        };
-
-        if matches!(target, BufferSlot::Ready(_)) {
-            return Err(ConstructionError::SlotAlreadyPrepared { slot });
+        if self.kind != kind {
+            return Err(match kind {
+                InputKind::Required => ConstructionError::RequiredInputExpected { slot },
+                InputKind::Optional => ConstructionError::OptionalInputExpected { slot },
+            });
         }
-
-        *target = BufferSlot::Ready(input);
+        if !self.value.is::<Value>() {
+            return Err(ConstructionError::InputTypeMismatch {
+                slot,
+                expected,
+                actual: self.service_type_name,
+            });
+        }
         Ok(())
     }
 
-    /// 验证每个固定槽位均已准备，并转换为只能被 adapter 消费的输入。
-    pub(super) fn finish(self) -> Result<ConstructionInputs, ConstructionError> {
-        let mut prepared = Vec::with_capacity(self.slots.len());
-
-        for (index, slot) in self.slots.into_iter().enumerate() {
-            let BufferSlot::Ready(input) = slot else {
-                return Err(ConstructionError::UnfilledSlot {
-                    slot: InputSlot::new(index),
-                });
-            };
-
-            prepared.push(ConsumptionSlot::Available(input));
-        }
-
-        Ok(ConstructionInputs { slots: prepared })
+    /// 仅接收已经通过 `validate::<Value>` 的载荷；令牌自己的 lease 随值一起移出。
+    fn into_value<Value: Any>(self) -> Value {
+        *self
+            .value
+            .downcast::<Value>()
+            .expect("输入载荷必须在移出前完成准确类型检查")
     }
 }
 
 /// 已完成绑定的构造输入。
 ///
-/// class adapter 直接消费它；factory adapter 仅通过持有真实 lease 的
+/// class 适配器直接消费它；factory 适配器仅通过持有真实 lease 的
 /// [`super::FactoryInputs`] 消费它。该类型不提供写入 API；adapter 只能按 slot 取得
-/// 匹配的 required 或 optional token，并在构造完成前通过
-/// [`Self::ensure_all_consumed`] 验证 descriptor 与 adapter 一致。
+/// 匹配的必选或可选令牌，并在构造完成前通过
+/// [`Self::ensure_all_consumed`] 验证描述中的依赖与适配器实际读取一致。
 #[doc(hidden)]
 pub struct ConstructionInputs {
     slots: Vec<ConsumptionSlot>,
 }
 
 enum ConsumptionSlot {
+    // 可选输入的 None 也属于 Available；它和已经取走的 Consumed 不同。
     Available(PreparedInput),
     Consumed,
 }
@@ -169,9 +129,14 @@ enum ConsumptionSlot {
 impl ConstructionInputs {
     /// 创建没有依赖的合法构造输入，供零依赖 adapter 使用。
     pub fn empty() -> Self {
-        InputBuffer::new(0)
-            .finish()
-            .expect("an empty fixed input buffer is complete")
+        Self { slots: Vec::new() }
+    }
+
+    /// 仅供准备阶段使用；每个元素都对应已填满且校验过边界的固定槽位。
+    pub(super) fn from_prepared(inputs: Vec<PreparedInput>) -> Self {
+        Self {
+            slots: inputs.into_iter().map(ConsumptionSlot::Available).collect(),
+        }
     }
 
     /// 取走一个必选字段注入 token。
@@ -179,23 +144,7 @@ impl ConstructionInputs {
     where
         T: Injectable + ?Sized,
     {
-        self.ensure_required_type::<T>(slot)?;
-
-        let PreparedInput {
-            form:
-                InputForm::Required {
-                    value,
-                    service_type_name: _,
-                },
-            ..
-        } = self.take_available(slot)
-        else {
-            unreachable!("required input was checked before consumption");
-        };
-
-        Ok(*value
-            .downcast::<Injection<T>>()
-            .expect("required input type was checked before consumption"))
+        self.take_value(slot, InputKind::Required, std::any::type_name::<T>())
     }
 
     /// 取走一个可选字段注入 token。
@@ -206,23 +155,7 @@ impl ConstructionInputs {
     where
         T: Injectable + ?Sized,
     {
-        self.ensure_optional_type::<T>(slot)?;
-
-        let PreparedInput {
-            form:
-                InputForm::Optional {
-                    value,
-                    service_type_name: _,
-                },
-            ..
-        } = self.take_available(slot)
-        else {
-            unreachable!("optional input was checked before consumption");
-        };
-
-        Ok(*value
-            .downcast::<Option<Injection<T>>>()
-            .expect("optional input type was checked before consumption"))
+        self.take_value(slot, InputKind::Optional, std::any::type_name::<T>())
     }
 
     /// 拒绝仍遗留在 adapter 输入中的槽位。
@@ -240,52 +173,16 @@ impl ConstructionInputs {
         })
     }
 
-    fn ensure_required_type<T>(&self, slot: InputSlot) -> Result<(), ConstructionError>
-    where
-        T: Injectable + ?Sized,
-    {
-        let input = self.available(slot)?;
-        match &input.form {
-            InputForm::Required {
-                value,
-                service_type_name,
-            } => {
-                if value.is::<Injection<T>>() {
-                    Ok(())
-                } else {
-                    Err(ConstructionError::InputTypeMismatch {
-                        slot,
-                        expected: std::any::type_name::<T>(),
-                        actual: service_type_name,
-                    })
-                }
-            }
-            InputForm::Optional { .. } => Err(ConstructionError::RequiredInputExpected { slot }),
-        }
-    }
-
-    fn ensure_optional_type<T>(&self, slot: InputSlot) -> Result<(), ConstructionError>
-    where
-        T: Injectable + ?Sized,
-    {
-        let input = self.available(slot)?;
-        match &input.form {
-            InputForm::Optional {
-                value,
-                service_type_name,
-            } => {
-                if value.is::<Option<Injection<T>>>() {
-                    Ok(())
-                } else {
-                    Err(ConstructionError::InputTypeMismatch {
-                        slot,
-                        expected: std::any::type_name::<T>(),
-                        actual: service_type_name,
-                    })
-                }
-            }
-            InputForm::Required { .. } => Err(ConstructionError::OptionalInputExpected { slot }),
-        }
+    /// 必选和可选共享此流程，保证所有错误检查都发生在消费槽位之前。
+    fn take_value<Value: Any>(
+        &mut self,
+        slot: InputSlot,
+        kind: InputKind,
+        expected: &'static str,
+    ) -> Result<Value, ConstructionError> {
+        self.available(slot)?
+            .validate::<Value>(slot, kind, expected)?;
+        Ok(self.take_available(slot).into_value())
     }
 
     fn available(&self, slot: InputSlot) -> Result<&PreparedInput, ConstructionError> {
@@ -304,12 +201,12 @@ impl ConstructionInputs {
         let value = mem::replace(
             self.slots
                 .get_mut(slot.index())
-                .expect("slot was checked before consumption"),
+                .expect("槽位必须在消费前完成范围检查"),
             ConsumptionSlot::Consumed,
         );
 
         let ConsumptionSlot::Available(input) = value else {
-            unreachable!("slot was checked before consumption");
+            unreachable!("槽位必须在消费前确认尚未被消费");
         };
 
         input
@@ -317,289 +214,5 @@ impl ConstructionInputs {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::slot::InputSlot;
-    use super::{ConstructionInputs, InputBuffer, PreparedInput};
-    use crate::activation::{
-        DependencyLease, ErasedService, Injection, ReleaseDomain,
-        construction::error::ConstructionError, prepare_optional, prepare_required,
-    };
-
-    #[derive(Debug, Clone)]
-    struct Alpha;
-
-    #[derive(Debug, Clone)]
-    struct Beta;
-
-    #[derive(Debug, Clone)]
-    struct Tagged(u8);
-
-    fn required<T>(value: &mut T) -> PreparedInput
-    where
-        T: Clone + Send + Sync + 'static,
-    {
-        let lease = DependencyLease::new(
-            ErasedService::new(value.clone()),
-            vec![],
-            ReleaseDomain::new(),
-        );
-        prepare_required::<T>(InputSlot::new(0), Some(lease.erased_ref())).unwrap()
-    }
-
-    fn optional<T>(value: Option<&mut T>) -> PreparedInput
-    where
-        T: Clone + Send + Sync + 'static,
-    {
-        let input = value.map(|value| {
-            DependencyLease::new(
-                ErasedService::new(value.clone()),
-                vec![],
-                ReleaseDomain::new(),
-            )
-            .erased_ref()
-        });
-        prepare_optional::<T>(InputSlot::new(0), input).unwrap()
-    }
-
-    #[test]
-    fn accepts_out_of_order_preparation_and_consumes_each_slot_once() {
-        let mut alpha = Alpha;
-        let mut beta = Beta;
-        let mut buffer = InputBuffer::new(2);
-
-        buffer
-            .insert(InputSlot::new(1), optional(Some(&mut beta)))
-            .expect("second slot should accept the first preparation");
-        buffer
-            .insert(InputSlot::new(0), required(&mut alpha))
-            .expect("first slot should accept a later preparation");
-
-        let mut inputs = buffer.finish().expect("all slots are ready");
-        let _: Injection<Alpha> = inputs
-            .take(InputSlot::new(0))
-            .expect("required slot should yield Alpha");
-        let optional_beta: Option<Injection<Beta>> = inputs
-            .take_optional(InputSlot::new(1))
-            .expect("optional slot should yield Beta");
-        assert!(optional_beta.is_some());
-        inputs
-            .ensure_all_consumed()
-            .expect("all prepared slots should be consumed");
-    }
-
-    #[test]
-    fn rejects_an_out_of_bounds_slot_without_changing_the_buffer() {
-        let mut alpha = Alpha;
-        let mut buffer = InputBuffer::new(1);
-
-        assert_eq!(
-            buffer.insert(InputSlot::new(1), required(&mut alpha)),
-            Err(ConstructionError::SlotOutOfBounds {
-                slot: InputSlot::new(1),
-                slot_count: 1,
-            })
-        );
-        assert!(matches!(
-            buffer.finish(),
-            Err(ConstructionError::UnfilledSlot { slot }) if slot == InputSlot::new(0)
-        ));
-    }
-
-    #[test]
-    fn rejects_duplicate_preparation() {
-        let mut first = Tagged(1);
-        let mut second = Tagged(2);
-        let mut buffer = InputBuffer::new(1);
-
-        buffer
-            .insert(InputSlot::new(0), required(&mut first))
-            .expect("first preparation should succeed");
-        assert_eq!(
-            buffer.insert(InputSlot::new(0), required(&mut second)),
-            Err(ConstructionError::SlotAlreadyPrepared {
-                slot: InputSlot::new(0),
-            })
-        );
-        let mut inputs = buffer.finish().expect("first prepared value must remain");
-        let token = inputs
-            .take::<Tagged>(InputSlot::new(0))
-            .expect("first prepared value should remain");
-        assert_eq!(token.0, 1);
-    }
-
-    #[test]
-    fn finish_rejects_the_first_unfilled_slot() {
-        let mut alpha = Alpha;
-        let mut buffer = InputBuffer::new(2);
-        buffer
-            .insert(InputSlot::new(0), required(&mut alpha))
-            .expect("first slot should be ready");
-
-        assert!(matches!(
-            buffer.finish(),
-            Err(ConstructionError::UnfilledSlot { slot }) if slot == InputSlot::new(1)
-        ));
-    }
-
-    #[test]
-    fn required_optional_mismatch_does_not_consume_the_slot() {
-        let mut alpha = Alpha;
-        let mut buffer = InputBuffer::new(1);
-        buffer
-            .insert(InputSlot::new(0), optional(Some(&mut alpha)))
-            .expect("optional slot should prepare");
-
-        let mut inputs = buffer.finish().expect("slot should be complete");
-        assert!(matches!(
-            inputs.take::<Alpha>(InputSlot::new(0)),
-            Err(ConstructionError::RequiredInputExpected { slot }) if slot == InputSlot::new(0)
-        ));
-        assert!(matches!(
-            inputs.take_optional::<Alpha>(InputSlot::new(0)),
-            Ok(Some(_))
-        ));
-    }
-
-    #[test]
-    fn optional_required_mismatch_does_not_consume_the_slot() {
-        let mut alpha = Alpha;
-        let mut buffer = InputBuffer::new(1);
-        buffer
-            .insert(InputSlot::new(0), required(&mut alpha))
-            .expect("required slot should prepare");
-
-        let mut inputs = buffer.finish().expect("slot should be complete");
-        assert!(matches!(
-            inputs.take_optional::<Alpha>(InputSlot::new(0)),
-            Err(ConstructionError::OptionalInputExpected { slot }) if slot == InputSlot::new(0)
-        ));
-        assert!(inputs.take::<Alpha>(InputSlot::new(0)).is_ok());
-    }
-
-    #[test]
-    fn an_absent_optional_input_is_ready_not_unfilled() {
-        let mut buffer = InputBuffer::new(1);
-        buffer
-            .insert(InputSlot::new(0), optional::<Alpha>(None))
-            .expect("an absent optional dependency still prepares its slot");
-
-        let mut inputs = buffer.finish().expect("absent optional slot is complete");
-        assert!(matches!(
-            inputs.take_optional::<Alpha>(InputSlot::new(0)),
-            Ok(None)
-        ));
-        inputs
-            .ensure_all_consumed()
-            .expect("the optional slot should be consumed");
-    }
-
-    #[test]
-    fn type_mismatch_does_not_consume_the_slot() {
-        let mut alpha = Alpha;
-        let mut buffer = InputBuffer::new(1);
-        buffer
-            .insert(InputSlot::new(0), required(&mut alpha))
-            .expect("required slot should prepare");
-
-        let mut inputs = buffer.finish().expect("slot should be complete");
-        assert!(matches!(
-            inputs.take::<Beta>(InputSlot::new(0)),
-            Err(ConstructionError::InputTypeMismatch {
-                slot,
-                expected,
-                actual,
-            }) if slot == InputSlot::new(0)
-                && expected == std::any::type_name::<Beta>()
-                && actual == std::any::type_name::<Alpha>()
-        ));
-        assert!(inputs.take::<Alpha>(InputSlot::new(0)).is_ok());
-    }
-
-    #[test]
-    fn optional_type_mismatch_does_not_consume_the_slot() {
-        let mut alpha = Alpha;
-        let mut buffer = InputBuffer::new(1);
-        buffer
-            .insert(InputSlot::new(0), optional(Some(&mut alpha)))
-            .expect("optional slot should prepare");
-
-        let mut inputs = buffer.finish().expect("slot should be complete");
-        assert!(matches!(
-            inputs.take_optional::<Beta>(InputSlot::new(0)),
-            Err(ConstructionError::InputTypeMismatch {
-                slot,
-                expected,
-                actual,
-            }) if slot == InputSlot::new(0)
-                && expected == std::any::type_name::<Beta>()
-                && actual == std::any::type_name::<Alpha>()
-        ));
-        assert!(matches!(
-            inputs.take_optional::<Alpha>(InputSlot::new(0)),
-            Ok(Some(_))
-        ));
-    }
-
-    #[test]
-    fn rejects_second_consumption_of_a_slot() {
-        let mut alpha = Alpha;
-        let mut buffer = InputBuffer::new(1);
-        buffer
-            .insert(InputSlot::new(0), required(&mut alpha))
-            .expect("required slot should prepare");
-
-        let mut inputs = buffer.finish().expect("slot should be complete");
-        let _: Injection<Alpha> = inputs
-            .take(InputSlot::new(0))
-            .expect("first consumption should succeed");
-        assert!(matches!(
-            inputs.take::<Alpha>(InputSlot::new(0)),
-            Err(ConstructionError::SlotAlreadyConsumed { slot }) if slot == InputSlot::new(0)
-        ));
-    }
-
-    #[test]
-    fn reports_the_first_unconsumed_slot() {
-        let mut alpha = Alpha;
-        let mut beta = Beta;
-        let mut buffer = InputBuffer::new(2);
-        buffer
-            .insert(InputSlot::new(0), required(&mut alpha))
-            .expect("first slot should prepare");
-        buffer
-            .insert(InputSlot::new(1), required(&mut beta))
-            .expect("second slot should prepare");
-
-        let mut inputs = buffer.finish().expect("all slots should be complete");
-        let _: Injection<Alpha> = inputs
-            .take(InputSlot::new(0))
-            .expect("first slot should consume");
-        assert_eq!(
-            inputs.ensure_all_consumed(),
-            Err(ConstructionError::UnconsumedSlot {
-                slot: InputSlot::new(1),
-            })
-        );
-        let _: Injection<Beta> = inputs
-            .take(InputSlot::new(1))
-            .expect("the remaining slot should still be consumable");
-        inputs
-            .ensure_all_consumed()
-            .expect("the failed check must not consume a slot");
-    }
-
-    #[test]
-    fn empty_inputs_are_already_fully_consumed() {
-        let mut inputs = ConstructionInputs::empty();
-        inputs
-            .ensure_all_consumed()
-            .expect("empty input set should be valid");
-        assert!(matches!(
-            inputs.take::<Alpha>(InputSlot::new(0)),
-            Err(ConstructionError::SlotOutOfBounds {
-                slot,
-                slot_count: 0,
-            }) if slot == InputSlot::new(0)
-        ));
-    }
-}
+#[path = "../../../tests/unit/activation/construction/inputs.rs"]
+mod tests;

@@ -15,3 +15,4 @@ alternate = []
 [dependencies]
 nestrs-core = { path = "../../../../nestrs-core" }
 tokio = { version = "1.53.1", default-features = false, features = ["rt-multi-thread", "sync", "macros", "time"] }
+serde_json = "1"

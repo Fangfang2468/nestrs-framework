@@ -230,7 +230,7 @@ pub fn prepare(compiler: &interface::Compiler, krate: &mut ast::Crate) {
     let source = r#"
         #[allow(dead_code)]
         fn main() {
-            match ::nestrs_core::__private::dependency_graph_json() {
+            match ::nestrs_core::registration::catalog::dependency_graph_json() {
                 Ok(data) => println!("{}", data),
                 Err(error) => { eprintln!("{}", error); ::std::process::exit(1); }
             }

@@ -2,7 +2,7 @@
 //!
 //! 为属性过程宏与编译器工具链提供同一套分析、重写和代码生成逻辑。
 //! 此 crate 不执行服务构造，也不依赖 DI runtime；生成的 Rust 代码仍引用
-//! `::nestrs_core::__private`。这些入口是工具链内部接口，不是稳定用户 API。
+//! core 实际所属私有模块；编译器限制这些引用只来自真实生成代码。
 //!
 //! 输入直接使用带 span 的 `proc_macro2::TokenStream`，可以在普通进程中调用，
 //! 无需过程宏执行上下文，也不通过字符串往返解析 token。
@@ -53,7 +53,7 @@ use crate::codegen::utility::{
 /// 会在需要时通过 `Into<字段类型>` 转换，因此 `String` 字段可直接写
 /// `#[value("name")]`。
 ///
-/// 该 adapter 不是类型成员且只由 linkme Provider 持有函数指针，因而用户不能以
+/// 该 adapter 不是类型成员且只由编译器收集的 Provider 持有函数指针，因而用户不能以
 /// `Service::__nestrs_construct(...)` 调用。由于它仍是非捕获函数，`#[value]` 不能
 /// 引用调用点局部变量或另一字段；表达式必须能转换为字段类型。
 fn injectable(item: syn::ItemStruct, args: Args) -> zyn::Output {

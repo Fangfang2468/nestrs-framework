@@ -1,73 +1,47 @@
+// 以静态依赖图为执行计划的异步 DI 容器。
+//
+// 阅读实现时可以沿以下顺序进入各模块：
+// 1. `registration` 接收编译器收集的类型化声明，不执行用户构造代码。
+// 2. `graph` 展开声明、选择路由并验证完整图，得到不可变的构造计划。
+// 3. `facade` 将用户借用和查询请求交给 `runtime` 的单一协调器。
+// 4. `activation` 准备输入、保存稳定实例和强 lease，并以迭代队列释放依赖。
+//
+// 生命周期缓存、实例所有权与公开借用分别承担不同职责：缓存合并初始化，owner 的
+// journal 保活已发布实例，注入令牌和工厂 frame 保活各自依赖。它们共同保证取消查询、
+// owner 关闭或 Tokio 停止时不会把仍可被安全代码访问的值提前释放。
+
+// 这些真实私有模块同时服务于编译器生成的 adapter。普通 Cargo 的本地调用分析看不到
+// 下游生成代码中的使用点；因此限定在相关模块允许这些编译期协议入口暂未被本地引用。
+#[allow(dead_code, unused_imports)]
 mod activation;
+mod error;
+#[allow(dead_code)]
 mod facade;
+#[allow(dead_code)]
 mod graph;
 mod lifetime;
+mod options;
 mod query;
+#[allow(dead_code)]
 mod registration;
 mod runtime;
+#[allow(dead_code)]
 mod service;
 
-pub use facade::{
-    BuildError, DisposeError, InitializationMode, ResolveError, ServiceProvider,
-    ServiceProviderOptions, ServiceProviderRef, ServiceScope,
-};
+pub use error::{BuildError, DisposeError, ResolveError};
+pub use facade::{ServiceProvider, ServiceProviderRef, ServiceScope};
 pub use lifetime::ServiceLifetime;
+pub use options::{InitializationMode, ServiceProviderOptions};
 pub use service::ServiceKey;
 
-#[doc(hidden)]
-pub mod __private {
-    /// Versioned diagnostic bridge for `cargo nestrs graph`. Only metadata
-    /// callbacks run; no runtime, service constructor or cleanup is started.
-    pub fn dependency_graph_json() -> Result<String, String> {
-        crate::graph::GraphCompiler::compile_static()
-            .map(|graph| crate::graph::snapshot(&graph).to_string())
-            .map_err(|error| format!("DI 依赖图验证失败: {error}"))
-    }
+pub use activation::Injection;
 
-    /// 仅供宏生成的分布式注册静态项使用的 `linkme` crate 重导出。
-    ///
-    /// 下游应用无需也不应为了 DI 注册而直接依赖此名称。
-    pub use linkme;
+// 测试实体统一放在 crate 根 tests/；这里只声明挂载点，使白盒测试继续受同一
+// crate 的私有边界约束，不为测试暴露生产内部 API。
+#[cfg(test)]
+#[path = "../tests/unit/contracts.rs"]
+mod contract_tests;
 
-    /// 仅供宏展开引用的只读字段注入 token。
-    pub use crate::activation::Injection;
-    /// 仅供宏生成 factory adapter 使用的隐藏 ABI。
-    pub use crate::activation::{AsyncConstructor, FactoryConstructor, FactoryFuture};
-    /// 仅供宏生成构造 adapter 使用的 type-erased service ABI。
-    pub use crate::activation::{ClassConstructor, ErasedService, ErasedServiceRef};
-    /// 仅供宏生成构造 adapter 使用的隐藏 ABI。
-    pub use crate::activation::{
-        ConstructionError, ConstructionInputs, FactoryInputs, InputPreparer, InputSlot,
-        PreparedInput, prepare_bound_optional, prepare_bound_required, prepare_optional,
-        prepare_optional_absent, prepare_required,
-    };
-    pub use crate::facade::{QueryTarget, query_optional, query_required};
-    /// 宏生成 provider metadata 所需的服务生命周期枚举。
-    pub use crate::lifetime::ServiceLifetime;
-    /// 仅供宏写入和读取的 trait 绑定注册 ABI。
-    pub use crate::registration::binding::{
-        BoundKeyPolicy, REFLECTED_AUTOMATIC_BINDINGS, REFLECTED_BINDINGS, TraitBinding,
-    };
-    /// Type-bearing markers for the versioned compiler adapter; not a user API.
-    pub use crate::registration::compiler::{
-        CompilerKey, compiler_automatic_binding, compiler_binding, compiler_blueprint,
-        compiler_blueprint_path, compiler_dependency, compiler_provider, compiler_request,
-    };
-    /// 仅供宏写入和读取的依赖请求 ABI。
-    pub use crate::registration::dependency::{
-        ClosedProviderCallback, Delivery, DependencyRequest, ProviderSource,
-    };
-    /// 仅供宏写入和读取的实例 provider 注册 ABI。
-    pub use crate::registration::provider::{
-        ClassProvider, CleanupFuture, CleanupHook, FactoryInvoker, FactoryProvider, Provider,
-        ProviderCommon, ProviderDefinition, REFLECTED_PROVIDERS, provider_definition,
-    };
-    pub use crate::registration::root::{
-        DependencyPath, DependencySlot, Probe, ProbeProvider, REFLECTED_BLUEPRINTS,
-        REFLECTED_ROOTS, RootDeclaration,
-    };
-    /// 仅供宏为泛型 provider definition 声明其必要的服务约束。
-    pub use crate::service::Injectable;
-    /// 宏生成注册 metadata 所需的服务 token ABI。
-    pub use crate::service::{ServiceIdentifier, ServiceKey, ServiceSource, ServiceType};
-}
+#[cfg(all(test, not(nestrs_compiler_contract)))]
+#[path = "../tests/unit/facade_api.rs"]
+mod facade_api_tests;

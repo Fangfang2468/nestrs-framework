@@ -1,4 +1,5 @@
-//! Host proc-macro metadata must remain loadable through ordinary downstream crates.
+//! 无直接 core 依赖的下游 crate 仍需加载上游宏 metadata，并在 binary/doctest 的最终
+//! 入口生成 registry。fixture 实际调用上游封装的 DI，避免链接裁剪掩盖缺失入口。
 #![cfg(feature = "compiler-driver")]
 
 use std::{fs, path::Path, process::Command};

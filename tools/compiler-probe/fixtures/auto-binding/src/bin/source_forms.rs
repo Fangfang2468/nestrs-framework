@@ -1,7 +1,7 @@
 //! Source expressions emitted from compiler types, beyond local ADT names.
 
 use nestrs::injectable;
-use nestrs_core::{__private::REFLECTED_BINDINGS, ServiceProvider};
+use nestrs_core::{ServiceProvider};
 use std::marker::PhantomData;
 
 #[path = "../automatic_assertions.rs"]
@@ -138,7 +138,7 @@ async fn main() {
         .unwrap();
     assert_eq!(buffer_port.capacity(), 8);
     assert_eq!(buffer_port.identity(), buffer as *const Buffer<8> as usize);
-    assert_eq!(REFLECTED_BINDINGS.len(), 0);
+    assert_eq!(automatic_assertions::explicit_count(), 0);
     automatic_assertions::assert_count::<dyn RepositoryPort<std::string::String>>(1);
     automatic_assertions::assert_count::<dyn BufferPort<8>>(1);
 

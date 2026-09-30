@@ -62,7 +62,7 @@ pub(crate) fn snapshot(graph: &ValidatedGraph) -> Value {
 fn key_value(key: Option<&ServiceKey>) -> Value {
     match key {
         Some(ServiceKey::Named(name)) => json!({ "kind": "named", "value": name }),
-        // JavaScript numbers cannot exactly represent every usize; keep keyed routes lossless.
+        // JavaScript 数值不能精确表示所有 usize；编号 key 使用十进制字符串无损输出。
         Some(ServiceKey::Indexed(index)) => {
             json!({ "kind": "indexed", "value": index.to_string() })
         }
@@ -71,5 +71,5 @@ fn key_value(key: Option<&ServiceKey>) -> Value {
 }
 
 #[cfg(test)]
-#[path = "diagnostics_tests.rs"]
+#[path = "../../tests/unit/graph/diagnostics.rs"]
 mod tests;

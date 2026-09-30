@@ -1,7 +1,7 @@
 //! A migration case: an existing explicit pair must not be generated a second time.
 
 use nestrs::{bind, injectable};
-use nestrs_core::{__private::REFLECTED_BINDINGS, ServiceProvider};
+use nestrs_core::{ServiceProvider};
 
 #[path = "../automatic_assertions.rs"]
 mod automatic_assertions;
@@ -25,7 +25,7 @@ impl Port for Service {
 
 #[tokio::main]
 async fn main() {
-    assert_eq!(REFLECTED_BINDINGS.len(), 1);
+    assert_eq!(automatic_assertions::explicit_count(), 1);
     automatic_assertions::assert_count::<dyn Port>(0);
     let provider = ServiceProvider::build().await.unwrap();
     let concrete = nestrs_core::get_required_service!(provider, Service)

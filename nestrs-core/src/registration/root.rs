@@ -1,10 +1,9 @@
 //! 查询与绑定宏在具体类型调用点提供的静态闭合类型探测。
 //!
 //! 已闭合且实现 ProviderDefinition 的类型携带单态化 callback；factory-only 类型和
-//! trait 查询只记录类型，不要求一个不存在的 ProviderDefinition 实现。根描述在链接时
-//! 收集，在静态图编译期间消费，不提供运行期扩图入口。
+//! trait 查询只记录类型，不要求一个不存在的 ProviderDefinition 实现。编译器将根描述
+//! 汇总到最终入口，在静态图编译期间消费，不提供运行期扩图入口。
 
-use linkme::distributed_slice;
 use std::marker::PhantomData;
 
 use crate::{
@@ -23,22 +22,13 @@ pub struct RootDeclaration {
     pub source: ServiceSource,
 }
 
-/// 重复查询同一闭合类型是幂等的；图编译器优先采用存在的物化 callback。
-#[distributed_slice]
-pub static REFLECTED_ROOTS: [fn() -> RootDeclaration] = [..];
-
-/// Compiler-discovered closed blueprints. Unlike roots these are passive:
-/// graph compilation only calls a blueprint demanded by a root or dependency.
-#[distributed_slice]
-pub static REFLECTED_BLUEPRINTS: [fn() -> RootDeclaration] = [..];
-
-/// A type-level dependency path keeps a producer's private field types behind
-/// an ordinary, compiler-checked callback. The const is forwarded at compile
-/// time; looking up a deep path never recursively walks it at runtime.
+/// 类型级依赖路径把生产 crate 的私有字段类型留在普通、经编译器检查的回调之后。
+/// SLOT 在编译期传递；深层路径不需要运行期递归查找，也不要求公开业务私有类型。
 #[doc(hidden)]
 pub struct DependencySlot<const SLOT: usize>;
 
 #[doc(hidden)]
+/// 路径最终提供已闭合 Provider 的根描述，供下游完整入口汇总被动蓝图。
 pub trait DependencyPath<Path> {
     const BLUEPRINT: fn() -> RootDeclaration;
 }
@@ -94,52 +84,5 @@ impl<T: Injectable + ?Sized> ProbeProvider for &Probe<T> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::registration::provider::Provider;
-
-    struct Defined<T>(PhantomData<T>);
-    impl<T: Send + Sync + 'static> ProviderDefinition for Defined<T> {
-        fn provider() -> Provider {
-            panic!("discovering a callback must never execute it")
-        }
-    }
-    struct FactoryOnly;
-    struct GenericFactoryOnly<T>(PhantomData<T>);
-    trait Port: Send + Sync {}
-
-    #[test]
-    fn concrete_site_probe_finds_definitions_through_type_aliases() {
-        type Alias = Defined<u32>;
-        assert!(
-            (&&Probe::<Defined<u32>>::new())
-                .provider_callback()
-                .is_some()
-        );
-        assert!((&&Probe::<Alias>::new()).provider_callback().is_some());
-    }
-
-    #[test]
-    #[allow(clippy::needless_borrow)] // Keep the exact macro autoref protocol for fallback types.
-    fn factory_only_generic_and_trait_queries_use_the_unbounded_fallback() {
-        type FactoryAlias = GenericFactoryOnly<u32>;
-        type TraitAlias = dyn Port;
-        assert!(
-            (&&Probe::<FactoryOnly>::new())
-                .provider_callback()
-                .is_none()
-        );
-        assert!(
-            (&&Probe::<GenericFactoryOnly<u32>>::new())
-                .provider_callback()
-                .is_none()
-        );
-        assert!(
-            (&&Probe::<FactoryAlias>::new())
-                .provider_callback()
-                .is_none()
-        );
-        assert!((&&Probe::<dyn Port>::new()).provider_callback().is_none());
-        assert!((&&Probe::<TraitAlias>::new()).provider_callback().is_none());
-    }
-}
+#[path = "../../tests/unit/registration/root.rs"]
+mod tests;

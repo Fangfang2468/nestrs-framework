@@ -1,6 +1,6 @@
 //! `#[injectable]` 隐藏构造 adapter 的生成。
 //!
-//! 此处只定义构造函数本身。它必须由 `registration` 放入与 linkme provider
+//! 此处只定义构造函数本身。它必须由 `registration` 放入与 描述 provider
 //! factory 相同的匿名 `const` 作用域，才能把函数指针写入 `Provider::Class`，同时
 //! 不把 helper 暴露为结构体的 inherent method。
 
@@ -29,8 +29,8 @@ pub(crate) fn generate_injectable_constructor(analysis: AnalyzedFields) -> zyn::
         fn __nestrs_construct(
             {{ context_binding }}
         ) -> ::core::result::Result<
-            ::nestrs_core::__private::ErasedService,
-            ::nestrs_core::__private::ConstructionError,
+            ::nestrs_core::activation::ErasedService,
+            ::nestrs_core::activation::ConstructionError,
         > {
             let __nestrs_injectable_instance = @ConstructInjectableInstance(
                 analysis = analysis.clone(),
@@ -39,7 +39,7 @@ pub(crate) fn generate_injectable_constructor(analysis: AnalyzedFields) -> zyn::
             );
             {{ context }}.ensure_all_consumed()?;
             ::core::result::Result::Ok(
-                ::nestrs_core::__private::ErasedService::new(
+                ::nestrs_core::activation::ErasedService::new(
                     __nestrs_injectable_instance
                 )
             )
@@ -50,7 +50,7 @@ pub(crate) fn generate_injectable_constructor(analysis: AnalyzedFields) -> zyn::
 /// 输出开放泛型 `ProviderDefinition` 使用的无捕获构造 closure。
 ///
 /// 它位于 trait 方法内部，因此 `Self` 已是由注入点单态化的服务类型；不像闭合
-/// component 的 linkme 注册，这里绝不能生成一个全局命名函数或把开放 provider
+/// component 的 编译器注册，这里绝不能生成一个全局命名函数或把开放 provider
 /// 放进 distributed slice。
 #[zyn::element]
 pub(crate) fn generate_generic_injectable_constructor(
@@ -62,8 +62,8 @@ pub(crate) fn generate_generic_injectable_constructor(
 
     zyn! {
         |{{ context_binding }}| -> ::core::result::Result<
-            ::nestrs_core::__private::ErasedService,
-            ::nestrs_core::__private::ConstructionError,
+            ::nestrs_core::activation::ErasedService,
+            ::nestrs_core::activation::ConstructionError,
         > {
             let __nestrs_injectable_instance = @ConstructInjectableInstance(
                 analysis = analysis.clone(),
@@ -72,7 +72,7 @@ pub(crate) fn generate_generic_injectable_constructor(
             );
             {{ context }}.ensure_all_consumed()?;
             ::core::result::Result::Ok(
-                ::nestrs_core::__private::ErasedService::new(
+                ::nestrs_core::activation::ErasedService::new(
                     __nestrs_injectable_instance
                 )
             )
@@ -167,11 +167,11 @@ fn take_injected_field_value(spec: FieldSpec, context: syn::Ident) -> zyn::Token
     zyn! {
         @if (optional) {
             {{ context }}.take_optional::<{{ service_type }}>(
-                ::nestrs_core::__private::InputSlot::new({{ position }})
+                ::nestrs_core::activation::InputSlot::new({{ position }})
             )?
         } @else {
             {{ context }}.take::<{{ service_type }}>(
-                ::nestrs_core::__private::InputSlot::new({{ position }})
+                ::nestrs_core::activation::InputSlot::new({{ position }})
             )?
         }
     }
@@ -179,9 +179,9 @@ fn take_injected_field_value(spec: FieldSpec, context: syn::Ident) -> zyn::Token
 
 fn context_binding(analysis: &AnalyzedFields, context: &syn::Ident) -> zyn::TokenStream {
     if analysis.has_injected_fields() {
-        quote!(mut #context: ::nestrs_core::__private::ConstructionInputs)
+        quote!(mut #context: ::nestrs_core::activation::ConstructionInputs)
     } else {
-        quote!(#context: ::nestrs_core::__private::ConstructionInputs)
+        quote!(#context: ::nestrs_core::activation::ConstructionInputs)
     }
 }
 
@@ -263,7 +263,7 @@ mod tests {
         let unit_specs = collect_field_specs(&unit.fields).expect("fields should be valid");
         let unit_output = render_constructor(unit, unit_specs);
         assert!(unit_output.contains(
-            "__nestrs_injectable_context_for_Unit : :: nestrs_core :: __private :: ConstructionInputs"
+            "__nestrs_injectable_context_for_Unit : :: nestrs_core :: activation :: ConstructionInputs"
         ));
         assert!(unit_output.contains("let __nestrs_injectable_instance = Unit"));
     }

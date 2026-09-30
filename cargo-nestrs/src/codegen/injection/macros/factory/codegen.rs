@@ -1,7 +1,7 @@
 //! `#[factory]` 的 Provider 代码生成。
 //!
 //! 本模块只消费 [`FactoryAnalysis`]，不会再查看用户函数参数上的属性。最终输出分成
-//! 两个平级 element：一个重写后的用户函数，一个匿名 `const` 中的 adapter + linkme
+//! 两个平级 element：一个重写后的用户函数，一个匿名 `const` 中的 adapter + 描述回调
 //! callback。这样 factory 函数保留用户可以在模块内调用的普通函数语义，而 runtime
 //! adapter 始终是不可从模块外命名的实现细节。
 
@@ -28,7 +28,7 @@ pub(crate) fn rewrite_factory_signature(analysis: FactoryAnalysis) -> zyn::Token
     }
 }
 
-/// 生成隐藏 factory adapter 及写入统一 Provider linkme slice 的 callback。
+/// 生成隐藏 factory adapter 及写入统一 Provider 描述清单 的 callback。
 ///
 /// adapter、cleanup wrapper 和 slice callback 被放入同一个私有且按 factory 名称唯一的
 /// `const`。这样它在错误地出现在 impl 中时仍是合法的 associated const，同时
@@ -50,25 +50,21 @@ pub(crate) fn emit_factory_provider(
             @GenerateFactoryAdapter(
                 analysis = analysis.clone(),
             )
-
-            #[::nestrs_core::__private::linkme::distributed_slice(
-                ::nestrs_core::__private::REFLECTED_PROVIDERS
-            )]
-            #[linkme(crate = ::nestrs_core::__private::linkme)]
-            fn __nestrs_reflected_factory() -> ::nestrs_core::__private::Provider {
-                ::nestrs_core::__private::compiler_provider::<{{ analysis.output.success_type.clone() }}>(
+        #[allow(dead_code)]
+            fn __nestrs_reflected_factory() -> ::nestrs_core::registration::provider::Provider {
+                ::nestrs_core::registration::compiler::compiler_provider::<{{ analysis.output.success_type.clone() }}>(
                     @EmitCompilerKey(key = config.key.clone())
                 );
-                ::nestrs_core::__private::Provider::Factory(
-                    ::nestrs_core::__private::FactoryProvider {
-                        provide: ::nestrs_core::__private::ServiceIdentifier::new(
+                ::nestrs_core::registration::provider::Provider::Factory(
+                    ::nestrs_core::registration::provider::FactoryProvider {
+                        provide: ::nestrs_core::service::ServiceIdentifier::new(
                             @RenderServiceKey(key = config.key.clone()),
-                            ::nestrs_core::__private::ServiceType::create::<{{ analysis.output.success_type.clone() }}>(),
+                            ::nestrs_core::service::ServiceType::create::<{{ analysis.output.success_type.clone() }}>(),
                         ),
-                        common: ::nestrs_core::__private::ProviderCommon {
+                        common: ::nestrs_core::registration::provider::ProviderCommon {
                             lifetime: @RenderServiceLifetime(lifetime = config.lifetime),
                             primary: {{ primary }},
-                            source: ::nestrs_core::__private::ServiceSource::new(
+                            source: ::nestrs_core::service::ServiceSource::new(
                                 file!(),
                                 line!(),
                                 column!(),
@@ -103,7 +99,7 @@ fn generate_factory_adapter(analysis: FactoryAnalysis) -> zyn::TokenStream {
         @if (is_async) {
             fn __nestrs_factory_construct<'frame>(
                 {{ context_binding.clone() }}
-            ) -> ::nestrs_core::__private::FactoryFuture<'frame> {
+            ) -> ::nestrs_core::activation::FactoryFuture<'frame> {
                 ::std::boxed::Box::pin(async move {
                     @InvokeAsyncFactory(
                         function = analysis.item.sig.ident.clone(),
@@ -116,8 +112,8 @@ fn generate_factory_adapter(analysis: FactoryAnalysis) -> zyn::TokenStream {
             fn __nestrs_factory_construct<'frame>(
                 {{ context_binding }}
             ) -> ::core::result::Result<
-                ::nestrs_core::__private::ErasedService,
-                ::nestrs_core::__private::ConstructionError,
+                ::nestrs_core::activation::ErasedService,
+                ::nestrs_core::activation::ConstructionError,
             > {
                 @InvokeSyncFactory(
                     function = analysis.item.sig.ident.clone(),
@@ -134,12 +130,12 @@ fn factory_context_binding(analysis: &FactoryAnalysis) -> zyn::TokenStream {
     if analysis.parameters.is_empty() {
         quote!(
             __nestrs_factory_context:
-                ::nestrs_core::__private::FactoryInputs<'frame>
+                ::nestrs_core::activation::FactoryInputs<'frame>
         )
     } else {
         quote!(
             mut __nestrs_factory_context:
-                ::nestrs_core::__private::FactoryInputs<'frame>
+                ::nestrs_core::activation::FactoryInputs<'frame>
         )
     }
 }
@@ -175,17 +171,17 @@ fn invoke_sync_factory(
             ) {
                 ::core::result::Result::Ok(__nestrs_factory_service) => {
                     ::core::result::Result::Ok(
-                        ::nestrs_core::__private::ErasedService::new(
+                        ::nestrs_core::activation::ErasedService::new(
                             __nestrs_factory_service
                         )
                     )
                 }
                 ::core::result::Result::Err(__nestrs_factory_error) => {
                     ::core::result::Result::Err(
-                        ::nestrs_core::__private::ConstructionError::FactoryFailed {
+                        ::nestrs_core::activation::ConstructionError::FactoryFailed {
                             provider: stringify!({{ function }}),
                             detail: ::std::format!("{:?}", __nestrs_factory_error),
-                            provider_source: ::nestrs_core::__private::ServiceSource::new(
+                            provider_source: ::nestrs_core::service::ServiceSource::new(
                                 file!(),
                                 line!(),
                                 column!(),
@@ -196,7 +192,7 @@ fn invoke_sync_factory(
             }
         } @else {
             ::core::result::Result::Ok(
-                ::nestrs_core::__private::ErasedService::new(
+                ::nestrs_core::activation::ErasedService::new(
                     {{ function_path }}(
                         @for (binding in parameter_bindings.iter()) {
                             {{ binding }},
@@ -239,17 +235,17 @@ fn invoke_async_factory(
             ).await {
                 ::core::result::Result::Ok(__nestrs_factory_service) => {
                     ::core::result::Result::Ok(
-                        ::nestrs_core::__private::ErasedService::new(
+                        ::nestrs_core::activation::ErasedService::new(
                             __nestrs_factory_service
                         )
                     )
                 }
                 ::core::result::Result::Err(__nestrs_factory_error) => {
                     ::core::result::Result::Err(
-                        ::nestrs_core::__private::ConstructionError::FactoryFailed {
+                        ::nestrs_core::activation::ConstructionError::FactoryFailed {
                             provider: stringify!({{ function }}),
                             detail: ::std::format!("{:?}", __nestrs_factory_error),
-                            provider_source: ::nestrs_core::__private::ServiceSource::new(
+                            provider_source: ::nestrs_core::service::ServiceSource::new(
                                 file!(),
                                 line!(),
                                 column!(),
@@ -260,7 +256,7 @@ fn invoke_async_factory(
             }
         } @else {
             ::core::result::Result::Ok(
-                ::nestrs_core::__private::ErasedService::new(
+                ::nestrs_core::activation::ErasedService::new(
                     {{ function_path }}(
                         @for (binding in parameter_bindings.iter()) {
                             {{ binding }},
@@ -289,11 +285,11 @@ fn take_factory_parameter(
     zyn! {
         @if (optional) {
             {{ context }}.take_optional::<{{ service_type }}>(
-                ::nestrs_core::__private::InputSlot::new({{ slot }})
+                ::nestrs_core::activation::InputSlot::new({{ slot }})
             )?
         } @else {
             {{ context }}.take::<{{ service_type }}>(
-                ::nestrs_core::__private::InputSlot::new({{ slot }})
+                ::nestrs_core::activation::InputSlot::new({{ slot }})
             )?
         }
     }
@@ -324,9 +320,9 @@ fn render_factory_invoker(invocation: FactoryInvocation) -> zyn::TokenStream {
 
     zyn! {
         @if (is_async) {
-            ::nestrs_core::__private::FactoryInvoker::Async(__nestrs_factory_construct)
+            ::nestrs_core::registration::provider::FactoryInvoker::Async(__nestrs_factory_construct)
         } @else {
-            ::nestrs_core::__private::FactoryInvoker::Sync(__nestrs_factory_construct)
+            ::nestrs_core::registration::provider::FactoryInvoker::Sync(__nestrs_factory_construct)
         }
     }
 }
@@ -370,7 +366,7 @@ mod tests {
         );
 
         assert!(output.contains("const __nestrs_factory_provider_for_make : ()"));
-        assert!(output.contains("REFLECTED_PROVIDERS"));
+        assert!(output.contains("compiler_provider"));
         assert!(output.contains("Provider :: Factory"));
         assert!(output.contains("FactoryInvoker :: Sync"));
         assert!(output.contains("FactoryInputs < 'frame >"));

@@ -1,4 +1,8 @@
 //! 将解析好的稳定服务地址转换为构造输入。
+//!
+//! concrete 输入先检查实例的准确类型，trait 输入还要执行由 rustc 检查过的类型化
+//! 投影。两者最终都得到持有同一个真实实例 lease 的注入令牌。本模块不写槽位；只有
+//! 完整成功后才返回 [`PreparedInput`]，由准备事务决定是否提交。
 
 use std::ptr::NonNull;
 
@@ -27,7 +31,7 @@ where
     let input = input.ok_or(ConstructionError::RequiredDependencyAbsent { slot })?;
     let (pointer, lease) = cast_input::<T>(slot, input)?;
 
-    // SAFETY: exact type was checked and lease retains the allocation.
+    // SAFETY: cast_input 已按准确 T 检查指针类型，返回的 lease 持有同一稳定实例。
     Ok(PreparedInput::required(unsafe {
         Injection::from_service_ptr(pointer, lease)
     }))
@@ -46,13 +50,13 @@ where
         .map(|input| cast_input::<T>(slot, input))
         .transpose()?
         .map(|(pointer, lease)| {
-            // SAFETY: exact type was checked and lease retains the allocation.
+            // SAFETY: cast_input 已按准确 T 检查指针类型，lease 持有同一稳定实例。
             unsafe { Injection::from_service_ptr(pointer, lease) }
         });
     Ok(PreparedInput::optional(token))
 }
 
-/// 为没有 bind 的可选 trait 输入准备 `None`。
+/// 为没有匹配 binding 的可选 trait 输入准备 `None`。
 #[doc(hidden)]
 pub fn prepare_optional_absent<T>(
     slot: InputSlot,
@@ -71,7 +75,7 @@ where
     Ok(PreparedInput::optional::<T>(None))
 }
 
-/// 用 bind 宏生成的 projector 准备必选 trait 输入。
+/// 用编译器生成并检查过的类型化投影准备必选 trait 输入。
 #[doc(hidden)]
 pub fn prepare_bound_required<Concrete, Trait>(
     slot: InputSlot,
@@ -86,13 +90,14 @@ where
     let (concrete, lease) = cast_input::<Concrete>(slot, input)?;
     let trait_pointer = project_bound_pointer(concrete, project);
 
-    // SAFETY: typed projection preserves the reference lifetime; lease retains concrete.
+    // SAFETY: 类型化投影的返回借用不长于 concrete 借用；lease 保活同一具体实例，
+    // 指针包含真实投影产生的完整 trait 元数据，没有手工拼装 vtable。
     Ok(PreparedInput::required(unsafe {
         Injection::from_service_ptr(trait_pointer, lease)
     }))
 }
 
-/// 用 bind 宏生成的 projector 准备可选 trait 输入。
+/// 用编译器生成并检查过的类型化投影准备可选 trait 输入。
 #[doc(hidden)]
 pub fn prepare_bound_optional<Concrete, Trait>(
     slot: InputSlot,
@@ -108,7 +113,8 @@ where
         .transpose()?
         .map(|(concrete, lease)| {
             let pointer = project_bound_pointer(concrete, project);
-            // SAFETY: typed projection preserves the reference lifetime; lease retains concrete.
+            // SAFETY: 类型化投影保留借用存活期，lease 保活同一 concrete 实例；
+            // 仅包装真实投影产生的地址，不伪造 trait 元数据。
             unsafe { Injection::from_service_ptr(pointer, lease) }
         });
     Ok(PreparedInput::optional(token))
@@ -138,75 +144,12 @@ where
     Concrete: Injectable,
     Trait: Injectable + ?Sized,
 {
-    // SAFETY: `cast_input` checked the concrete pointer before this projector runs.
+    // SAFETY: 所有调用点都先通过 cast_input 检查准确 concrete 类型，并在调用期间
+    // 持有对应 lease。project 的高阶借用签名保证结果不会比输入借用活得更久。
     let concrete = unsafe { concrete.as_ref() };
     NonNull::from(project(concrete))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        prepare_bound_required, prepare_optional, prepare_optional_absent, prepare_required,
-    };
-    use crate::activation::{
-        ConstructionError, DependencyLease, ErasedService, ErasedServiceRef, InputSlot,
-        ReleaseDomain,
-    };
-
-    struct Alpha;
-    struct Beta;
-
-    fn erased<T>(value: T) -> ErasedServiceRef
-    where
-        T: Send + Sync + 'static,
-    {
-        DependencyLease::new(ErasedService::new(value), vec![], ReleaseDomain::new()).erased_ref()
-    }
-
-    #[test]
-    fn required_preparer_reports_a_missing_dependency_without_a_buffer() {
-        assert!(matches!(
-            prepare_required::<Alpha>(InputSlot::new(0), None),
-            Err(ConstructionError::RequiredDependencyAbsent { slot }) if slot == InputSlot::new(0)
-        ));
-    }
-
-    #[test]
-    fn preparer_maps_erased_type_mismatch_to_the_request_slot() {
-        assert!(matches!(
-            prepare_optional::<Beta>(InputSlot::new(3), Some(erased(Alpha))),
-            Err(ConstructionError::InputTypeMismatch { slot, expected, actual })
-                if slot == InputSlot::new(3)
-                    && expected == std::any::type_name::<Beta>()
-                    && actual == std::any::type_name::<Alpha>()
-        ));
-    }
-
-    #[test]
-    fn bound_projection_retains_its_owner_and_the_exact_trait_vtable() {
-        trait Port: Send + Sync {
-            fn value(&self) -> u32;
-        }
-        struct Adapter(u32);
-        impl Port for Adapter {
-            fn value(&self) -> u32 {
-                self.0
-            }
-        }
-        let input = erased(Adapter(73));
-        let prepared = prepare_bound_required::<Adapter, dyn Port>(
-            InputSlot::new(0),
-            Some(input),
-            |adapter| adapter,
-        )
-        .unwrap();
-        let token = prepared
-            .into_required::<dyn Port>(InputSlot::new(0))
-            .unwrap();
-        assert_eq!(token.value(), 73);
-        assert!(matches!(
-            prepare_optional_absent::<dyn Port>(InputSlot::new(2), Some(erased(Adapter(1)))),
-            Err(ConstructionError::UnprojectedTraitInput { slot, .. }) if slot == InputSlot::new(2)
-        ));
-    }
-}
+#[path = "../../../tests/unit/activation/construction/preparer.rs"]
+mod tests;

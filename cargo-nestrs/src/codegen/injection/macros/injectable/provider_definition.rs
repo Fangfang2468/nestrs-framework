@@ -1,9 +1,9 @@
 //! 开放泛型 `#[injectable]` 的 provider definition 生成。
 //!
-//! linkme distributed slice 只能保存已经闭合的 provider。`Repository<T>` 这类
-//! provider 因而不注册进 slice；当另一个闭合 provider 请求
+//! 编译器入口注册清单只收集已经闭合的 provider。`Repository<T>` 这类
+//! provider 因而不直接进入清单；当另一个闭合 provider 请求
 //! `Repository<UserEntity>` 时，字段依赖中的 callback 才会单态化并调用这里生成的
-//! [`::nestrs_core::__private::ProviderDefinition`] 实现。
+//! [`::nestrs_core::registration::provider::ProviderDefinition`] 实现。
 
 use super::{
     config::InjectableConfig,
@@ -17,7 +17,7 @@ use zyn::{quote::quote, syn, zyn};
 /// 为一个开放泛型 provider 输出其按需具体化的 provider definition。
 ///
 /// 构造 adapter 是 trait 方法内的无捕获 closure，而不是可见的 inherent helper 或
-/// linkme 注册函数。`Self` 在这里已经代表例如 `Repository<UserEntity>` 的闭合类型，
+/// 编译器注册函数。`Self` 在这里已经代表例如 `Repository<UserEntity>` 的闭合类型，
 /// 因此 provider token、构造结果和未来缓存 key 都继续使用精确的具体服务 ABI。
 #[zyn::element]
 pub(crate) fn define_generic_injectable_provider(
@@ -34,15 +34,15 @@ pub(crate) fn define_generic_injectable_provider(
 
     zyn! {
         {{ dependency_paths }}
-        impl {{ impl_generics }} ::nestrs_core::__private::ProviderDefinition
+        impl {{ impl_generics }} ::nestrs_core::registration::provider::ProviderDefinition
             for {{ service }} {{ type_generics }} {{ where_clause }}
         {
-            fn provider() -> ::nestrs_core::__private::Provider {
-                ::nestrs_core::__private::compiler_provider::<Self>(
+            fn provider() -> ::nestrs_core::registration::provider::Provider {
+                ::nestrs_core::registration::compiler::compiler_provider::<Self>(
                     @EmitCompilerKey(key = config.key.clone())
                 );
-                ::nestrs_core::__private::Provider::Class(
-                    ::nestrs_core::__private::ClassProvider {
+                ::nestrs_core::registration::provider::Provider::Class(
+                    ::nestrs_core::registration::provider::ClassProvider {
                         @EmitClassProviderFields(
                             analysis = analysis.clone(),
                             config = config.clone(),
@@ -86,15 +86,15 @@ fn dependency_paths(analysis: &AnalyzedFields) -> zyn::TokenStream {
             .make_where_clause()
             .predicates
             .push(syn::parse_quote!(
-                #service_type: ::nestrs_core::__private::DependencyPath<#path>
+                #service_type: ::nestrs_core::registration::root::DependencyPath<#path>
             ));
         let (impl_generics, _, where_clause) = generics.split_for_impl();
         output.extend(quote! {
-            impl #impl_generics ::nestrs_core::__private::DependencyPath<(
-                ::nestrs_core::__private::DependencySlot<#slot>, #path,
+            impl #impl_generics ::nestrs_core::registration::root::DependencyPath<(
+                ::nestrs_core::registration::root::DependencySlot<#slot>, #path,
             )> for #service #type_generics #where_clause {
-                const BLUEPRINT: fn() -> ::nestrs_core::__private::RootDeclaration =
-                    <#service_type as ::nestrs_core::__private::DependencyPath<#path>>::BLUEPRINT;
+                const BLUEPRINT: fn() -> ::nestrs_core::registration::root::RootDeclaration =
+                    <#service_type as ::nestrs_core::registration::root::DependencyPath<#path>>::BLUEPRINT;
             }
         });
     }
@@ -114,7 +114,7 @@ fn provider_definition_generics(analysis: &AnalyzedFields) -> syn::Generics {
     let mut generics = item.generics.clone();
     let where_clause = generics.make_where_clause();
     where_clause.predicates.push(syn::parse_quote!(
-        #self_type: ::nestrs_core::__private::Injectable
+        #self_type: ::nestrs_core::service::Injectable
     ));
 
     for spec in &analysis.specs {
@@ -123,7 +123,7 @@ fn provider_definition_generics(analysis: &AnalyzedFields) -> syn::Generics {
         };
 
         where_clause.predicates.push(syn::parse_quote!(
-            #service_type: ::nestrs_core::__private::Injectable
+            #service_type: ::nestrs_core::service::Injectable
         ));
     }
 
@@ -155,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn emits_a_conditional_provider_definition_without_linkme_registration() {
+    fn emits_a_conditional_provider_definition_without_eager_registration() {
         let item: syn::ItemStruct = syn::parse_str(
             r#"
             struct Repository<Entity> {
@@ -166,10 +166,10 @@ mod tests {
         .expect("test input should parse");
         let output = render_definition(item);
 
-        assert!(
-            output.contains("impl < Entity > :: nestrs_core :: __private :: ProviderDefinition")
-        );
-        assert!(output.contains("for Repository < Entity > where Repository < Entity > : :: nestrs_core :: __private :: Injectable"));
+        assert!(output.contains(
+            "impl < Entity > :: nestrs_core :: registration :: provider :: ProviderDefinition"
+        ));
+        assert!(output.contains("for Repository < Entity > where Repository < Entity > : :: nestrs_core :: service :: Injectable"));
         assert!(output.contains("ServiceType :: create :: < Self >"));
         assert!(output.contains("constructor : | __nestrs_injectable_context_for_Repository"));
         assert!(output.contains("let __nestrs_injectable_instance = Self"));
@@ -194,9 +194,7 @@ mod tests {
         let output = render_definition(item);
 
         assert!(output.contains("Entity : Clone"));
-        assert!(
-            output.contains("Repository < Entity > : :: nestrs_core :: __private :: Injectable")
-        );
+        assert!(output.contains("Repository < Entity > : :: nestrs_core :: service :: Injectable"));
     }
 
     #[test]

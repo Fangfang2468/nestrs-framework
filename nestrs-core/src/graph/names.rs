@@ -1,3 +1,5 @@
+//! 图展示用的类型名称缩短规则，只影响标签，不参与任何类型身份或候选选择。
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::ValidatedGraph;

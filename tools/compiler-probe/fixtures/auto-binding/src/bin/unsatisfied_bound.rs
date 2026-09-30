@@ -1,7 +1,7 @@
 //! A syntactically matching generic impl must not bypass its compiler obligations.
 
 use nestrs::injectable;
-use nestrs_core::{__private::REFLECTED_BINDINGS, ServiceProvider};
+use nestrs_core::{ServiceProvider};
 use std::marker::PhantomData;
 
 #[path = "../automatic_assertions.rs"]
@@ -42,7 +42,7 @@ async fn main() {
             .unwrap()
             .is_none()
     );
-    assert_eq!(REFLECTED_BINDINGS.len(), 0);
+    assert_eq!(automatic_assertions::explicit_count(), 0);
     automatic_assertions::assert_count::<dyn Port>(0);
     provider.dispose_async().await.unwrap();
     println!("auto-binding unsatisfied bound: no invalid candidate generated");

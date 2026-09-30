@@ -1,7 +1,7 @@
 //! Each target/feature analysis must describe the active compiler configuration.
 
 use nestrs::injectable;
-use nestrs_core::{__private::REFLECTED_BINDINGS, ServiceProvider};
+use nestrs_core::{ServiceProvider};
 
 #[path = "../automatic_assertions.rs"]
 mod automatic_assertions;
@@ -34,7 +34,7 @@ impl Port for AlternateService {
 
 #[tokio::main]
 async fn main() {
-    assert_eq!(REFLECTED_BINDINGS.len(), 0);
+    assert_eq!(automatic_assertions::explicit_count(), 0);
     automatic_assertions::assert_count::<dyn Port>(1);
     let provider = ServiceProvider::build().await.unwrap();
     let service = nestrs_core::get_required_service!(provider, dyn Port)

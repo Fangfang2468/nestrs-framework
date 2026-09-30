@@ -14,7 +14,7 @@ use zyn::{quote::quote, zyn};
 
 /// 向统一的 `REFLECTED_PROVIDERS` slice 写入一个 class provider 工厂。
 ///
-/// 此 element 只生成 linkme 注册函数，不负责构造 adapter 或匿名作用域。调用方
+/// 此 element 只生成 编译器注册函数，不负责构造 adapter 或匿名作用域。调用方
 /// 必须将它和 `GenerateInjectableConstructor` 放在同一个匿名 `const` 中，才能把
 /// 词法私有的 `__nestrs_construct` 函数指针写入 provider。
 #[zyn::element]
@@ -27,16 +27,13 @@ pub(crate) fn collect_injectable_provider(
     let service_type = quote!(#service);
 
     zyn! {
-        #[::nestrs_core::__private::linkme::distributed_slice(
-            ::nestrs_core::__private::REFLECTED_PROVIDERS
-        )]
-        #[linkme(crate = ::nestrs_core::__private::linkme)]
-        fn __nestrs_reflect_provider() -> ::nestrs_core::__private::Provider {
-            ::nestrs_core::__private::compiler_provider::<{{ service_type.clone() }}>(
+        #[allow(dead_code)]
+        fn __nestrs_reflect_provider() -> ::nestrs_core::registration::provider::Provider {
+            ::nestrs_core::registration::compiler::compiler_provider::<{{ service_type.clone() }}>(
                 @EmitCompilerKey(key = config.key.clone())
             );
-            ::nestrs_core::__private::Provider::Class(
-                ::nestrs_core::__private::ClassProvider {
+            ::nestrs_core::registration::provider::Provider::Class(
+                ::nestrs_core::registration::provider::ClassProvider {
                     @EmitClassProviderFields(
                         analysis = analysis.clone(),
                         config = config.clone(),
@@ -52,7 +49,7 @@ pub(crate) fn collect_injectable_provider(
 
 /// 输出一个 class provider 在身份、依赖与公共属性上的字段。
 ///
-/// 常规闭合服务把这些字段包在 linkme factory 中；开放泛型服务则由
+/// 常规闭合服务把这些字段包在 描述回调 中；开放泛型服务则由
 /// `ProviderDefinition::provider()` 使用完全相同的字段。构造 adapter 有不同的
 /// 词法可见性需求，故由调用方在这个 element 的输出之后单独提供 `constructor`。
 #[zyn::element]
@@ -67,14 +64,14 @@ pub(crate) fn emit_class_provider_fields(
     let cleanup = config.cleanup.clone();
 
     zyn! {
-        provide: ::nestrs_core::__private::ServiceIdentifier::new(
+        provide: ::nestrs_core::service::ServiceIdentifier::new(
             @RenderServiceKey(key = provider_key.clone()),
-            ::nestrs_core::__private::ServiceType::create::<{{ service_type }}>(),
+            ::nestrs_core::service::ServiceType::create::<{{ service_type }}>(),
         ),
-        common: ::nestrs_core::__private::ProviderCommon {
+        common: ::nestrs_core::registration::provider::ProviderCommon {
             lifetime: @RenderServiceLifetime(lifetime = lifetime),
             primary: {{ primary }},
-            source: ::nestrs_core::__private::ServiceSource::new(
+            source: ::nestrs_core::service::ServiceSource::new(
                 file!(),
                 line!(),
                 column!(),
@@ -140,7 +137,7 @@ mod tests {
 
         let output = render_provider(item, specs, config, true);
 
-        assert!(output.contains("REFLECTED_PROVIDERS"));
+        assert!(output.contains("compiler_provider"));
         assert!(output.contains("Provider :: Class"));
         assert!(output.contains("constructor : __nestrs_construct"));
         assert!(output.contains("ServiceLifetime :: Scoped"));
@@ -150,12 +147,12 @@ mod tests {
         assert!(output.contains("declaration_position : 0usize"));
         assert!(
             output
-                .contains("input_slot : :: nestrs_core :: __private :: InputSlot :: new (0usize)")
+                .contains("input_slot : :: nestrs_core :: activation :: InputSlot :: new (0usize)")
         );
         assert!(output.contains("declaration_position : 2usize"));
         assert!(
             output
-                .contains("input_slot : :: nestrs_core :: __private :: InputSlot :: new (1usize)")
+                .contains("input_slot : :: nestrs_core :: activation :: InputSlot :: new (1usize)")
         );
         assert!(output.contains("ServiceKey :: Indexed (7usize)"));
         assert!(!output.contains("declaration_position : 1usize"));

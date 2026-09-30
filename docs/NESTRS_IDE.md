@@ -161,8 +161,10 @@ sysroot/bin，未关闭诊断。Linux 的既有原版 LSP 回归继续保留。
 完整引用重命名、每个编辑器 UI、所有属性/derive/build-script 组合和其他 host 仍需
 分别验收。支持标准声明展开不等于
 支持完整跨 crate 候选汇总；DI 全图结构验证仍在容器 build 或 graph 诊断入口执行。
-rustdoc 的标准展开可经 CLI 使用，但独立 doctest 内新增 trait 绑定不会自动经过
-两阶段 driver。应用级 Clippy 入口尚未交付。
+`cargo nestrs test` 与 `test --doc` 使用真实 rustdoc 执行文档示例；真实源码先由
+driver 检查，示例也独立经过完整编译流程，支持在示例内新增服务和 trait 自动绑定。
+文档载体与源码位置边界见 [编译器适配](NESTRS_COMPILER_ADAPTER.md#rustdoc-和原版-rust-analyzer)。
+应用级 Clippy 入口尚未交付。
 
 原版 rust-analyzer 会合并 host 的默认 cfg。若实际参数移除了其中某项，例如
 `panic = "abort"` 或禁用默认 CPU 特性，IDE 准备会明确拒绝并保留旧模型，避免

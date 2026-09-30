@@ -1,58 +1,41 @@
-error[E0432]: unresolved imports `nestrs_core::ArenaError`, `nestrs_core::CompileError`, `nestrs_core::ConstructionError`
- --> tests/ui/fail/core-internals-are-private.rs:5:19
+error: Nestrs 内部实现 `nestrs_core::activation` 只能由编译器生成代码访问；请使用公开门面 API
+ --> tests/ui/fail/core-internals-are-private.rs:1:5
   |
-5 | use nestrs_core::{ArenaError, CompileError, ConstructionError};
-  |                   ^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^ no `ConstructionError` in the root
-  |                   |           |
-  |                   |           no `CompileError` in the root
-  |                   no `ArenaError` in the root
+1 | use nestrs_core::activation::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
 
-error[E0603]: module `activation` is private
+error: Nestrs 内部实现 `nestrs_core::activation` 只能由编译器生成代码访问；请使用公开门面 API
  --> tests/ui/fail/core-internals-are-private.rs:1:18
   |
 1 | use nestrs_core::activation::*;
-  |                  ^^^^^^^^^^ private module
-  |
-note: the module `activation` is defined here
- --> $WORKSPACE/nestrs-core/src/lib.rs
-  |
-  | mod activation;
-  | ^^^^^^^^^^^^^^
+  |                  ^^^^^^^^^^
 
-error[E0603]: module `lifetime` is private
+error: Nestrs 内部实现 `nestrs_core::lifetime` 只能由编译器生成代码访问；请使用公开门面 API
  --> tests/ui/fail/core-internals-are-private.rs:2:18
   |
 2 | use nestrs_core::lifetime::ServiceLifetime;
-  |                  ^^^^^^^^  --------------- enum `ServiceLifetime` is not publicly re-exported
-  |                  |
-  |                  private module
-  |
-note: the module `lifetime` is defined here
- --> $WORKSPACE/nestrs-core/src/lib.rs
-  |
-  | mod lifetime;
-  | ^^^^^^^^^^^^
+  |                  ^^^^^^^^
 
-error[E0603]: module `registration` is private
+error: Nestrs 内部实现 `nestrs_core::registration` 只能由编译器生成代码访问；请使用公开门面 API
+ --> tests/ui/fail/core-internals-are-private.rs:3:5
+  |
+3 | use nestrs_core::registration::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: Nestrs 内部实现 `nestrs_core::registration` 只能由编译器生成代码访问；请使用公开门面 API
  --> tests/ui/fail/core-internals-are-private.rs:3:18
   |
 3 | use nestrs_core::registration::*;
-  |                  ^^^^^^^^^^^^ private module
-  |
-note: the module `registration` is defined here
- --> $WORKSPACE/nestrs-core/src/lib.rs
-  |
-  | mod registration;
-  | ^^^^^^^^^^^^^^^^
+  |                  ^^^^^^^^^^^^
 
-error[E0603]: module `service` is private
+error: Nestrs 内部实现 `nestrs_core::service` 只能由编译器生成代码访问；请使用公开门面 API
+ --> tests/ui/fail/core-internals-are-private.rs:4:5
+  |
+4 | use nestrs_core::service::*;
+  |     ^^^^^^^^^^^^^^^^^^^^
+
+error: Nestrs 内部实现 `nestrs_core::service` 只能由编译器生成代码访问；请使用公开门面 API
  --> tests/ui/fail/core-internals-are-private.rs:4:18
   |
 4 | use nestrs_core::service::*;
-  |                  ^^^^^^^ private module
-  |
-note: the module `service` is defined here
- --> $WORKSPACE/nestrs-core/src/lib.rs
-  |
-  | mod service;
-  | ^^^^^^^^^^^
+  |                  ^^^^^^^

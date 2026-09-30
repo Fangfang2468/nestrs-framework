@@ -103,7 +103,7 @@ pub(crate) struct AnalyzedFields {
 }
 
 impl AnalyzedFields {
-    /// 是否存在需要从 [`ConstructionInputs`](::nestrs_core::__private::ConstructionInputs)
+    /// 是否存在需要从 [`ConstructionInputs`](::nestrs_core::activation::ConstructionInputs)
     /// 消费的字段。
     pub(crate) fn has_injected_fields(&self) -> bool {
         self.specs.iter().any(FieldSpec::is_injected)

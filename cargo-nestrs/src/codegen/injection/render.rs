@@ -26,14 +26,14 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
     let label = request.label.clone();
 
     zyn! {
-        ::nestrs_core::__private::DependencyRequest {
+        ::nestrs_core::registration::dependency::DependencyRequest {
             declaration_position: {{ declaration_position }},
-            input_slot: ::nestrs_core::__private::InputSlot::new({{ input_slot }}),
-            token: ::nestrs_core::__private::ServiceIdentifier::new(
+            input_slot: ::nestrs_core::activation::InputSlot::new({{ input_slot }}),
+            token: ::nestrs_core::service::ServiceIdentifier::new(
                 @RenderServiceKey(key = key.clone()),
                 {
-                    ::nestrs_core::__private::compiler_dependency::<{{ service_type.clone() }}, {{ input_slot }}>();
-                    ::nestrs_core::__private::ServiceType::create::<{{ service_type.clone() }}>()
+                    ::nestrs_core::registration::compiler::compiler_dependency::<{{ service_type.clone() }}, {{ input_slot }}>();
+                    ::nestrs_core::service::ServiceType::create::<{{ service_type.clone() }}>()
                 },
             ),
             optional: {{ optional }},
@@ -64,21 +64,21 @@ fn render_delivery(
     zyn! {
         @if (*is_trait_object) {
             @if (*optional) {
-                ::nestrs_core::__private::Delivery::RequiresBindingOrAbsent(
-                    ::nestrs_core::__private::prepare_optional_absent::<{{ service_type }}>
-                        as ::nestrs_core::__private::InputPreparer
+                ::nestrs_core::registration::dependency::Delivery::RequiresBindingOrAbsent(
+                    ::nestrs_core::activation::prepare_optional_absent::<{{ service_type }}>
+                        as ::nestrs_core::activation::InputPreparer
                 )
             } @else {
-                ::nestrs_core::__private::Delivery::RequiresBinding
+                ::nestrs_core::registration::dependency::Delivery::RequiresBinding
             }
         } @else {
-            ::nestrs_core::__private::Delivery::Selected(
+            ::nestrs_core::registration::dependency::Delivery::Selected(
                 @if (*optional) {
-                    ::nestrs_core::__private::prepare_optional::<{{ service_type }}>
+                    ::nestrs_core::activation::prepare_optional::<{{ service_type }}>
                 } @else {
-                    ::nestrs_core::__private::prepare_required::<{{ service_type }}>
+                    ::nestrs_core::activation::prepare_required::<{{ service_type }}>
                 }
-                as ::nestrs_core::__private::InputPreparer
+                as ::nestrs_core::activation::InputPreparer
             )
         }
     }
@@ -93,12 +93,12 @@ fn render_delivery(
 fn render_provider_source(service_type: syn::Type) -> zyn::TokenStream {
     zyn! {
         {
-            use ::nestrs_core::__private::ProbeProvider as _;
-            let probe = ::nestrs_core::__private::Probe::<{{ service_type }}>::new();
+            use ::nestrs_core::registration::root::ProbeProvider as _;
+            let probe = ::nestrs_core::registration::root::Probe::<{{ service_type }}>::new();
             #[allow(clippy::needless_borrow)]
             match (&&probe).provider_callback() {
-                Some(callback) => ::nestrs_core::__private::ProviderSource::Materialize(callback),
-                None => ::nestrs_core::__private::ProviderSource::Registered,
+                Some(callback) => ::nestrs_core::registration::dependency::ProviderSource::Materialize(callback),
+                None => ::nestrs_core::registration::dependency::ProviderSource::Registered,
             }
         }
     }
@@ -126,14 +126,14 @@ pub(crate) fn render_service_key(key: Option<ServiceKeySpec>) -> zyn::TokenStrea
         @match (key.as_ref()) {
             Some(ServiceKeySpec::Named(name)) => {
                 ::core::option::Option::Some(
-                    ::nestrs_core::__private::ServiceKey::Named(
+                    ::nestrs_core::ServiceKey::Named(
                         ::std::string::String::from({{ name }})
                     )
                 )
             }
             Some(ServiceKeySpec::Indexed(index)) => {
                 ::core::option::Option::Some(
-                    ::nestrs_core::__private::ServiceKey::Indexed({{ index }})
+                    ::nestrs_core::ServiceKey::Indexed({{ index }})
                 )
             }
             None => {
@@ -149,13 +149,13 @@ pub(crate) fn emit_compiler_key(key: Option<ServiceKeySpec>) -> zyn::TokenStream
     zyn! {
         @match (key.as_ref()) {
             Some(ServiceKeySpec::Named(name)) => {
-                ::nestrs_core::__private::CompilerKey::Named({{ name }})
+                ::nestrs_core::registration::compiler::CompilerKey::Named({{ name }})
             }
             Some(ServiceKeySpec::Indexed(index)) => {
-                ::nestrs_core::__private::CompilerKey::Indexed({{ index }})
+                ::nestrs_core::registration::compiler::CompilerKey::Indexed({{ index }})
             }
             None => {
-                ::nestrs_core::__private::CompilerKey::Default
+                ::nestrs_core::registration::compiler::CompilerKey::Default
             }
         }
     }
@@ -167,13 +167,13 @@ pub(crate) fn render_service_lifetime(lifetime: ServiceLifetime) -> zyn::TokenSt
     zyn! {
         @match (lifetime) {
             ServiceLifetime::Singleton => {
-                ::nestrs_core::__private::ServiceLifetime::Singleton
+                ::nestrs_core::ServiceLifetime::Singleton
             }
             ServiceLifetime::Scoped => {
-                ::nestrs_core::__private::ServiceLifetime::Scoped
+                ::nestrs_core::ServiceLifetime::Scoped
             }
             ServiceLifetime::Transient => {
-                ::nestrs_core::__private::ServiceLifetime::Transient
+                ::nestrs_core::ServiceLifetime::Transient
             }
         }
     }
@@ -195,9 +195,9 @@ pub(crate) fn render_cleanup_hook(cleanup: Option<CleanupPath>) -> zyn::TokenStr
 
     zyn! {
         ::core::option::Option::Some(
-            (|| -> ::nestrs_core::__private::CleanupFuture {
+            (|| -> ::nestrs_core::registration::provider::CleanupFuture {
                 ::std::boxed::Box::pin({{ cleanup_path }}())
-            }) as ::nestrs_core::__private::CleanupHook
+            }) as ::nestrs_core::registration::provider::CleanupHook
         )
     }
 }

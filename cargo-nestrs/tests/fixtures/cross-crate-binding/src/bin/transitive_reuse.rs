@@ -2,20 +2,16 @@
 
 use contracts::{CatalogPort, ConnectionPort, DeliveryPort};
 use nestrs_core::{
-    __private::{REFLECTED_AUTOMATIC_BINDINGS, ServiceType},
     ServiceProvider, get_required_service,
 };
 use sibling_consumer::Dispatch;
 use upstream_consumer::Checkout;
 
+#[path = "../../../../support/compiler_bindings.rs"]
+mod compiler_bindings;
+
 fn has_pair<Concrete: Send + Sync + 'static, Interface: ?Sized + Send + Sync + 'static>() -> bool {
-    REFLECTED_AUTOMATIC_BINDINGS
-        .iter()
-        .map(|declare| declare())
-        .any(|binding| {
-            binding.concrete_type == ServiceType::create::<Concrete>()
-                && binding.trait_type == ServiceType::create::<Interface>()
-        })
+    compiler_bindings::pair_count::<Concrete, Interface>() > 0
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -50,15 +46,9 @@ async fn main() {
     assert!(has_pair::<primary_provider::Catalog, dyn CatalogPort>());
     assert!(has_pair::<primary_provider::Service, dyn DeliveryPort>());
     assert!(has_pair::<fallback_provider::Service, dyn DeliveryPort>());
-    assert!(
-        REFLECTED_AUTOMATIC_BINDINGS
-            .iter()
-            .map(|declare| declare())
-            .any(|binding| binding.trait_type == ServiceType::create::<dyn ConnectionPort>()),
-    );
-    // Multiple automatic declaration callbacks may advertise the same pair.
-    // Successful graph construction and these shared identities prove logical
-    // deduplication; the physical linkme directory need not contain one record.
+    assert!(compiler_bindings::count::<dyn ConnectionPort>() > 0);
+    // Successful graph construction and shared identities prove that repeated
+    // demands reuse one logical route; compiler records verify exact pairs.
     scope.dispose_async().await.unwrap();
     provider.dispose_async().await.unwrap();
     assert_eq!(primary_provider::connection_cleanup_count(), 1);

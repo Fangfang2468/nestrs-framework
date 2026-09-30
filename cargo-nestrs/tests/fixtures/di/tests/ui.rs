@@ -1,6 +1,7 @@
 //! Compile the original UI contracts using the toolchain's private macro bridge.
 //!
-//! Legacy stderr files are kept unchanged. Standalone Cargo has different source
+//! Existing declaration diagnostics retain their contracts. Private runtime access
+//! now uses the compiler audit diagnostic. Standalone Cargo has different source
 //! frames, so compare structured diagnostic codes/messages and their multiplicity.
 //! Both unexpected and missing errors fail; a compiler failure alone never passes.
 
@@ -87,7 +88,11 @@ fn macro_declarations_preserve_all_ui_contracts() {
     let macro_passing = sources(&fixture.join("tests/ui/macro-pass"));
     let macro_failing = sources(&fixture.join("tests/ui/macro-fail"));
     assert_eq!(passing.len(), 15, "preserve every original passing case");
-    assert_eq!(failing.len(), 37, "preserve every original failing case");
+    assert_eq!(
+        failing.len(),
+        38,
+        "preserve original errors and independently verify private modules/root exports"
+    );
     assert_eq!(
         macro_passing.len(),
         1,

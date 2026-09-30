@@ -8,8 +8,9 @@ use super::slot::InputSlot;
 
 /// 由输入准备、adapter 消费或 factory 调用产生的受控错误。
 ///
-/// 此错误是下一代隐藏 construction ABI 的一部分，不会直接进入公开的
-/// [`crate::BuildError`]。runtime 在激活边界上将它映射为公开解析错误。
+/// 此错误属于内部构造协议，不直接作为公开错误暴露。运行时在激活边界补上 provider、
+/// 源码位置和依赖路径，转换为公开的 [`crate::ResolveError`]；Eager 构建再按构建契约
+/// 汇总为 [`crate::BuildError`]。
 #[doc(hidden)]
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ConstructionError {

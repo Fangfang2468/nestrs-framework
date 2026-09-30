@@ -1,17 +1,21 @@
-//! 宏生成字段使用的只读注入 token；内部 lease 保活稳定实例及其依赖。
+//! 编译器生成字段使用的只读注入令牌；内部 lease 保活稳定实例及其依赖。
+//!
+//! 令牌的内存所有权与 scope 的逻辑关闭分开：即使消费者在 Drop 中移出某个可选字段，
+//! 逃逸令牌也继续持有它所指向的实例。它只保证内存有效，不承诺 cleanup 后业务资源
+//! 仍可正常使用。关闭流程无需等待令牌归还。
 
 use std::{ops::Deref, ptr::NonNull};
 
 use super::DependencyLease;
 use crate::service::Injectable;
 
-/// 宏 ABI 的只读字段注入 token。
+/// 服务字段持有的只读注入令牌。
 ///
 /// 一个 `Injection<T>` 表示“此消费者已获得由容器拥有的 `T`”。它只能解引用为 `&T`；
 /// 不提供 `Clone`、`Copy`、可变访问、裸指针导出或公开构造入口。
 ///
-/// `T` 可以是 `dyn Trait`。这时 `ptr` 是由 bind 的 typed projector 创建的完整 trait
-/// object 指针；服务实例的 owner 仍然是对应的 concrete `InstanceRecord`。
+/// `T` 可以是 `dyn Trait`。这时 `ptr` 是由编译器生成的类型化投影创建的完整 trait
+/// object 指针；服务实例的 owner 仍然是对应具体类型的 `InstanceRecord`。
 pub struct Injection<T: ?Sized> {
     ptr: NonNull<T>,
     _lease: DependencyLease,
@@ -21,17 +25,20 @@ impl<T: ?Sized> Injection<T>
 where
     T: Injectable,
 {
-    /// 从容器已经验证的稳定服务地址创建字段 token。
+    /// 从容器已经验证的稳定服务地址创建字段令牌。
     ///
     /// # Safety
     ///
-    /// `ptr` 必须指向 `lease` 保活的实例或通过有效 typed projector 得到的子视图。
+    /// `ptr` 必须指向 `lease` 保活的实例或通过有效类型化投影得到的子视图。
     /// 地址必须在该实例存活期间保持有效、不可变且不被替换。
     pub(crate) unsafe fn from_service_ptr(ptr: NonNull<T>, lease: DependencyLease) -> Self {
         Self { ptr, _lease: lease }
     }
 
-    /// 仅供已独立保留同一实例 lease 的 frame 或 owner journal 取得地址。
+    /// 消费令牌并取出地址，仅供已经独立持有同一实例 lease 的工厂帧或 owner 使用。
+    ///
+    /// 本方法会释放令牌自己的 lease，返回的 `NonNull` 本身不延长实例存活期。
+    /// 地址解引用处必须确认工厂帧或 owner 记录仍持有准确实例。
     pub(crate) fn into_ptr(self) -> NonNull<T> {
         self.ptr
     }
@@ -49,91 +56,20 @@ where
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        // SAFETY: the token retains its own lease to the exact projected allocation.
+        // SAFETY: 本令牌持有准确投影实例的强 lease；字段构造保证地址稳定且只读，
+        // 返回引用的存活期又被当前令牌借用限制，因此解引用期间实例不可能释放。
         unsafe { self.ptr.as_ref() }
     }
 }
 
-// Keep the same bounds as Injectable's blanket impl, but spell out the auto traits here.
-// Routing these obligations through a custom trait prevents coinductive Send/Sync checking for
-// mutually injected class types, rejecting them before graph compilation can diagnose the cycle.
-// The retained lease makes the immutable pointer valid for every use of this thread-safe token.
+// SAFETY: 令牌持有准确实例的强 lease，且 T 满足跨线程移动和共享不可变读取的要求。
+// 这里直接写出 Injectable blanket impl 的 auto trait 约束，不能间接写成 T: Injectable；
+// 后者会阻断相互注入类型的 Send/Sync 共归纳检查，使 Rust 提前拒绝类型，无法交由图
+// 编译器给出真正的循环依赖诊断。
 unsafe impl<T: ?Sized + Send + Sync + 'static> Send for Injection<T> {}
+// SAFETY: 与上面的 Send 相同，共享令牌只会得到共享引用，lease 覆盖全部读取的存活期。
 unsafe impl<T: ?Sized + Send + Sync + 'static> Sync for Injection<T> {}
 
 #[cfg(test)]
-mod tests {
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    };
-
-    use super::Injection;
-    use crate::activation::{
-        DependencyLease, ErasedService, InputSlot, ReleaseDomain, prepare_required,
-    };
-
-    struct Service;
-    trait Port: Send + Sync {}
-
-    fn assert_send_sync<T: Send + Sync>() {}
-
-    #[test]
-    fn injection_is_send_and_sync_for_an_injectable_service() {
-        assert_send_sync::<Injection<Service>>();
-        assert_send_sync::<Injection<dyn Port>>();
-    }
-
-    #[test]
-    fn a_token_moved_out_by_consumer_drop_keeps_the_dependency_alive() {
-        struct Dependency {
-            value: u32,
-            drops: Arc<AtomicUsize>,
-        }
-        impl Drop for Dependency {
-            fn drop(&mut self) {
-                self.drops.fetch_add(1, Ordering::SeqCst);
-            }
-        }
-        struct Consumer {
-            dependency: Option<Injection<Dependency>>,
-            escaped: Arc<Mutex<Option<Injection<Dependency>>>>,
-        }
-        impl Drop for Consumer {
-            fn drop(&mut self) {
-                *self.escaped.lock().unwrap() = self.dependency.take();
-            }
-        }
-
-        let drops = Arc::new(AtomicUsize::new(0));
-        let escaped = Arc::new(Mutex::new(None));
-        let domain = ReleaseDomain::new();
-        let dependency = DependencyLease::new(
-            ErasedService::new(Dependency {
-                value: 42,
-                drops: drops.clone(),
-            }),
-            vec![],
-            domain.clone(),
-        );
-        let token =
-            prepare_required::<Dependency>(InputSlot::new(0), Some(dependency.erased_ref()))
-                .unwrap()
-                .into_required(InputSlot::new(0))
-                .unwrap();
-        let consumer = DependencyLease::new(
-            ErasedService::new(Consumer {
-                dependency: Some(token),
-                escaped: escaped.clone(),
-            }),
-            vec![dependency],
-            domain,
-        );
-        drop(consumer);
-        assert_eq!(drops.load(Ordering::SeqCst), 0);
-        let token = escaped.lock().unwrap().take().unwrap();
-        assert_eq!(token.value, 42);
-        drop(token);
-        assert_eq!(drops.load(Ordering::SeqCst), 1);
-    }
-}
+#[path = "../../tests/unit/activation/injection.rs"]
+mod tests;

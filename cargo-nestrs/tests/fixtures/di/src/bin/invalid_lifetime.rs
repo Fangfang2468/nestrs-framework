@@ -1,4 +1,4 @@
-//! 用独立二进制验证非法生命周期，避免污染其他回归测试的 linkme 注册集合。
+//! 用独立二进制验证非法生命周期，避免污染其他回归测试的编译器注册清单。
 use nestrs::injectable;
 use std::{
     process::ExitCode,

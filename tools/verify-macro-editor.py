@@ -164,9 +164,10 @@ def main():
                 "injectable",
                 "struct Consumer { #[inject] port: dyn Port, #[inject] optional: Option<dyn Port> }",
                 [
-                    "structConsumer{port:::nestrs_core::__private::Injection<dynPort>",
-                    "optional:::core::option::Option<::nestrs_core::__private::Injection<dynPort>>",
-                    "compiler_request::<dynPort>",
+                    "structConsumer{port:::nestrs_core::Injection<dynPort>",
+                    "optional:::core::option::Option<::nestrs_core::Injection<dynPort>>",
+                    "compiler_dependency::<dynPort,0usize>",
+                    "compiler_dependency::<dynPort,1usize>",
                 ],
             ),
             (

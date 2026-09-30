@@ -1,11 +1,16 @@
 //! 已选定依赖到固定构造输入的事务式准备。
+//!
+//! 一个依赖槽位依次经历“生成完整令牌 → 写入空槽位 → 收纳令牌的 lease”。前两步任一
+//! 失败都由 Rust 正常析构临时值，既不留下半填槽位，也不把失败输入加入依赖保活列表。
+//! 所有槽位就绪后才交给消费侧；必选缺失、可选缺席和未填槽位始终分别处理。
 
 use super::{
     ConstructionError, ConstructionInputs, FactoryLeaseFrame, InputPreparer, InputSlot,
-    inputs::InputBuffer,
+    PreparedInput,
 };
 use crate::activation::DependencyLease;
 
+/// 一次构造的准备事务；与固定槽位缓冲区共置，集中维护输入和 lease 的提交顺序。
 pub(crate) struct ActivationPreparation {
     buffer: InputBuffer,
     dependencies: Vec<DependencyLease>,
@@ -26,8 +31,9 @@ impl ActivationPreparation {
         input: Option<DependencyLease>,
     ) -> Result<(), ConstructionError> {
         let prepared = preparer(slot, input.as_ref().map(DependencyLease::erased_ref))?;
-        // Retain the actual returned token owner, not merely the supplied input: safe handwritten
-        // preparers can return a previously prepared value backed by another instance.
+        // 保留实际返回令牌的 owner，而不是直接克隆 input：安全的手写 preparer 也可能
+        // 返回此前准备的另一实例。先取得临时 lease，但仅在插入成功后把它提交到列表；
+        // 插入失败时临时 lease 和被拒绝的令牌一并释放。
         let dependency = prepared.dependency();
         self.buffer.insert(slot, prepared)?;
         if let Some(dependency) = dependency {
@@ -48,63 +54,66 @@ impl ActivationPreparation {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+/// 准备阶段专用的固定长度写入器；构造适配器无法获得写入权限。
+///
+/// buffer 不会按槽位号扩容：每个 slot 都必须在 [`Self::finish`] 前恰好写入一次。
+pub(super) struct InputBuffer {
+    slots: Vec<BufferSlot>,
+}
 
-    use super::ActivationPreparation;
-    use crate::activation::{
-        ConstructionError, DependencyLease, ErasedService, InputSlot, ReleaseDomain,
-        prepare_required,
-    };
+enum BufferSlot {
+    Empty,
+    Ready(PreparedInput),
+}
 
-    struct Counted(Arc<AtomicUsize>);
-    impl Drop for Counted {
-        fn drop(&mut self) {
-            self.0.fetch_add(1, Ordering::SeqCst);
+impl InputBuffer {
+    pub(super) fn new(slot_count: usize) -> Self {
+        Self {
+            slots: std::iter::repeat_with(|| BufferSlot::Empty)
+                .take(slot_count)
+                .collect(),
         }
     }
 
-    #[test]
-    fn a_failed_slot_write_does_not_retain_the_rejected_dependency() {
-        let drops = Arc::new(AtomicUsize::new(0));
-        let mut preparation = ActivationPreparation::new(1);
-        let first = DependencyLease::new(ErasedService::new(3_u32), vec![], ReleaseDomain::new());
-        preparation
-            .prepare(InputSlot::new(0), prepare_required::<u32>, Some(first))
-            .unwrap();
-        let rejected = DependencyLease::new(
-            ErasedService::new(Counted(drops.clone())),
-            vec![],
-            ReleaseDomain::new(),
-        );
-        assert!(matches!(
-            preparation.prepare(
-                InputSlot::new(0),
-                prepare_required::<Counted>,
-                Some(rejected)
-            ),
-            Err(ConstructionError::SlotAlreadyPrepared { .. })
-        ));
-        assert_eq!(drops.load(Ordering::SeqCst), 1);
-        let (mut inputs, dependencies) = preparation.finish_class().unwrap();
-        assert_eq!(dependencies.len(), 1);
-        assert_eq!(*inputs.take::<u32>(InputSlot::new(0)).unwrap(), 3);
+    /// 写入一个已经准备好的输入。
+    ///
+    /// 写入失败时 `input` 会直接被销毁，buffer 本身不发生变化。
+    pub(super) fn insert(
+        &mut self,
+        slot: InputSlot,
+        input: PreparedInput,
+    ) -> Result<(), ConstructionError> {
+        let slot_count = self.slots.len();
+        let Some(target) = self.slots.get_mut(slot.index()) else {
+            return Err(ConstructionError::SlotOutOfBounds { slot, slot_count });
+        };
+
+        if matches!(target, BufferSlot::Ready(_)) {
+            return Err(ConstructionError::SlotAlreadyPrepared { slot });
+        }
+
+        *target = BufferSlot::Ready(input);
+        Ok(())
     }
 
-    #[test]
-    fn failed_preparation_does_not_fill_a_slot() {
-        let mut preparation = ActivationPreparation::new(1);
-        assert!(matches!(
-            preparation.prepare(InputSlot::new(0), prepare_required::<u32>, None),
-            Err(ConstructionError::RequiredDependencyAbsent { .. })
-        ));
-        assert!(matches!(
-            preparation.finish_class(),
-            Err(ConstructionError::UnfilledSlot { .. })
-        ));
+    /// 验证每个固定槽位均已准备，并转换为只能被 adapter 消费的输入。
+    pub(super) fn finish(self) -> Result<ConstructionInputs, ConstructionError> {
+        let mut prepared = Vec::with_capacity(self.slots.len());
+
+        for (index, slot) in self.slots.into_iter().enumerate() {
+            let BufferSlot::Ready(input) = slot else {
+                return Err(ConstructionError::UnfilledSlot {
+                    slot: InputSlot::new(index),
+                });
+            };
+
+            prepared.push(input);
+        }
+
+        Ok(ConstructionInputs::from_prepared(prepared))
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/activation/construction/preparation.rs"]
+mod tests;

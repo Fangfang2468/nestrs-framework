@@ -6,3 +6,4 @@ publish = false
 
 [dependencies]
 nestrs-core = { path = "../../../../../nestrs-core" }
+tokio = { version = "1.53.1", features = ["rt"] }

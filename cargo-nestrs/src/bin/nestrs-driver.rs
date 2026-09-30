@@ -7,6 +7,7 @@
 #![feature(rustc_private)]
 
 extern crate rustc_ast;
+extern crate rustc_const_eval;
 extern crate rustc_driver;
 extern crate rustc_hir;
 extern crate rustc_interface;
@@ -19,8 +20,16 @@ extern crate rustc_span;
 mod autobind_codegen;
 #[path = "../compiler/autobind_semantic.rs"]
 mod autobind_semantic;
+#[path = "../compiler/documentation.rs"]
+mod documentation;
 #[path = "../compiler/graph_entry.rs"]
 mod graph_entry;
+#[path = "../compiler/internal_access.rs"]
+mod internal_access;
+#[path = "../compiler/registration_codegen.rs"]
+mod registration_codegen;
+#[path = "../compiler/registration_reachability.rs"]
+mod registration_reachability;
 #[path = "../compiler/type_source.rs"]
 mod type_source;
 
@@ -48,10 +57,12 @@ struct SnapshotLoader(Sources);
 
 impl FileLoader for SnapshotLoader {
     fn file_exists(&self, path: &Path) -> bool {
-        RealFileLoader.file_exists(path)
+        RealFileLoader.file_exists(&documentation::remap_source_path(path))
     }
 
     fn read_file(&self, path: &Path) -> io::Result<String> {
+        let path = documentation::remap_source_path(path);
+        let path = path.as_path();
         let contents = RealFileLoader.read_file(path)?;
         let mut sources = self.0.lock().expect("source snapshot lock poisoned");
         let canonical = path.canonicalize()?;
@@ -66,7 +77,7 @@ impl FileLoader for SnapshotLoader {
     }
 
     fn read_binary_file(&self, path: &Path) -> io::Result<Arc<[u8]>> {
-        RealFileLoader.read_binary_file(path)
+        RealFileLoader.read_binary_file(&documentation::remap_source_path(path))
     }
 
     fn current_directory(&self) -> io::Result<PathBuf> {
@@ -81,6 +92,7 @@ struct Discover {
 
 impl Callbacks for Discover {
     fn config(&mut self, config: &mut interface::Config) {
+        configure_compiler(config);
         // Generated bindings can make previously unused declarations live.
         // The final compiler invocation remains the authority for all lints.
         config.opts.lint_cap = Some(rustc_session::lint::Level::Allow);
@@ -96,6 +108,7 @@ impl Callbacks for Discover {
         krate: &mut rustc_ast::Crate,
     ) -> Compilation {
         graph_entry::prepare(compiler, krate);
+        registration_codegen::prepare(compiler, krate);
         Compilation::Continue
     }
 
@@ -105,6 +118,10 @@ impl Callbacks for Discover {
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
         graph_entry::validate(tcx);
+        if !internal_access::validate(tcx) {
+            return Compilation::Stop;
+        }
+        registration_codegen::validate(tcx);
         self.analysis = Some(autobind_semantic::analyze(tcx));
         Compilation::Stop
     }
@@ -119,6 +136,7 @@ struct Generate {
 
 impl Callbacks for Generate {
     fn config(&mut self, config: &mut interface::Config) {
+        configure_compiler(config);
         // Downstream `cargo check` targets also need closed blueprint MIR;
         // rustc otherwise omits it from metadata-only compilations.
         config.opts.unstable_opts.always_encode_mir = true;
@@ -136,6 +154,7 @@ impl Callbacks for Generate {
         krate: &mut rustc_ast::Crate,
     ) -> Compilation {
         graph_entry::prepare(compiler, krate);
+        registration_codegen::prepare(compiler, krate);
         Compilation::Continue
     }
 
@@ -145,6 +164,10 @@ impl Callbacks for Generate {
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
         graph_entry::validate(tcx);
+        if !internal_access::validate(tcx) {
+            return Compilation::Stop;
+        }
+        registration_codegen::validate(tcx);
         self.validation = Some(autobind_semantic::analyze(tcx).and_then(|analysis| {
             let observed = (analysis.providers, analysis.requests, analysis.explicit_bindings, analysis.automatic_bindings, analysis.blueprints);
             if analysis.generated_bindings != 0 || analysis.generated_blueprints != 0 || observed != self.expected {
@@ -154,7 +177,7 @@ impl Callbacks for Generate {
                     analysis.insertions.iter().flat_map(|insertion| &insertion.blueprints).map(|blueprint| (&blueprint.service, &blueprint.path)).collect::<Vec<_>>(),
                 ))
             } else {
-                Ok(())
+                documentation::capture(tcx)
             }
         }));
         if self.validation.as_ref().is_some_and(Result::is_ok) {
@@ -162,6 +185,48 @@ impl Callbacks for Generate {
         } else {
             Compilation::Stop
         }
+    }
+}
+
+fn configure_compiler(config: &mut interface::Config) {
+    config.opts.unstable_opts.always_encode_mir = true;
+    config.override_queries = Some(|_, providers| {
+        internal_access::install_queries(providers);
+        registration_codegen::provide(providers);
+        registration_reachability::provide(providers);
+    });
+}
+
+struct RuntimeCompiler;
+
+impl Callbacks for RuntimeCompiler {
+    fn config(&mut self, config: &mut interface::Config) {
+        configure_compiler(config);
+    }
+
+    fn after_crate_root_parsing(
+        &mut self,
+        compiler: &interface::Compiler,
+        krate: &mut rustc_ast::Crate,
+    ) -> Compilation {
+        registration_codegen::prepare(compiler, krate);
+        Compilation::Continue
+    }
+
+    fn after_analysis<'tcx>(
+        &mut self,
+        _compiler: &interface::Compiler,
+        tcx: TyCtxt<'tcx>,
+    ) -> Compilation {
+        if !internal_access::validate(tcx) {
+            return Compilation::Stop;
+        }
+        registration_codegen::validate(tcx);
+        if let Err(error) = documentation::capture(tcx) {
+            tcx.dcx().err(error);
+            return Compilation::Stop;
+        }
+        Compilation::Continue
     }
 }
 
@@ -176,6 +241,8 @@ impl FileLoader for CheckedLoader {
     }
 
     fn read_file(&self, path: &Path) -> io::Result<String> {
+        let path = documentation::remap_source_path(path);
+        let path = path.as_path();
         let canonical = path.canonicalize()?;
         let original = self.snapshots.get(&canonical).ok_or_else(|| io::Error::new(
             io::ErrorKind::InvalidData,
@@ -230,6 +297,9 @@ fn main() -> ExitCode {
 
 fn run() -> Result<ExitCode, String> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(code) = documentation::run_builder(&mut args)? {
+        return Ok(code);
+    }
     if let Some(rustdoc) = std::env::var_os("NESTRS_REAL_RUSTDOC")
         && !is_rustc_wrapper_invocation(&args)
     {
@@ -271,11 +341,28 @@ fn run() -> Result<ExitCode, String> {
         let driver = std::env::current_exe().map_err(|error| error.to_string())?;
         let bridge = Bridge::locate(&driver)?;
         inject_dependency_search(&mut args, &bridge)?;
+        internal_access::set_bridge_path(bridge.clone());
         Some(bridge)
     } else {
         None
     };
-    if !uses_core || is_probe {
+    let local_core = crate_name.as_deref() == Some("nestrs_core") && !uses_core;
+    if local_core && !is_probe {
+        check_toolchain(&rustc)?;
+        args.extend(["--cfg".into(), "nestrs_compiler".into()]);
+        internal_access::set_trusted_ranges(Vec::new());
+        if !args.iter().any(|arg| arg == "--test") {
+            return Ok(rustc_driver::catch_with_exit_code(|| {
+                rustc_driver::run_compiler(&args, &mut RuntimeCompiler);
+            }));
+        }
+    }
+    if (!uses_core
+        && !executable
+        && !args.iter().any(|arg| arg == "--test")
+        && !documentation::requires_pipeline())
+        || is_probe
+    {
         // Cargo's version/sysroot/capability probes must retain rustc behavior.
         let status = Command::new(&rustc)
             .args(&args[1..])
@@ -295,10 +382,12 @@ fn run() -> Result<ExitCode, String> {
     }
     let crate_name = crate_name.expect("checked compiler crate name");
     check_toolchain(&rustc)?;
-    inject_extern(
-        &mut args,
-        &bridge.expect("compilation units locate the bridge"),
-    )?;
+    if uses_core || local_core {
+        inject_extern(
+            &mut args,
+            &bridge.expect("compilation units locate the bridge"),
+        )?;
+    }
     if flag_value(&args, "--sysroot").is_none() {
         args.push("--sysroot".into());
         args.push(compiler_output(&rustc, &["--print", "sysroot"])?);
@@ -321,6 +410,7 @@ fn run() -> Result<ExitCode, String> {
     }
 
     let sources = Sources::default();
+    internal_access::set_trusted_ranges(Vec::new());
     let mut discover = Discover {
         analysis: None,
         sources: sources.clone(),
@@ -372,6 +462,17 @@ fn run() -> Result<ExitCode, String> {
     );
     let loader = OverlayFileLoader::from_insertions(analysis.insertions, &artifacts)
         .map_err(|error| error.to_string())?;
+    internal_access::set_trusted_ranges(
+        loader
+            .trusted_ranges
+            .iter()
+            .map(|(path, start, end)| internal_access::TrustedRange {
+                path: path.clone(),
+                start: *start,
+                end: *end,
+            })
+            .collect(),
+    );
     let mut generate = Generate {
         loader: Some(loader),
         snapshots,
@@ -409,11 +510,14 @@ fn is_rustc_wrapper_invocation(args: &[String]) -> bool {
     })
 }
 
-/// rustdoc bypasses RUSTC_WRAPPER, so inject the same ordinary proc-macro extern
-/// before delegating to the pinned, unmodified rustdoc. This does not claim to
-/// run the automatic-binding compiler passes on newly declared doctest services.
+/// rustdoc 不会使用 RUSTC_WRAPPER，因此所有 doctest 必须显式配置 driver builder。
+/// 即使文档所属 crate 没有直接依赖 core，示例也可能通过上游库执行 DI；只注入 bridge
+/// 搜索路径不能生成 registry。其他 rustdoc 请求继续保留普通转发行为。
 fn run_rustdoc(rustdoc: &std::ffi::OsStr, mut args: Vec<String>) -> Result<ExitCode, String> {
     let uses_core = has_extern(&args, "nestrs_core");
+    if args.iter().any(|argument| argument == "--test") {
+        return documentation::run(rustdoc, args);
+    }
     if flag_value(&args, "--crate-name").is_some() || uses_core {
         let driver = std::env::current_exe().map_err(|error| error.to_string())?;
         let bridge = Bridge::locate(&driver)?;
@@ -479,7 +583,7 @@ fn analysis_json(crate_name: &str, analysis: &Analysis) -> String {
         }
     }
     format!(
-        "{{\"crate\":{},\"providers\":{},\"requests\":{},\"generated_bindings\":{},\"explicit_bindings\":{},\"automatic_bindings\":{},\"bindings\":[{}]}}\n",
+        "{{\"crate\":{},\"providers\":{},\"requests\":{},\"generated_bindings\":{},\"explicit_bindings\":{},\"automatic_bindings\":{},\"bindings\":[{}],\"automatic_projections\":{},\"explicit_projections\":{}}}\n",
         json(crate_name),
         analysis.providers,
         analysis.requests,
@@ -487,6 +591,8 @@ fn analysis_json(crate_name: &str, analysis: &Analysis) -> String {
         analysis.explicit_bindings,
         analysis.automatic_bindings,
         bindings.join(","),
+        serde_json::to_string(&analysis.automatic_projections).unwrap(),
+        serde_json::to_string(&analysis.explicit_projections).unwrap(),
     )
 }
 

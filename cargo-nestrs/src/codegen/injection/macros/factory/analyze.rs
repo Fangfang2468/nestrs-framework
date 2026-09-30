@@ -32,7 +32,7 @@ pub(crate) enum FactoryInvocation {
 
 /// factory 调用结果是否需要把用户错误归一化为 [`ConstructionError`][1]。
 ///
-/// [1]: ::nestrs_core::__private::ConstructionError
+/// [1]: ::nestrs_core::activation::ConstructionError
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FactoryResultKind {
     /// 直接成功输出。

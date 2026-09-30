@@ -32,6 +32,9 @@ pub struct Analysis {
     pub automatic_bindings: usize,
     pub blueprints: usize,
     pub generated_blueprints: usize,
+    /// Diagnostic records only. Selection and deduplication use rustc Ty identity.
+    pub automatic_projections: Vec<(String, String)>,
+    pub explicit_projections: Vec<(String, String)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -214,11 +217,15 @@ fn definition_path(tcx: TyCtxt<'_>, definition: DefId) -> String {
 }
 
 fn provider_definition(tcx: TyCtxt<'_>) -> Option<(DefId, DefId)> {
-    for crate_num in tcx.crates(()) {
-        if tcx.crate_name(*crate_num).as_str() != "nestrs_core" {
+    let mut crates = tcx.crates(()).to_vec();
+    if tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE).as_str() == "nestrs_core" {
+        crates.push(rustc_hir::def_id::LOCAL_CRATE);
+    }
+    for crate_num in crates {
+        if tcx.crate_name(crate_num).as_str() != "nestrs_core" {
             continue;
         }
-        for trait_id in tcx.traits(*crate_num).iter().copied() {
+        for trait_id in tcx.traits(crate_num).iter().copied() {
             if definition_path(tcx, trait_id) == "registration::provider::ProviderDefinition" {
                 let method = tcx
                     .associated_items(trait_id)
@@ -300,7 +307,7 @@ fn closed_provider_markers<'tcx>(
 /// Combine this crate's declarations with typed registration metadata from
 /// dependencies processed by the framework wrapper. Insertions remain local;
 /// private upstream projections come from the producer's capability catalog.
-pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
+pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
     let runtimes: Vec<_> = tcx
         .crates(())
         .iter()
@@ -597,6 +604,7 @@ pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
     let mut interfaces: Vec<_> = requests.iter().copied().collect();
     interfaces.sort_by_key(|ty| type_source.render(*ty));
     let potential_impls = capability_impls(tcx);
+    let mut generated_projections = Vec::new();
     for (concrete, marker) in candidates {
         let mut candidate_interfaces: HashSet<_> = interfaces.iter().copied().collect();
         candidate_interfaces.extend(declared_interfaces(tcx, *concrete, &potential_impls));
@@ -632,8 +640,30 @@ pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
                 Err(_) => continue,
             }
             generated += 1;
+            generated_projections.push((*concrete, *interface));
         }
     }
+    let projection_names = |pairs: Vec<(Ty<'tcx>, Ty<'tcx>)>| {
+        let mut names: Vec<_> = pairs
+            .into_iter()
+            .map(|(concrete, interface)| {
+                (
+                    rustc_const_eval::util::type_name(tcx, concrete),
+                    rustc_const_eval::util::type_name(tcx, interface),
+                )
+            })
+            .collect();
+        names.sort();
+        names
+    };
+    let automatic_projections = projection_names(
+        automatic_bindings
+            .iter()
+            .copied()
+            .chain(generated_projections)
+            .collect(),
+    );
+    let explicit_projections = projection_names(bindings.iter().copied().collect());
     Ok(Analysis {
         insertions,
         providers: providers.len(),
@@ -643,6 +673,8 @@ pub fn analyze(tcx: TyCtxt<'_>) -> Result<Analysis, String> {
         automatic_bindings: automatic_bindings.len(),
         blueprints: blueprints.len() + blueprint_paths.len(),
         generated_blueprints,
+        automatic_projections,
+        explicit_projections,
     })
 }
 
@@ -1183,6 +1215,7 @@ fn source_insertion<'tcx>(
         .local_path()
         .ok_or_else(|| format!("source path for {concrete} was remapped without a local path"))?
         .to_path_buf();
+    let path = crate::documentation::remap_source_path(&path);
     let expected_source = std::fs::read_to_string(&path)
         .map_err(|error| format!("cannot read source {}: {error}", path.display()))?;
     let offset = source.original_relative_byte_pos(inside.lo()).0 as usize;

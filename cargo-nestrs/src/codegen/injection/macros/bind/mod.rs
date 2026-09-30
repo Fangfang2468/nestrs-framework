@@ -11,7 +11,7 @@ use zyn::{syn, zyn};
 /// 输出一条 trait 到 concrete 的 typed binding 注册。
 ///
 /// 调用方负责保留原始 `impl Trait for Concrete` 并做属性/作用域/dyn-compatible
-/// 校验；本 element 只生成与该 impl 同一展开位置的类型化 projector 和 linkme
+/// 校验；本 element 只生成与该 impl 同一展开位置的类型化 projector 和描述
 /// binding callback。
 #[zyn::element]
 pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> zyn::TokenStream {
@@ -24,32 +24,27 @@ pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> z
                 let projected: &(dyn {{ interface }} + 'static) = service;
                 projected
             }
-
-            #[::nestrs_core::__private::linkme::distributed_slice(
-                ::nestrs_core::__private::REFLECTED_BINDINGS
-            )]
-            #[linkme(crate = ::nestrs_core::__private::linkme)]
+        #[allow(dead_code)]
             #[allow(clippy::needless_borrow)]
             fn __nestrs_reflect_trait_binding()
-                -> ::nestrs_core::__private::TraitBinding
+                -> ::nestrs_core::registration::binding::TraitBinding
             {
-                ::nestrs_core::__private::compiler_binding::<{{ service }}, dyn {{ interface }}>();
-                use ::nestrs_core::__private::ProbeProvider as _;
-                let __nestrs_probe = ::nestrs_core::__private::Probe::<{{ service }}>::new();
-                ::nestrs_core::__private::TraitBinding {
-                    trait_type: ::nestrs_core::__private::ServiceType::create::<
+                ::nestrs_core::registration::compiler::compiler_binding::<{{ service }}, dyn {{ interface }}>();
+                use ::nestrs_core::registration::root::ProbeProvider as _;
+                let __nestrs_probe = ::nestrs_core::registration::root::Probe::<{{ service }}>::new();
+                ::nestrs_core::registration::binding::TraitBinding {
+                    trait_type: ::nestrs_core::service::ServiceType::create::<
                         dyn {{ interface }}
                     >(),
-                    concrete_type: ::nestrs_core::__private::ServiceType::create::<
+                    concrete_type: ::nestrs_core::service::ServiceType::create::<
                         {{ service }}
                     >(),
                     materialize: (&&__nestrs_probe).provider_callback(),
-                    key_policy: ::nestrs_core::__private::BoundKeyPolicy::InheritRequestedKey,
                     prepare_required: (|
-                        slot: ::nestrs_core::__private::InputSlot,
-                        input: ::core::option::Option<::nestrs_core::__private::ErasedServiceRef>,
+                        slot: ::nestrs_core::activation::InputSlot,
+                        input: ::core::option::Option<::nestrs_core::activation::ErasedServiceRef>,
                     | {
-                        ::nestrs_core::__private::prepare_bound_required::<
+                        ::nestrs_core::activation::prepare_bound_required::<
                             {{ service }},
                             dyn {{ interface }},
                         >(
@@ -57,12 +52,12 @@ pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> z
                             input,
                             __nestrs_project_bound_service,
                         )
-                    }) as ::nestrs_core::__private::InputPreparer,
+                    }) as ::nestrs_core::activation::InputPreparer,
                     prepare_optional: (|
-                        slot: ::nestrs_core::__private::InputSlot,
-                        input: ::core::option::Option<::nestrs_core::__private::ErasedServiceRef>,
+                        slot: ::nestrs_core::activation::InputSlot,
+                        input: ::core::option::Option<::nestrs_core::activation::ErasedServiceRef>,
                     | {
-                        ::nestrs_core::__private::prepare_bound_optional::<
+                        ::nestrs_core::activation::prepare_bound_optional::<
                             {{ service }},
                             dyn {{ interface }},
                         >(
@@ -70,8 +65,8 @@ pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> z
                             input,
                             __nestrs_project_bound_service,
                         )
-                    }) as ::nestrs_core::__private::InputPreparer,
-                    source: ::nestrs_core::__private::ServiceSource::new(
+                    }) as ::nestrs_core::activation::InputPreparer,
+                    source: ::nestrs_core::service::ServiceSource::new(
                         file!(),
                         line!(),
                         column!(),
@@ -90,7 +85,7 @@ mod tests {
     use zyn::{Render, syn};
 
     #[test]
-    fn emits_a_bound_provider_with_typed_projectors_and_inherited_key_policy() {
+    fn emits_a_binding_with_typed_projectors_without_a_separate_key_policy() {
         let rendered = EmitBoundProvider {
             service: syn::parse_str("ConcreteService").expect("service type should parse"),
             interface: syn::parse_str("Port").expect("trait path should parse"),
@@ -99,9 +94,9 @@ mod tests {
         .tokens()
         .to_string();
 
-        assert!(rendered.contains("REFLECTED_BINDINGS"));
+        assert!(rendered.contains("compiler_binding"));
         assert!(rendered.contains("TraitBinding"));
-        assert!(rendered.contains("BoundKeyPolicy :: InheritRequestedKey"));
+        assert!(!rendered.contains("key_policy"));
         assert!(rendered.contains("prepare_bound_required"));
         assert!(rendered.contains("prepare_bound_optional"));
         assert!(rendered.contains("ErasedServiceRef"));

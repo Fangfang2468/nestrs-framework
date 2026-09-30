@@ -1,5 +1,5 @@
 use nestrs::{factory, injectable};
-use nestrs_core::{__private::Injection, ServiceProvider};
+use nestrs_core::{Injection, ServiceProvider};
 
 use std::sync::{
     Mutex,

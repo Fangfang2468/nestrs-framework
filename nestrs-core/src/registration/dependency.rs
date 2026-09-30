@@ -1,8 +1,9 @@
 //! 依赖请求的注册 ABI。
 //!
-//! 一个依赖请求由两个正交的事实组成：值如何准备为构造输入槽位的载荷（[`Delivery`]），以及
-//! provider 在解析期从哪里来（[`ProviderSource`]）。trait 投影与闭合泛型的按需物化
-//! 分属这两个轴，因此不再混在同一组可选字段里，也不存在无法表达的非法组合。
+//! 一个依赖请求包含两个独立事实：值如何准备为构造输入槽位（[`Delivery`]），以及
+//! 描述是否自带闭合 Provider 蓝图（[`ProviderSource`]）。trait 投影与泛型物化不能
+//! 合并成同一个选择。图编译阶段还会核对 optional、投影形式与蓝图来源的一致性；
+//! 描述结构本身不是“已验证”的标志。
 
 use crate::{
     activation::{InputPreparer, InputSlot},
@@ -37,44 +38,45 @@ pub struct DependencyRequest {
     /// 依赖值如何准备为构造输入槽位的载荷。
     pub delivery: Delivery,
 
-    /// provider 在解析期的来源。
+    /// 描述是否携带消费点单态化的 Provider 蓝图。
     pub provider_source: ProviderSource,
 }
 
 /// 依赖值准备为构造输入槽位载荷的方式。
 #[derive(Debug, Clone, Copy)]
 pub enum Delivery {
-    /// 消费点自己单态化的输入准备函数。
+    /// 明确要求 concrete 路由的内部输入协议，使用消费点单态化的准备函数。
     ///
-    /// concrete 依赖与闭合泛型服务都使用它；两者的差别只在
-    /// [`ProviderSource`]，不在值的交付方式。
+    /// 图编译器必须拒绝把这个协议用于 trait 路由。现有普通宏生成使用 Selected
+    /// 兼容类型别名和 ?Sized；Direct 继续用于明确 concrete 的内部描述与契约验证。
     Direct(InputPreparer),
 
-    /// The source type may be an alias or an unsized generic parameter. Use
-    /// the exact typed address for a concrete route, or its selected binding
-    /// preparer for an interface route. No pointer metadata is synthesized.
+    /// 源码路径可能是类型别名或 ?Sized 泛型参数，不能仅按拼写判断是不是 trait。
+    /// concrete 路由使用准确类型地址，接口路由使用已选择 binding 的 preparer；
+    /// 两者都依赖真实 typed adapter，不伪造胖指针元数据。
     Selected(InputPreparer),
 
-    /// 必选 trait object：输入准备函数必须由匹配到的 `#[bind]` 提供。
+    /// 必选 trait object：输入准备函数必须由匹配到的 binding 提供。
     ///
     /// 消费点只知道 trait，无法生成 concrete-to-trait 的 typed projector，因此这里
     /// 不携带直接 preparer；缺少匹配绑定就是缺失依赖。
     RequiresBinding,
 
-    /// 可选 trait object：匹配到 `#[bind]` 时使用它的投影函数，否则写入合法缺席。
+    /// 可选 trait object：匹配到 binding 时使用它的投影函数，否则写入合法缺席。
     ///
     /// 携带的函数项只接受「依赖确实不存在」，拒绝把 concrete 薄指针伪造成
     /// trait-object 胖指针。
     RequiresBindingOrAbsent(InputPreparer),
 }
 
-/// 解析期为依赖寻找 provider 的方式。
+/// 依赖声明是否自带闭合类型的 Provider 描述回调。
 #[derive(Debug, Clone, Copy)]
 pub enum ProviderSource {
-    /// 只接受显式注册的 provider。
+    /// 消费点不携带物化回调。图仍可使用已注册 Provider 或 driver 汇总的被动蓝图；
+    /// factory-only 和 trait 请求通常走这一分支。
     Registered,
 
-    /// 缺少显式注册时，用消费点单态化的回调按需物化 provider。
+    /// 缺少精确 type/key 的显式注册时，用消费点单态化的回调按需物化 Provider 描述。
     ///
     /// 开放泛型的类型实参不能从 `TypeId` 反推；例如 `Repository<User>` 必须由宏在
     /// 这个调用点嵌入一个返回闭合 provider 的 callback。

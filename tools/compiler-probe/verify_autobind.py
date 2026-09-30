@@ -149,6 +149,10 @@ def main() -> int:
             analyses = {}
             for path in generated.rglob("analysis.json"):
                 analysis = json.loads(path.read_text(encoding="utf-8"))
+                if analysis["crate"] not in {name.replace("-", "_") for name in wanted}:
+                    # All executable entries now get a registry, including Cargo
+                    # build scripts. Their shared crate names are not fixture cases.
+                    continue
                 status = json.loads(path.with_name("compilation.json").read_text(encoding="utf-8"))
                 require(status["passed"] and status["passes"] == 2, f"Final compilation did not pass for {path}")
                 require(analysis["crate"] not in analyses, f"Duplicate fresh analysis for {analysis['crate']}")

@@ -65,7 +65,7 @@ async fn main() {
     assert_eq!(consumer.reader.identity(), interface.identity());
     assert_eq!(consumer.nested.nested_identity(), interface.identity());
     assert_eq!(consumer.capturing.nested_identity(), interface.identity());
-    assert_eq!(nestrs_core::__private::REFLECTED_BINDINGS.len(), 0);
+    assert_eq!(automatic_assertions::explicit_count(), 0);
     automatic_assertions::assert_count::<dyn for<'a> TextPort<&'a str>>(1);
     automatic_assertions::assert_count::<dyn for<'a> NestedPort<(&'a str, for<'b> fn(&'b str))>>(1);
     automatic_assertions::assert_count::<dyn for<'a> NestedPort<fn(&'a str, &str)>>(1);

@@ -1,169 +1,20 @@
 //! 静态注册、先验证后激活的 DI 门面。
+//!
+//! 这里仅组合图、运行时命令和用户可借用的 owner。错误链、调度状态及实例释放
+//! 分别由 error、runtime、activation 管理，门面不保存第二套生命周期状态。
+//! 返回 `&T` 的安全边界保留在本模块：运行时先把实例发布到实际 owner 的 journal，
+//! 查询才将验证后的 typed pointer 恢复为借用该 owner 的引用。
 
-use std::{fmt, num::NonZeroUsize, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
-    ServiceKey, ServiceLifetime,
+    InitializationMode, ServiceKey, ServiceLifetime, ServiceProviderOptions,
     activation::InputSlot,
+    error::{BuildError, DisposeError, ResolveError},
     graph::{GraphCompiler, ValidatedGraph},
     runtime::{Owner, Runtime},
-    service::{ServiceIdentifier, ServiceSource, ServiceType},
+    service::{ServiceIdentifier, ServiceType},
 };
-
-/// 提前初始化的范围。Eager 只预热 Singleton 及其必要依赖。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum InitializationMode {
-    #[default]
-    Lazy,
-    Eager,
-}
-
-/// 所有 scope 共享 root 的构造并发上限。
-#[derive(Debug, Clone)]
-pub struct ServiceProviderOptions {
-    pub initialization: InitializationMode,
-    pub max_concurrent_activations: NonZeroUsize,
-}
-
-impl Default for ServiceProviderOptions {
-    fn default() -> Self {
-        Self {
-            initialization: InitializationMode::Lazy,
-            max_concurrent_activations: NonZeroUsize::new(32).unwrap(),
-        }
-    }
-}
-
-/// 运行环境或 Eager 初始化失败。静态图错误直接 panic。
-#[derive(Debug, thiserror::Error)]
-pub enum BuildError {
-    #[error("构建服务容器需要当前 Tokio runtime")]
-    RuntimeUnavailable,
-    #[error("服务容器预热失败: {error}; 关闭结果: {dispose_error:?}")]
-    Initialization {
-        #[source]
-        error: ResolveError,
-        dispose_error: Option<DisposeError>,
-    },
-}
-
-struct ResolveFailure {
-    detail: Arc<str>,
-    path: Option<Arc<FailureFrame>>,
-}
-
-struct FailureFrame {
-    identifier: ServiceIdentifier,
-    source: ServiceSource,
-    parent: Option<Arc<FailureFrame>>,
-}
-
-impl Drop for FailureFrame {
-    fn drop(&mut self) {
-        // Shared suffixes belong to other errors. Reclaim unique prefixes iteratively so
-        // dropping a deep failure path never consumes one Rust stack frame per dependency.
-        let mut parent = self.parent.take();
-        while let Some(frame) = parent {
-            let Some(mut frame) = Arc::into_inner(frame) else {
-                break;
-            };
-            parent = frame.parent.take();
-        }
-    }
-}
-
-/// 获取或激活失败，保留失败原因和带 key、源码位置的依赖路径。
-///
-/// Singleton/Scoped 的失败被缓存，后续调用共享原始失败记录。
-#[derive(Clone)]
-pub struct ResolveError(Arc<ResolveFailure>);
-
-impl ResolveError {
-    pub(crate) fn new(detail: String) -> Self {
-        Self(Arc::new(ResolveFailure {
-            detail: detail.into(),
-            path: None,
-        }))
-    }
-
-    pub(crate) fn closed() -> Self {
-        Self::new("服务 owner 已关闭或正在关闭".to_owned())
-    }
-
-    pub(crate) fn construction(
-        identifier: &ServiceIdentifier,
-        source: ServiceSource,
-        detail: String,
-    ) -> Self {
-        Self::dependency(identifier, source, Self::new(detail))
-    }
-
-    pub(crate) fn dependency(
-        identifier: &ServiceIdentifier,
-        source: ServiceSource,
-        dependency: Self,
-    ) -> Self {
-        Self(Arc::new(ResolveFailure {
-            detail: dependency.0.detail.clone(),
-            path: Some(Arc::new(FailureFrame {
-                identifier: identifier.clone(),
-                source,
-                parent: dependency.0.path.clone(),
-            })),
-        }))
-    }
-}
-
-impl fmt::Display for ResolveError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "服务解析失败: {}", self.0.detail)?;
-        let mut current = self.0.path.as_deref();
-        while let Some(frame) = current {
-            let FailureFrame {
-                identifier,
-                source,
-                parent,
-            } = frame;
-            current = parent.as_deref();
-            write!(
-                formatter,
-                "\n  {} key={:?} ({}:{}:{})",
-                identifier.service_type.name,
-                identifier.service_key,
-                source.file,
-                source.line,
-                source.column
-            )?;
-        }
-        Ok(())
-    }
-}
-impl fmt::Debug for ResolveError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Formatting must be iterative too, including errors embedded in BuildError.
-        fmt::Display::fmt(self, formatter)
-    }
-}
-impl std::error::Error for ResolveError {}
-
-/// 所有 cleanup 都处理完成后汇总的关闭错误。
-#[derive(Debug, Clone, thiserror::Error)]
-#[error("服务容器关闭失败: {failures:?}")]
-pub struct DisposeError {
-    failures: Arc<Vec<String>>,
-}
-impl DisposeError {
-    pub(crate) fn new(failures: Vec<String>) -> Self {
-        Self {
-            failures: Arc::new(failures),
-        }
-    }
-
-    /// 每个失败 cleanup 的诊断。其余实例仍会继续清理。
-    pub fn failures(&self) -> &[String] {
-        &self.failures
-    }
-}
 
 /// 应用级服务 owner。使用查询宏获取服务，结果引用借用实际 owner。
 ///
@@ -173,17 +24,21 @@ impl DisposeError {
 pub struct ServiceProvider {
     graph: Arc<ValidatedGraph>,
     runtime: Arc<Runtime>,
+    // Owner 的 Drop 统一发送非阻塞关闭请求。门面不再重复实现同一兜底行为；
+    // 即使 dispose_async 的 future 未完成就被丢弃，持有的 owner 也会负责发起关闭。
     owner: Arc<Owner>,
 }
 
 impl ServiceProvider {
+    /// 使用 Lazy 与 32 个构造名额的默认选项建立容器。
     pub async fn build() -> Result<Self, BuildError> {
         Self::build_with_options(ServiceProviderOptions::default()).await
     }
 
     /// 在执行任何构造函数之前完整验证图；结构错误立即 panic。
-    ///
     pub async fn build_with_options(options: ServiceProviderOptions) -> Result<Self, BuildError> {
+        // 先核查全部结构，再启动协调器；即使没有 Tokio runtime，非法图也不会
+        // 因为环境检查而绕过诊断，更不会在验证完成前执行任何服务构造。
         let graph = Arc::new(
             GraphCompiler::compile_static()
                 .unwrap_or_else(|error| panic!("DI 依赖图验证失败: {error}")),
@@ -202,6 +57,8 @@ impl ServiceProvider {
                 .warm_up(&provider.owner, ServiceLifetime::Singleton)
                 .await
         {
+            // 容器尚未交付给调用者。预热失败时仍等待已经接受的工作与清理，
+            // 同时保留初始化错误和清理错误，不能把部分成功实例直接遗弃。
             let dispose_error = provider.runtime.close(&provider.owner).await.err();
             return Err(BuildError::Initialization {
                 error,
@@ -234,12 +91,6 @@ impl ServiceProvider {
     }
 }
 
-impl Drop for ServiceProvider {
-    fn drop(&mut self) {
-        self.runtime.request_close(&self.owner);
-    }
-}
-
 /// Scoped 实例的 owner，借用 root 并隔离其他 scope 的缓存。
 #[must_use]
 pub struct ServiceScope<'provider> {
@@ -247,6 +98,7 @@ pub struct ServiceScope<'provider> {
     owner: Arc<Owner>,
 }
 impl ServiceScope<'_> {
+    /// 创建轻量查询视图；结果引用绑定当前 scope，而不是这个临时视图。
     pub fn service_provider(&self) -> ServiceProviderRef<'_> {
         ServiceProviderRef {
             graph: &self.provider.graph,
@@ -254,19 +106,17 @@ impl ServiceScope<'_> {
             owner: &self.owner,
         }
     }
+    /// 提交当前 scope 的全部 Scoped 根及必要依赖；保持既有生命周期与并发上限。
     pub async fn warm_up(&self) -> Result<(), ResolveError> {
         self.provider
             .runtime
             .warm_up(&self.owner, ServiceLifetime::Scoped)
             .await
     }
+    /// 消费当前 scope，等待已接受任务及本 scope 的串行 cleanup 完成。
+    /// 查询结果仍被使用时，Rust 借用检查会拒绝消费这个 scope。
     pub async fn dispose_async(self) -> Result<(), DisposeError> {
         self.provider.runtime.close(&self.owner).await
-    }
-}
-impl Drop for ServiceScope<'_> {
-    fn drop(&mut self) {
-        self.provider.runtime.request_close(&self.owner);
     }
 }
 
@@ -302,6 +152,8 @@ impl<'owner> ServiceProviderRef<'owner> {
             return Ok(None);
         };
         let lease = self.runtime.resolve(self.owner, route.provider).await?;
+        // concrete 查询复用实例保存的准确地址；trait 查询复用构图时选中的 typed
+        // 投影。两条路径都必须验证类型，trait 路径还核对投影没有替换实例所有者。
         let pointer = if let Some(project) = route.projection {
             let prepared = project(InputSlot::new(0), Some(lease.erased_ref()))
                 .map_err(|error| ResolveError::new(error.to_string()))?;
@@ -322,16 +174,15 @@ impl<'owner> ServiceProviderRef<'owner> {
                 ))
             })?
         };
-        // SAFETY: runtime.resolve publishes a lease in the actual Owner's journal before
-        // completing this request. Owner retains that journal even after runtime shutdown.
-        // Its borrowing facade cannot be consumed/dropped while this reference is used.
-        // Projection above validates T and obtains its exact (possibly wide) typed address.
+        // SAFETY: runtime.resolve 在完成请求前已将强 lease 发布到实际 owner 的 journal。
+        // journal 的存活期跟随 owner，不依赖 Tokio 协调任务仍在运行；返回引用被使用时，
+        // 借用检查禁止消费/丢弃该 owner 的门面。上方同时核对 T 和准确的（可能为宽）地址。
         Ok(Some(unsafe { pointer.as_ref() }))
     }
 }
 
-/// Macro-only query normalization. Its return value borrows the actual owner, not a temporary
-/// view or this receiver. This is hidden expansion ABI, not a supported service-query method.
+/// 查询宏统一 root 与视图接收者的内部协议。
+/// 返回值借用真正的 owner，不借用这个临时接收者；业务源码不能直接使用该私有接口。
 #[doc(hidden)]
 pub trait QueryTarget<'owner> {
     fn __nestrs_query_view(self) -> ServiceProviderRef<'owner>;
@@ -349,7 +200,7 @@ impl<'owner> QueryTarget<'owner> for &ServiceProviderRef<'owner> {
     }
 }
 
-/// Expansion bridge. Must be public because exported macros expand in downstream crates.
+/// 必选查询的生成代码入口，所在模块保持私有，仅由编译器授权的查询宏访问。
 #[doc(hidden)]
 pub async fn query_required<'owner, T: ?Sized + Send + Sync + 'static>(
     view: ServiceProviderRef<'owner>,
@@ -358,7 +209,7 @@ pub async fn query_required<'owner, T: ?Sized + Send + Sync + 'static>(
     view.required::<T>(key).await
 }
 
-/// Expansion bridge preserving optional-missing versus initialization-failure semantics.
+/// 可选查询的生成代码入口；只有未注册返回 None，初始化等其他失败仍返回错误。
 #[doc(hidden)]
 pub async fn query_optional<'owner, T: ?Sized + Send + Sync + 'static>(
     view: ServiceProviderRef<'owner>,
@@ -366,6 +217,3 @@ pub async fn query_optional<'owner, T: ?Sized + Send + Sync + 'static>(
 ) -> Result<Option<&'owner T>, ResolveError> {
     view.query::<T>(key).await
 }
-
-#[cfg(test)]
-mod error_path_tests;

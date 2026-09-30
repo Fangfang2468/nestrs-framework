@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 use nestrs::{injectable};
-use nestrs_core::__private::Injection;
+use nestrs_core::Injection;
 
 
 trait Database: Send + Sync {

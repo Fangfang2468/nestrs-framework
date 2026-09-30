@@ -1,4 +1,8 @@
-//! 已构造服务的 owning envelope 与带 lease 的构造期引用。
+//! 已构造服务的类型擦除容器与带 lease 的构造期引用。
+//!
+//! 运行时可以统一存放不同服务，但不能因此丢失准确类型信息。服务值与 typed address
+//! 分别放进 Box：前者拥有实例，后者记录它的准确 `NonNull<T>` 类型。移动这个容器不
+//! 会移动服务；恢复指针时仍通过 `Any` 检查完整类型，不能只比较字符串名称。
 
 use std::{any::Any, ptr::NonNull};
 
@@ -10,11 +14,13 @@ type AnyService = Box<dyn Any + Send + Sync>;
 /// 仅保存准确类型的稳定地址，不提供独立解引用入口。
 struct TypedAddress<T: ?Sized>(NonNull<T>);
 
-// The address is only dereferenced while its immutable boxed service is retained by a lease.
+// SAFETY: T 满足 Injectable 的 Send + Sync 约束。此类型只传递地址，不提供解引用；
+// 实际读取必须持有对应不可变 Box 实例的 lease，跨线程传递不会提前释放实例。
 unsafe impl<T: Injectable + ?Sized> Send for TypedAddress<T> {}
+// SAFETY: 所有读取都是共享不可变访问，且每次读取的存活期都由对应实例的 lease 覆盖。
 unsafe impl<T: Injectable + ?Sized> Sync for TypedAddress<T> {}
 
-/// 已构造服务的 owning type-erased envelope。
+/// 拥有服务值的类型擦除容器；发布后由实例记录持有，不能再移出其中的值。
 pub struct ErasedService {
     service_type: ServiceType,
     value: AnyService,
@@ -70,7 +76,7 @@ impl ErasedService {
     }
 }
 
-/// 宏 preparer 使用的稳定地址凭证；即使被截留，也会保活原实例。
+/// 输入准备函数使用的稳定地址凭证；即使被截留，也会保活原实例。
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct ErasedServiceRef {
@@ -86,6 +92,7 @@ impl ErasedServiceRef {
     where
         T: Injectable + ?Sized,
     {
+        // 指针与 lease 必须一起交付。调用者不能在准确类型检查失败后获得裸地址。
         match self.lease.pointer::<T>() {
             Some(pointer) => Ok((pointer, self.lease)),
             None => Err(self.lease.service_type()),
@@ -94,35 +101,5 @@ impl ErasedServiceRef {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::ErasedService;
-    use crate::{
-        activation::{DependencyLease, ReleaseDomain},
-        service::ServiceType,
-    };
-
-    #[test]
-    fn erased_service_ref_validates_the_concrete_type_before_casting() {
-        let lease = DependencyLease::new(ErasedService::new(7_u32), vec![], ReleaseDomain::new());
-        let reference = lease.erased_ref();
-        let (pointer, retained) = reference.clone().cast::<u32>().unwrap();
-        assert_eq!(Some(pointer), lease.pointer::<u32>());
-        assert!(
-            matches!(reference.cast::<u64>(), Err(actual) if actual == ServiceType::create::<u32>())
-        );
-        drop(lease);
-        // SAFETY: retained still owns the allocation.
-        assert_eq!(unsafe { *pointer.as_ref() }, 7);
-        drop(retained);
-    }
-
-    #[test]
-    fn moving_the_envelope_keeps_its_typed_address_stable() {
-        let service = ErasedService::new(String::from("stable"));
-        let before = service.pointer::<String>().unwrap();
-        let moved = Box::new(service);
-        assert_eq!(moved.pointer::<String>(), Some(before));
-        assert!(moved.pointer::<str>().is_none());
-        assert_eq!(moved.downcast::<String>().ok().as_deref(), Some("stable"));
-    }
-}
+#[path = "../../tests/unit/activation/erased_service.rs"]
+mod tests;

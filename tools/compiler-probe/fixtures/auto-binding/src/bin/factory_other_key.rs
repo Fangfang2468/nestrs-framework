@@ -1,7 +1,7 @@
 //! A factory for another key must not suppress the default generic blueprint.
 
 use nestrs::{factory, injectable};
-use nestrs_core::{__private::REFLECTED_BINDINGS, ServiceKey, ServiceProvider};
+use nestrs_core::{ServiceKey, ServiceProvider};
 use std::marker::PhantomData;
 
 #[path = "../automatic_assertions.rs"]
@@ -40,7 +40,7 @@ fn factory_repository() -> Repository<User> {
 #[tokio::main]
 async fn main() {
     let provider = ServiceProvider::build().await.unwrap();
-    assert_eq!(REFLECTED_BINDINGS.len(), 0);
+    assert_eq!(automatic_assertions::explicit_count(), 0);
     automatic_assertions::assert_count::<dyn Port>(1);
     let default = nestrs_core::get_required_service!(provider, Repository<User>)
         .await

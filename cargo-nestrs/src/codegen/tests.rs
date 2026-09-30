@@ -38,11 +38,11 @@ fn injectable_entrypoint_preserves_user_items_and_lowers_injection_fields() {
     let fields: Vec<_> = item.fields.iter().collect();
     assert_eq!(
         fields[0].ty,
-        syn::parse_quote!(::nestrs_core::__private::Injection<Database>)
+        syn::parse_quote!(::nestrs_core::Injection<Database>)
     );
     assert_eq!(
         fields[1].ty,
-        syn::parse_quote!(::core::option::Option<::nestrs_core::__private::Injection<dyn Audit>>)
+        syn::parse_quote!(::core::option::Option<::nestrs_core::Injection<dyn Audit>>)
     );
     assert_eq!(fields[2].ty, syn::parse_quote!(String));
     assert!(fields.iter().all(|field| {
@@ -124,7 +124,7 @@ fn namespaced_helpers_are_consumed_by_class_and_factory_declarations() {
         .unwrap();
     assert_eq!(
         fields.iter().next().unwrap().ty,
-        syn::parse_quote!(::nestrs_core::__private::Injection<Database>)
+        syn::parse_quote!(::nestrs_core::Injection<Database>)
     );
     assert!(fields.iter().all(|field| field.attrs.is_empty()));
 
@@ -240,7 +240,7 @@ fn bind_entrypoint_preserves_the_impl_and_only_adds_projection_registration() {
             .any(|item| { matches!(item, syn::Item::Impl(item) if item == &original) })
     );
     let tokens = result.to_string();
-    assert!(tokens.contains("REFLECTED_BINDINGS"));
+    assert!(tokens.contains("compiler_binding"));
     assert!(!tokens.contains("REFLECTED_PROVIDERS"));
 }
 

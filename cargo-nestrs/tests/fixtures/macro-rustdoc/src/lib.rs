@@ -1,4 +1,5 @@
-//! These examples execute through unmodified rustdoc using ordinary proc macros.
+#![doc(test(attr(deny(warnings)), no_crate_inject))]
+//! These examples execute through standard rustdoc and the Nestrs compiler driver.
 //!
 //! Library declarations remain available to a documentation test:
 //!
@@ -26,6 +27,8 @@
 //! #[injectable]
 //! struct Settings { #[value(81)] port: u16 }
 //! struct Server(u16);
+//! trait Endpoint: Send + Sync { fn port(&self) -> u16; }
+//! impl Endpoint for Server { fn port(&self) -> u16 { self.0 } }
 //! #[factory]
 //! async fn server(settings: Settings) -> Server {
 //!     tokio::task::yield_now().await;
@@ -35,6 +38,7 @@
 //!     tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
 //!         let provider = ServiceProvider::build().await.unwrap();
 //!         assert_eq!(get_required_service!(provider, Server).await.unwrap().0, 81);
+//!         assert_eq!(get_required_service!(provider, dyn Endpoint).await.unwrap().port(), 81);
 //!         provider.dispose_async().await.unwrap();
 //!         println!("snippet declaration and borrowed factory example completed");
 //!         # if let Ok(path) = std::env::var("NESTRS_DOCTEST_RECORD") { std::fs::write(std::path::Path::new(&path).join("declarations"), "passed").unwrap(); }
@@ -63,6 +67,8 @@
 //! ```
 
 use nestrs::{factory, injectable};
+
+pub mod semantics;
 
 #[injectable]
 pub struct Configuration {

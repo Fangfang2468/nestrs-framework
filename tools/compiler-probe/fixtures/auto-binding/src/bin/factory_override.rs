@@ -1,7 +1,7 @@
 //! Exact type/key factories suppress the unused generic blueprint's demands.
 
 use nestrs::{factory, injectable};
-use nestrs_core::{__private::REFLECTED_BINDINGS, ServiceKey, ServiceProvider};
+use nestrs_core::{ServiceKey, ServiceProvider};
 use std::marker::PhantomData;
 
 #[path = "../automatic_assertions.rs"]
@@ -64,7 +64,7 @@ fn indexed_repository() -> IndexedRepository<User> {
 #[tokio::main]
 async fn main() {
     let provider = ServiceProvider::build().await.unwrap();
-    assert_eq!(REFLECTED_BINDINGS.len(), 0);
+    assert_eq!(automatic_assertions::explicit_count(), 0);
     // A concrete producer may export its projection without creating a demand
     // from the generic blueprints superseded by these exact type/key factories.
     automatic_assertions::assert_count::<dyn Port>(1);

@@ -13,6 +13,9 @@ CLI 向编译器和 rust-analyzer 提供同一个私有声明桥接，复用 `ca
 首次编写服务时可先阅读[宏使用指南](docs/NESTRS_MACROS.md)，从完整程序开始了解
 服务声明、字段注入、工厂、接口选择和查询宏。
 
+维护容器实现时可从 [core 内部阅读指南](docs/NESTRS_CORE_INTERNALS.md) 进入图编译、
+协调器、实例所有权和关闭流程；对应源码包含中文职责说明与安全不变量注释。
+
 在安装匹配的 rustc 与 rustc-dev 后，从本仓库构建并使用工具：
 
 ```sh
@@ -74,7 +77,7 @@ cargo nestrs run --manifest-path cargo-nestrs/tests/fixtures/di/Cargo.toml --exa
 
 ## 声明与查询
 
-应用依赖 `nestrs-core` 和 Tokio，不需要直接依赖宏库或 linkme：
+应用依赖 `nestrs-core` 和 Tokio，不需要宏库或运行时注册收集库：
 
 ```rust
 use nestrs_core::{ServiceProvider, get_required_service};
@@ -196,7 +199,7 @@ let repository = nestrs_core::get_required_service!(provider, Repository<User>).
 
 当前链接单元中的所有查询根保守合并；未执行分支里的宏同样会贡献类型声明，Eager 会预热其中的 Singleton。它们不与某一个 provider 变量绑定。required/optional 仍是查询语义：一个没有 provider 的 required 查询不会仅因出现在源码中就导致 build panic，实际查询时才返回缺失错误；optional 查询返回 `None`。
 
-宏的服务类型必须是调用点能够独立命名的具体类型，不能引用外层泛型函数的 `T`、const 泛型参数或外层 `impl` 的 `Self` 来生成静态根。在 `impl Value` 的方法中应写 `Value` 或指向它的具体类型别名，而非 `Self`。容器构建完成后，不再读取 linkme 或物化新泛型。
+宏的服务类型必须是调用点能够独立命名的具体类型，不能引用外层泛型函数的 `T`、const 泛型参数或外层 `impl` 的 `Self` 来生成静态根。在 `impl Value` 的方法中应写 `Value` 或指向它的具体类型别名，而非 `Self`。容器构建完成后，不再读取注册清单或物化新泛型。
 
 构建入口在任何 constructor、factory、`Default`、`#[value]` 或 cleanup 执行前验证全部注册，包含 Lazy 模式下未使用的服务。缺失依赖、重复 concrete provider、重复/孤立 binding、trait 歧义、非法槽位、环和生命周期闭包冲突会立即 **panic**，诊断带类型、key、字段/参数及来源位置。多个 trait 候选必须恰有一个 `primary`；它不解决 concrete 重复，也不跨 key 选择。
 
@@ -232,8 +235,8 @@ Singleton/Scoped 初始化失败缓存至 owner 关闭，后续查询共享失�
 
 ## 工程边界和验证
 
-`nestrs-core` 承担 DI、图校验、Tokio 调度和唯一 linkme 宿主；CLI 负责私有声明桥接、
-自动绑定、Cargo 编排、编辑器模型与 HTML 页面。内部桥接不是用户依赖或独立发布的
+`nestrs-core` 承担 DI、图校验与 Tokio 调度；CLI 负责私有声明桥接、
+自动绑定、每入口注册清单生成、Cargo 编排、编辑器模型与 HTML 页面。内部桥接不是用户依赖或独立发布的
 API，代码生成只有一份。core 不依赖编译工具，应用运行时不链接工具实现。`zyn`
 保留为生成后端的编译期基础依赖；没有新增 runtime crate。
 `nestrs-bootstrap`、动态注册、运行期扩图及集合解析不在当前范围。

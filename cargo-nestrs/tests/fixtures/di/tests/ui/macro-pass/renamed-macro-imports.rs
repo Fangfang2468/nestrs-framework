@@ -19,6 +19,13 @@ fn configuration() -> Configuration {
     Configuration
 }
 
-fn main() {
-    assert_eq!(nestrs_core::__private::REFLECTED_PROVIDERS.len(), 3);
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let provider = nestrs_core::ServiceProvider::build().await.unwrap();
+    let consumer = nestrs_core::get_required_service!(provider, Consumer).await.unwrap();
+    let database = nestrs_core::get_required_service!(provider, Database).await.unwrap();
+    let _: &Configuration = nestrs_core::get_required_service!(provider, Configuration).await.unwrap();
+    assert_eq!(consumer.number, 7);
+    assert!(std::ptr::eq(&*consumer.database, database));
+    provider.dispose_async().await.unwrap();
 }

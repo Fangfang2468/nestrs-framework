@@ -1391,7 +1391,7 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 
 * Nestrs 以 DI 为根基。用户面向 `nestrs-core` 与 `cargo-nestrs`；`nestrs-tool-bridge`
   是工具包内部的 `publish = false` 构建工件，不是应用依赖或独立公开 API。
-* `nestrs-core` 是 DI 容器、linkme 宿主和所有运行期生态库的地基。
+* `nestrs-core` 是 DI 容器和所有运行期生态库的地基。
 * `cargo-nestrs` 是构建工具：Cargo CLI、编译器适配、声明生成、IDE 项目模型和 HTML 图。
   它不是 runtime crate，应用运行时不链接工具实现。
 * `cargo-nestrs/internal/bridge` 是标准 proc-macro 薄桥接，委托
@@ -1413,20 +1413,28 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 
 * core 不依赖 CLI、codegen、宏 crate 或 rustc 内部库。
 * 所有运行期生态库单向依赖 core，未来 bootstrap 位于其上；生态库不得反向依赖 bootstrap。
-* 编译期 codegen 位于 `cargo-nestrs/src/codegen`，只使用生成所需工具；生成代码
-  统一引用 `::nestrs_core::__private`。内部 token API 不是稳定用户 API。
+* 编译期 codegen 位于 `cargo-nestrs/src/codegen`，只使用生成所需工具；生成的 typed adapter
+  引用 core 实际所属私有模块。driver 按真实宏卫生来源与虚拟源码区间授权，普通业务
+  源码不能访问；不导出 `__private` 或换名后的公开内部 ABI 模块。
 * `Provider::{Class, Factory}` 生产实例；`TraitBinding` 只描述 concrete 到 trait
   的类型投影，不是 Provider，不创建另一份实例。
 
-## 3. linkme 与查询根
+## 3. 编译器注册清单与查询根
 
-* linkme 的唯一对外宿主为 `nestrs-core::__private::linkme`；用户不直接配置 linkme。
-* 生成的分布式注册固定引用该路径，不能改指向工具或其他运行时库。
+* 不依赖 linkme、inventory、链接段扫描或全局构造器。driver 在每个 binary/test
+  入口汇总本 crate 与依赖 metadata 中的真实描述回调，生成唯一版本化 registry 符号。
+  rlib 保留回调 MIR 与原生可达性分析要求的目标代码，不安装可变全局注册表、
+  不贡献重复的入口符号；私有 static/TLS/inline/generic 依赖必须保留，Rust 源码
+  可见性不提升。
+* registry MIR 只调用已验证签名、类型身份与生成来源的描述回调和 core 内部写入函数，
+  不执行用户 constructor/factory/Default/value/cleanup。业务 typed adapter 仍经过
+  标准类型、借用与 trait 检查；不通过任意 MIR 改写伪造投影或放宽业务可见性。
 * 查询宏由 core 导出，在具体类型调用处生成静态根；闭合泛型可提供描述回调，
   trait/factory-only 类型不被强加 ProviderDefinition 约束。
-* 全链接单元合并静态根，包括已编译但未执行的分支；类型不能捕获外层泛型/const
+* 完整入口合并静态根，包括已编译但未执行的分支；类型不能捕获外层泛型/const
   参数或 impl 的 Self。动态 key 求值一次，只选择冻结路由，不扩展图。
-* 内部跨 crate 桥接 ABI 隐藏导出供生成代码使用，不属于稳定公开 API。
+* core 拥有本次构图的 RegistrySnapshot。编译器入口 ABI 是内部符号协议，不是业务
+  可调用的 Rust API；driver 拒绝源码引用该入口，保留公开门面与真实 Injection 类型。
 
 ## 4. 工具私有桥接与标准宏展开
 
@@ -1453,13 +1461,13 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 * 候选限于声明 provider、factory 成功类型和已知闭合泛型，不注册任意 impl，
   不猜测泛型实参或枚举无限类型集合。
 * adapter 使用真实 Ty/DefId、归一化与 Unsize 求解检查投影，生成真实 typed coercion
-  再由 rustc 检查，不伪造 vtable、不延长借用、不绕过可见性。
+  再由 rustc 检查，不伪造 vtable、不延长借用、不绕过业务类型可见性。
 * 语义发现与最终生成使用两个完整编译阶段。FileLoader 只覆盖编译输入，原始源码
   不修改；生成产物保存在 target，最终编译再次检查缺失绑定。
 * type/key 显式 provider 优先于蓝图；key 精确匹配；primary 只解决同 key 的 trait
   多候选；optional 不能隐藏歧义、环或生命周期错误。
 * 上游注册、查询根和闭合蓝图通过编码 MIR 汇总。已知服务所属 crate 预生成合法的
-  自动投影能力到 `REFLECTED_AUTOMATIC_BINDINGS`，私有 concrete 不要求公开；
+  自动投影能力到编译器收集的自动 binding 描述清单，私有 concrete 不要求公开；
   不把潜在投影直接当成请求或显式注册。core 按实际根/依赖需求迭代启用目录、
   物化必要闭合类型，再验证和冻结图；未请求接口不触发歧义或泛型物化。
 * 自动 pair 在完整链接单元幂等，显式 pair 优先且重复显式 binding 仍报错。
@@ -1476,7 +1484,7 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 * build/build_with_options、create_scope、service_provider、warm_up 和消费 owner
   的 dispose_async 保留普通方法。引用绑定实际 root/scope owner 的借用期。
 * 任何服务构造前验证全部注册及可物化的闭合类型；结构错误在容器构建入口 panic，
-  成功后冻结图。之后不再读取 linkme、展开泛型或变更图。
+  成功后冻结图。之后不再读取注册清单、展开泛型或变更图。
 * 图编译、激活任务展开、失败传播和实例释放使用非递归算法。
 * Singleton 可以依赖 Transient，但整个激活闭包不得包含 Scoped；需要 Scoped 的
   Transient 只能从 scope 查询。factory 参数同样参与生命周期验证。
@@ -1526,6 +1534,11 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 
 ## 9. 工具链、IDE 与验证
 
+* nestrs-core 的测试实现统一放在 crate 根 tests/，内部单元测试位于 tests/unit/，
+  编译器生成契约位于 tests/compiler/。src/ 只保留生产代码及必要的 cfg(test)/path
+  模块挂载声明，不放测试文件或内联测试主体；不得为文件迁移增加公开内部 API。
+  具体目录与执行方式见 nestrs-core/tests/README.md。
+
 * pin 以 cargo-nestrs/toolchain.json 的 release、完整 commit 与支持的 host 为准。
   当前本机适配为 x86_64-unknown-linux-gnu 与 x86_64-pc-windows-msvc；driver、bridge
   和 sysroot 必须属于实际 host。不匹配时失败，不静默使用默认新编译器或退回源码扫描。
@@ -1539,9 +1552,15 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   构建单元复用，rustc incremental 当前关闭，不宣称已有完整增量事务协议。
 * 编译器和 rustdoc 同时获得 bridge 所在目录的 dependency 搜索路径，使没有直接
   core 依赖的下游也能解码上游 metadata。不能只给 producer 注入一个 extern 别名。
-* rustdoc 经 driver 注入同一 bridge 后转发给固定 sysroot 的真实 rustdoc；不使用
-  拒绝 shim，不静默跳过 doctest。独立 doctest 内新增服务的自动 trait 绑定不经过
-  两阶段 driver，不能把标准声明展开等同于新增接口自动注册。
+* doctest 先由 driver 以 cfg(doc) 检查真实源码和私有访问，再将 HIR 文档载体交给
+  固定 sysroot 的真实 rustdoc。每段示例独立经过完整 driver，包含新声明、自动
+  trait 绑定、闭合根和注册目录；不伪造业务类型、不静默跳过代码块。载体保留 crate
+  测试属性，rustdoc 管理代码块执行语义；bootstrap 不传播进示例编译。
+  仅间接依赖 core 的文档也走该流程，不能按直接 extern 是否存在而绕开 registry。
+  真实源码按原 crate type 检查；纯文档载体按 lib 读取，真实 extern 工件保持不变。
+  测试源与真实声明位置保留在 target 来源索引；复杂 impl self 类型不省略示例。
+  当前只支持测试入口；相对 include/字节读取映射回原 Rust 文档或 Markdown 目录，
+  含嵌套 include，读取继续参与两轮快照和私有路径审计，不在业务源码目录写临时文件。
 * `cargo nestrs init` 面向手动组装后接入 Nestrs 的现有 Rust 项目，初始化或刷新开发
   环境；默认生成通用 rust-analyzer 项目与设置，只有 `--vscode` 才写 VS Code 配置。
   init 不创建项目、不添加 Cargo 依赖、不安装编辑器或工具链组件；其他 rust-analyzer

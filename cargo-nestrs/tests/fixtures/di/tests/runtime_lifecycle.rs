@@ -1,4 +1,4 @@
-//! 真正经过 linkme、图编译和 Tokio 调度的门面回归。
+//! 真正经过编译器注册清单、图编译和 Tokio 调度的门面回归。
 use nestrs::{factory, injectable, primary};
 use nestrs_core::{InitializationMode, ServiceKey, ServiceProvider, ServiceProviderOptions};
 

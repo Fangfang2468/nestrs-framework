@@ -1,5 +1,7 @@
 use crate::service::{ServiceKey, ServiceType};
 
+/// 类型与 key 共同组成的精确查询身份。
+/// None 表示未指定 key，不能回退到任意命名或编号注册。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ServiceIdentifier {
     /// 服务的 Key

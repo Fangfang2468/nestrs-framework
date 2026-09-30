@@ -1,6 +1,6 @@
 //! `#[injectable]` 的注册作用域组装。
 //!
-//! 构造 adapter 与 linkme provider factory 必须共享同一个匿名 `const` 的词法作用域：
+//! 构造 adapter 与 描述 provider factory 必须共享同一个匿名 `const` 的词法作用域：
 //! provider 需要保存 adapter 的函数指针，而 adapter 又不能作为结构体的公开成员
 //! 暴露给使用者。这个 element 仅承担该作用域关系，调用方通过 children 明确提供
 //! 需要同域生成的节点。

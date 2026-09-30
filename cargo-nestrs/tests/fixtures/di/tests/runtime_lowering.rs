@@ -1,6 +1,6 @@
 //! Expansion-order and source-context regressions for the shared declaration frontend.
 use nestrs::injectable;
-use nestrs_core::{__private::Injection, ServiceProvider, get_required_service};
+use nestrs_core::{Injection, ServiceProvider, get_required_service};
 
 use std::sync::atomic::Ordering;
 

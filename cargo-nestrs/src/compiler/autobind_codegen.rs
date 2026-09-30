@@ -54,16 +54,15 @@ fn blueprint_source(blueprint: &BlueprintSpec) -> String {
     if let Some(slots) = &blueprint.path {
         let mut path = String::from("()");
         for slot in slots.iter().rev() {
-            path = format!("(::nestrs_core::__private::DependencySlot<{slot}>, {path})");
+            path = format!("(::nestrs_core::registration::root::DependencySlot<{slot}>, {path})");
         }
         return format!(
             r#"const _: () = {{
-    #[::nestrs_core::__private::linkme::distributed_slice(::nestrs_core::__private::REFLECTED_BLUEPRINTS)]
-    #[linkme(crate = ::nestrs_core::__private::linkme)]
-    fn __nestrs_reflect_blueprint_path() -> ::nestrs_core::__private::RootDeclaration {{
-        ::nestrs_core::__private::compiler_blueprint_path::<{service}, {path}>();
-        let mut declaration = (<{service} as ::nestrs_core::__private::DependencyPath<{path}>>::BLUEPRINT)();
-        declaration.source = ::nestrs_core::__private::ServiceSource::new({source_file}, {source_line}, {source_column});
+        #[allow(dead_code)]
+    fn __nestrs_reflect_blueprint_path() -> ::nestrs_core::registration::root::RootDeclaration {{
+        ::nestrs_core::registration::compiler::compiler_blueprint_path::<{service}, {path}>();
+        let mut declaration = (<{service} as ::nestrs_core::registration::root::DependencyPath<{path}>>::BLUEPRINT)();
+        declaration.source = ::nestrs_core::service::ServiceSource::new({source_file}, {source_line}, {source_column});
         declaration
     }}
 }};
@@ -72,14 +71,13 @@ fn blueprint_source(blueprint: &BlueprintSpec) -> String {
     }
     format!(
         r#"const _: () = {{
-    #[::nestrs_core::__private::linkme::distributed_slice(::nestrs_core::__private::REFLECTED_BLUEPRINTS)]
-    #[linkme(crate = ::nestrs_core::__private::linkme)]
-    fn __nestrs_reflect_blueprint() -> ::nestrs_core::__private::RootDeclaration {{
-        ::nestrs_core::__private::compiler_blueprint::<{service}>();
-        ::nestrs_core::__private::RootDeclaration {{
-            service_type: ::nestrs_core::__private::ServiceType::create::<{service}>(),
-            materialize: Some(::nestrs_core::__private::provider_definition::<{service}>),
-            source: ::nestrs_core::__private::ServiceSource::new({source_file}, {source_line}, {source_column}),
+        #[allow(dead_code)]
+    fn __nestrs_reflect_blueprint() -> ::nestrs_core::registration::root::RootDeclaration {{
+        ::nestrs_core::registration::compiler::compiler_blueprint::<{service}>();
+        ::nestrs_core::registration::root::RootDeclaration {{
+            service_type: ::nestrs_core::service::ServiceType::create::<{service}>(),
+            materialize: Some(::nestrs_core::registration::provider::provider_definition::<{service}>),
+            source: ::nestrs_core::service::ServiceSource::new({source_file}, {source_line}, {source_column}),
         }}
     }}
 }};
@@ -111,38 +109,33 @@ const _: () = {{
         let projected: &__NestrsBoundInterface = service;
         projected
     }}
-
-    #[::nestrs_core::__private::linkme::distributed_slice(
-        ::nestrs_core::__private::REFLECTED_AUTOMATIC_BINDINGS
-    )]
-    #[linkme(crate = ::nestrs_core::__private::linkme)]
+        #[allow(dead_code)]
     #[allow(clippy::needless_borrow)]
-    fn __nestrs_reflect_automatic_binding() -> ::nestrs_core::__private::TraitBinding {{
-        ::nestrs_core::__private::compiler_automatic_binding::<{concrete}, __NestrsBoundInterface>();
-        use ::nestrs_core::__private::ProbeProvider as _;
-        let __nestrs_probe = ::nestrs_core::__private::Probe::<{concrete}>::new();
-        ::nestrs_core::__private::TraitBinding {{
-            trait_type: ::nestrs_core::__private::ServiceType::create::<__NestrsBoundInterface>(),
-            concrete_type: ::nestrs_core::__private::ServiceType::create::<{concrete}>(),
+    fn __nestrs_reflect_automatic_binding() -> ::nestrs_core::registration::binding::TraitBinding {{
+        ::nestrs_core::registration::compiler::compiler_automatic_binding::<{concrete}, __NestrsBoundInterface>();
+        use ::nestrs_core::registration::root::ProbeProvider as _;
+        let __nestrs_probe = ::nestrs_core::registration::root::Probe::<{concrete}>::new();
+        ::nestrs_core::registration::binding::TraitBinding {{
+            trait_type: ::nestrs_core::service::ServiceType::create::<__NestrsBoundInterface>(),
+            concrete_type: ::nestrs_core::service::ServiceType::create::<{concrete}>(),
             materialize: (&&__nestrs_probe).provider_callback(),
-            key_policy: ::nestrs_core::__private::BoundKeyPolicy::InheritRequestedKey,
             prepare_required: (|
-                slot: ::nestrs_core::__private::InputSlot,
-                input: ::core::option::Option<::nestrs_core::__private::ErasedServiceRef>,
+                slot: ::nestrs_core::activation::InputSlot,
+                input: ::core::option::Option<::nestrs_core::activation::ErasedServiceRef>,
             | {{
-                ::nestrs_core::__private::prepare_bound_required::<
+                ::nestrs_core::activation::prepare_bound_required::<
                     {concrete}, __NestrsBoundInterface,
                 >(slot, input, __nestrs_project_bound_service)
-            }}) as ::nestrs_core::__private::InputPreparer,
+            }}) as ::nestrs_core::activation::InputPreparer,
             prepare_optional: (|
-                slot: ::nestrs_core::__private::InputSlot,
-                input: ::core::option::Option<::nestrs_core::__private::ErasedServiceRef>,
+                slot: ::nestrs_core::activation::InputSlot,
+                input: ::core::option::Option<::nestrs_core::activation::ErasedServiceRef>,
             | {{
-                ::nestrs_core::__private::prepare_bound_optional::<
+                ::nestrs_core::activation::prepare_bound_optional::<
                     {concrete}, __NestrsBoundInterface,
                 >(slot, input, __nestrs_project_bound_service)
-            }}) as ::nestrs_core::__private::InputPreparer,
-            source: ::nestrs_core::__private::ServiceSource::new(
+            }}) as ::nestrs_core::activation::InputPreparer,
+            source: ::nestrs_core::service::ServiceSource::new(
                 {source_file}, {source_line}, {source_column},
             ),
         }}
@@ -165,6 +158,7 @@ struct Overlay {
 pub struct OverlayFileLoader {
     files: BTreeMap<PathBuf, Overlay>,
     real: RealFileLoader,
+    pub trusted_ranges: Vec<(PathBuf, usize, usize)>,
 }
 
 impl OverlayFileLoader {
@@ -183,6 +177,7 @@ impl OverlayFileLoader {
 
         // Validate every file and location before writing any artifacts.
         let mut prepared = Vec::new();
+        let mut trusted_ranges = Vec::new();
         for (path, mut insertions) in grouped {
             let original = fs::read_to_string(&path)?;
             for insertion in &insertions {
@@ -223,6 +218,7 @@ impl OverlayFileLoader {
                     .map(binding_source)
                     .chain(insertion.blueprints.iter().map(blueprint_source))
                 {
+                    let start = replacement.len();
                     generated.push_str(&source);
                     generated.push('\n');
 
@@ -234,6 +230,7 @@ impl OverlayFileLoader {
                         replacement.push_str(line.trim());
                         replacement.push(' ');
                     }
+                    trusted_ranges.push((path.clone(), start, replacement.len()));
                 }
             }
             replacement.push_str(&original[previous..]);
@@ -264,10 +261,13 @@ impl OverlayFileLoader {
         Ok(Self {
             files,
             real: RealFileLoader,
+            trusted_ranges,
         })
     }
 
     fn overlay(&self, path: &Path) -> io::Result<Option<&Overlay>> {
+        let path = crate::documentation::remap_source_path(path);
+        let path = path.as_path();
         let Ok(canonical) = path.canonicalize() else {
             return Ok(None);
         };
@@ -284,10 +284,13 @@ impl OverlayFileLoader {
 
 impl FileLoader for OverlayFileLoader {
     fn file_exists(&self, path: &Path) -> bool {
-        self.real.file_exists(path)
+        self.real
+            .file_exists(&crate::documentation::remap_source_path(path))
     }
 
     fn read_file(&self, path: &Path) -> io::Result<String> {
+        let path = crate::documentation::remap_source_path(path);
+        let path = path.as_path();
         match self.overlay(path)? {
             Some(overlay) => Ok(overlay.replacement.clone()),
             None => self.real.read_file(path),
@@ -297,7 +300,8 @@ impl FileLoader for OverlayFileLoader {
     fn read_binary_file(&self, path: &Path) -> io::Result<Arc<[u8]>> {
         // include_bytes! observes the user's actual asset bytes, even when the
         // same path is a Rust source file being compiled with an overlay.
-        self.real.read_binary_file(path)
+        self.real
+            .read_binary_file(&crate::documentation::remap_source_path(path))
     }
 
     fn current_directory(&self) -> io::Result<PathBuf> {
@@ -394,22 +398,20 @@ mod tests {
                 _ => None,
             })
             .expect("automatic capability callback should exist");
-        let registration = callback
-            .attrs
-            .iter()
-            .find(|attribute| {
-                attribute
-                    .path()
-                    .segments
-                    .last()
-                    .is_some_and(|segment| segment.ident == "distributed_slice")
-            })
-            .expect("callback must enter a distributed registration slice");
-        let slice: syn::Path = registration.parse_args().unwrap();
-        assert_eq!(
-            slice.segments.last().unwrap().ident,
-            "REFLECTED_AUTOMATIC_BINDINGS"
-        );
+        assert!(callback.attrs.iter().all(|attribute| {
+            !attribute
+                .path()
+                .segments
+                .iter()
+                .any(|segment| segment.ident == "distributed_slice")
+        }));
+        let syn::ReturnType::Type(_, output) = &callback.sig.output else {
+            panic!("the compiler catalog callback must return a typed binding");
+        };
+        let syn::Type::Path(output) = &**output else {
+            panic!("typed binding path");
+        };
+        assert_eq!(output.path.segments.last().unwrap().ident, "TraitBinding");
 
         let Stmt::Expr(Expr::Call(marker), _) = &callback.block.stmts[0] else {
             panic!("callback must retain a type-bearing capability marker");

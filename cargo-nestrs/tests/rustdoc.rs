@@ -1,4 +1,4 @@
-//! The CLI supplies its private bridge to real rustdoc and executable doctests.
+//! The CLI uses real rustdoc semantics and the driver for executable doctests.
 #![cfg(feature = "compiler-driver")]
 
 use std::{
@@ -59,10 +59,19 @@ fn run_examples(doc_only: bool) {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stdout}\n{stderr}");
     assert!(
-        stdout.contains("3 passed; 0 failed; 0 ignored"),
+        stdout.contains("12 passed; 0 failed; 1 ignored"),
         "{stdout}\n{stderr}"
     );
-    for marker in ["library", "declarations", "generics"] {
+    for marker in [
+        "library",
+        "declarations",
+        "generics",
+        "method",
+        "trait-method",
+        "complex-impl",
+        "included",
+        "doc-cfg",
+    ] {
         assert_eq!(
             fs::read_to_string(records.join(marker)).unwrap(),
             "passed",

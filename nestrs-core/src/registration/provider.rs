@@ -1,11 +1,9 @@
-//! 宏生成的 provider 注册 ABI。
+//! 生成代码提供的 Provider 声明与构造入口。
 //!
 //! Provider 只描述声明和构造 adapter；选择 provider、执行 factory、保存实例和生命周期
 //! 语义由 graph 编译器和 runtime 协调器实现。
 
 use std::{future::Future, pin::Pin};
-
-use linkme::distributed_slice;
 
 use crate::{
     activation::{AsyncConstructor, ClassConstructor, FactoryConstructor},
@@ -14,10 +12,10 @@ use crate::{
     service::{Injectable, ServiceIdentifier, ServiceSource},
 };
 
-/// cleanup hook 的 owning future。
+/// cleanup hook 返回的独立 future，不借用已关闭 owner 的临时上下文。
 pub type CleanupFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
-/// Provider 元数据携带的 cleanup hook。
+/// Provider 声明携带的 cleanup hook；每个成功发布的实际实例在关闭时调用一次。
 pub type CleanupHook = fn() -> CleanupFuture;
 
 /// 同步或异步 factory adapter 的函数指针。
@@ -27,7 +25,8 @@ pub enum FactoryInvoker {
     Async(AsyncConstructor),
 }
 
-/// 所有可激活 provider 共享的声明属性。
+/// 所有可激活 Provider 共享的声明属性。primary 只用于 trait 候选选择，不能覆盖
+/// 同 concrete/key 的重复注册；cleanup 由运行期按成功实例执行，图编译不调用它。
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderCommon {
     pub lifetime: ServiceLifetime,
@@ -56,7 +55,8 @@ where
     S::provider()
 }
 
-/// injectable 宏注册的 class provider。
+/// injectable 声明的 class Provider。字段依赖描述与构造 adapter 分开保存，图编译
+/// 只检查 dependencies，构造时才调用 constructor 准备真实字段值。
 #[derive(Debug, Clone)]
 pub struct ClassProvider {
     pub provide: ServiceIdentifier,
@@ -65,7 +65,8 @@ pub struct ClassProvider {
     pub constructor: ClassConstructor,
 }
 
-/// factory 宏注册的 factory provider。
+/// factory 声明的 Provider。函数参数同样作为显式依赖输入进入图；异步工厂与同步
+/// 工厂共享图规则，区别仅保留在调用 adapter 上。
 #[derive(Debug, Clone)]
 pub struct FactoryProvider {
     pub provide: ServiceIdentifier,
@@ -80,10 +81,3 @@ pub enum Provider {
     Class(ClassProvider),
     Factory(FactoryProvider),
 }
-
-/// 当前链接单元内由宏声明的 provider。
-///
-/// 函数项允许每个 crate 向 linkme 分布式切片提交包含 Vec 的元数据，而无需让应用
-/// crate 直接依赖 linkme。
-#[distributed_slice]
-pub static REFLECTED_PROVIDERS: [fn() -> Provider] = [..];

@@ -1,7 +1,9 @@
-//! Supported query API: each macro contributes static type information before forwarding its
-//! runtime operation. The static declaration never evaluates the provider or key expression.
+//! 面向业务的查询宏：先贡献静态类型声明，再转发运行时查询。
+//!
+//! 描述回调只记录类型，不求值 provider 或 key 表达式；运行时部分各求值一次。
+//! 编译器会汇总所有有效调用点，因此查询所在分支尚未执行时，其闭合根也已进入图。
 
-/// 获取默认 key 的必选服务。类型信息在编译和链接时进入静态图声明。
+/// 获取默认 key 的必选服务。编译器将类型信息汇总到最终入口的静态图声明。
 ///
 /// ```ignore
 /// let service = nestrs_core::get_required_service!(provider, Repository<User>).await?;
@@ -66,31 +68,30 @@ macro_rules! get_keyed_service {
     };
 }
 
-/// Shared expansion implementation; not part of the supported application API.
+/// 四个查询宏共用的展开实现，不属于稳定的业务查询接口。
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __nestrs_query {
     ($operation:ident, $provider:expr, $service:ty, $key:expr) => {{
-        #[$crate::__private::linkme::distributed_slice($crate::__private::REFLECTED_ROOTS)]
-        #[linkme(crate = $crate::__private::linkme)]
-        // The extra receiver reference deliberately selects the bounded implementation first.
+        #[allow(dead_code)]
+        // 双重借用用于优先选择具备 ProviderDefinition 约束的探测实现。
         #[allow(clippy::needless_borrow)]
-        fn __nestrs_query_root() -> $crate::__private::RootDeclaration {
-            $crate::__private::compiler_request::<$service>();
-            use $crate::__private::ProbeProvider as _;
-            // Keep this lookup at the concrete expansion site. A generic helper would choose
-            // its fallback during generic type checking and would not re-specialize later.
-            let __nestrs_probe = $crate::__private::Probe::<$service>::new();
-            $crate::__private::RootDeclaration {
-                service_type: $crate::__private::ServiceType::create::<$service>(),
+        fn __nestrs_query_root() -> $crate::registration::root::RootDeclaration {
+            $crate::registration::compiler::compiler_request::<$service>();
+            use $crate::registration::root::ProbeProvider as _;
+            // 必须在具体类型的展开点完成探测。若移入普通泛型 helper，Rust 会在
+            // 检查泛型函数时固定选择 fallback，之后不会随闭合实参重新选择实现。
+            let __nestrs_probe = $crate::registration::root::Probe::<$service>::new();
+            $crate::registration::root::RootDeclaration {
+                service_type: $crate::service::ServiceType::create::<$service>(),
                 materialize: (&&__nestrs_probe).provider_callback(),
-                source: $crate::__private::ServiceSource::new(file!(), line!(), column!()),
+                source: $crate::service::ServiceSource::new(file!(), line!(), column!()),
             }
         }
-        use $crate::__private::QueryTarget as _;
-        // Resolve the view before constructing the future: its lifetime comes from the owner,
-        // not the temporary receiver reference used to normalize this expression.
+        use $crate::facade::QueryTarget as _;
+        // 先取得 owner 的借用视图，再创建 future；结果不能借用仅为接收者归一化
+        // 而产生的临时引用，否则链式 service_provider() 查询会得到过短的借用期。
         let __nestrs_view = (&($provider)).__nestrs_query_view();
-        $crate::__private::$operation::<$service>(__nestrs_view, $key)
+        $crate::facade::$operation::<$service>(__nestrs_view, $key)
     }};
 }

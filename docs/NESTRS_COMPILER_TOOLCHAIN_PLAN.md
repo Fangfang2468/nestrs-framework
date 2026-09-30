@@ -35,7 +35,7 @@ rustdoc 和原版 rust-analyzer 都使用该桥接，但只有 Nestrs driver 执
 
 | 位置 | 职责 |
 | --- | --- |
-| `nestrs-core` | Provider/Binding 描述、唯一 linkme 宿主、图验证与冻结、lease、Tokio 调度与关闭、只读图数据 |
+| `nestrs-core` | Provider/Binding 描述、编译器清单消费、图验证与冻结、lease、Tokio 调度与关闭、只读图数据 |
 | `cargo-nestrs/internal/bridge` | `publish = false` 的 `nestrs-tool-bridge` package，提供标准 proc-macro 入口供工具注入 |
 | `cargo-nestrs/src/codegen` | 属性参数与字段分析、类型/签名改写、constructor/factory/cleanup adapter、ProviderDefinition 与注册生成 |
 | `cargo-nestrs/src/compiler` | 固定 rustc 接入、语义发现、trait 求解、合法模块生成及最终编译核查 |
@@ -121,9 +121,10 @@ OUT_DIR。不能准确关联依赖时明确失败，不生成缺少依赖的项�
 错误诊断及恢复，以及 feature、宏生成声明和 build.rs 的 cfg/env/include。
 CLI 不关闭诊断；这些验证不代表所有编辑器 UI、重命名操作和任意属性组合均已验收。
 
-CLI 的 rustdoc 包装入口加入 bridge 与依赖搜索路径，再调用固定 sysroot 的真实
-rustdoc，保留退出码和诊断。声明、concrete 查询、泛型及 factory 借用已有实际
-文档测试覆盖；独立 doctest 新增的自动 trait 绑定不经过两阶段 driver，仍是边界。
+CLI 的 rustdoc 入口先由 driver 检查真实文档源码，再交给固定 sysroot 的真实
+rustdoc 发现与运行示例。每个独立 doctest 都经过完整 driver，支持新声明、自动
+trait 绑定、闭合泛型和 factory 借用；相对 include 保留原文档目录。
+最新实现和验收见 [编译器注册清单迁移验收](NESTRS_COMPILER_REGISTRY_VALIDATION.md)。
 
 ## 6. 图与 HTML
 
@@ -134,10 +135,12 @@ CLI 复用真实 binary 的链接集合，通过编译器生成的诊断入口�
 HTML 和文件输出已从 core 移入 CLI。core 保留只读 JSON 与图验证，不再保留
 `graph_output`、`graph_output_path()` 和 `BuildError::GraphExport`。
 默认输出 Cargo target 下的 `nestrs-di.html`；页面继续支持搜索、缩放、关系和
-槽位详情，不表示运行时实例状态。失败时不替换已有 HTML。
+槽位详情，不表示运行时实例状态。显式单入口失败不替换已有 HTML；项目总览保留
+各入口的成功、错误和跳过结果，输出报告后如有错误则以非零退出。
 
-当前仅支持固定 host 可运行、直接依赖 core 且源码中有标准 main 的单个 binary，
-包括 `#[tokio::main]`。无直接 core、`no_main` 及 cfg_attr 引入的 `no_main` 明确
+当前每个图入口限于固定 host 可运行、直接依赖 core 且源码中有标准 main 的 binary，
+包括 `#[tokio::main]`。省略 --bin 时汇总所选 package 的全部 binary，--workspace
+生成项目总览，各入口的图独立。无直接 core、`no_main` 及 cfg_attr 引入的 `no_main` 明确
 拒绝。宏生成 main、lib/test/example 图目标及交叉 target 执行需要独立实现和验证，
 不能用只链接 lib 的替代程序代表所有目标的完整图。
 
@@ -170,7 +173,8 @@ script 不在这份文本快照的事务保证之内，不能将当前缓存表�
 | --- | --- |
 | rustc 语义与自动绑定 | 两次完整编译、typed projection 和实际 DI 运行已形成闭环 |
 | 声明后端与前端 | codegen 唯一实现位于 CLI，标准 proc-macro bridge 为工具内部工件 |
-| Cargo、文档与 HTML | check/build/run/test、真实 rustdoc 转发和 binary 图诊断已实现 |
+| Cargo、文档与 HTML | check/build/run/test、完整 driver doctest 和多 binary 项目图诊断已实现 |
+| 编译器注册清单 | 已移除 linkme 与公开 __private，汇总本地/上游描述，保留真实私有边界 |
 | 有限外部泛型 | 编码 MIR、公开重导出、key、上游绑定复用及下游 metadata 加载已验证 |
 | 跨 crate DI | 上游需求汇总、私有实现能力目录、兄弟 crate 自动 pair 合并和有限闭合泛型 |
 | 编辑器 | 原版 rust-analyzer 项目模型、保存检查及实际 LSP 交互已验证 |
@@ -197,8 +201,9 @@ python3 tools/compiler-probe/verify_autobind.py
 ```
 
 独立 DI fixture 保留 52 个旧 UI 语义用例，加 3 个误用和 1 个导入成功用例，以及
-字段与工厂参数拒绝命名注入 key 的 2 个用例，当前共 58 个。
-这些用例与实际 linkme/图/实例化/关闭回归均通过工具提供的 bridge。不得批量更新
+字段与工厂参数拒绝命名注入 key 的 2 个用例，以及 core 根部无内部导出的负例，
+本轮验收共 59 个。
+这些用例与实际注册清单/图/实例化/关闭回归均通过工具提供的 bridge。不得批量更新
 旧 stderr 来掩盖错误语义改变。
 
 后续验收应分别覆盖：
@@ -208,7 +213,7 @@ python3 tools/compiler-probe/verify_autobind.py
 - 更多 build.rs 外部输入、feature/target/profile 组合与增量失效规则。
 - lib/test/example 等独立链接集合的图导出。
 - 编辑器完整引用重命名、更多客户端 UI 和其他 host 的 LSP 体验。
-- doctest 内独立自动绑定、应用级 Clippy 和跨 target 诊断入口 runner。
+- 应用级 Clippy 和跨 target 诊断入口 runner。
 
 ## 9. 历史记录
 

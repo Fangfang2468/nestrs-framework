@@ -1,7 +1,7 @@
 //! An explicit closed binding is a graph root even if never queried.
 
 use nestrs::{bind, injectable};
-use nestrs_core::{__private::REFLECTED_BINDINGS, ServiceProvider};
+use nestrs_core::{ServiceProvider};
 use std::marker::PhantomData;
 
 #[path = "../automatic_assertions.rs"]
@@ -36,7 +36,7 @@ async fn main() {
     // the closed generic, so only correct binding-root discovery can supply
     // the DependencyPort demand for automatic binding.
     let provider = ServiceProvider::build().await.unwrap();
-    assert_eq!(REFLECTED_BINDINGS.len(), 1);
+    assert_eq!(automatic_assertions::explicit_count(), 1);
     automatic_assertions::assert_count::<dyn DependencyPort>(1);
     automatic_assertions::assert_count::<dyn UnqueriedPort>(0);
     provider.dispose_async().await.unwrap();
