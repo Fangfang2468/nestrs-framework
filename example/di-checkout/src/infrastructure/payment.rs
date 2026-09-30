@@ -1,30 +1,15 @@
 use nestrs::factory;
 use std::{
-    future::Future,
-    pin::Pin,
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
 
 use thiserror::Error;
 
-use crate::domain::CheckoutError;
-
-use super::AppConfig;
-
-type ChargeFuture<'request> =
-    Pin<Box<dyn Future<Output = Result<String, CheckoutError>> + Send + 'request>>;
-
-/// 两个静态 key 对应同一个 concrete 类型，调用方按用户选择使用各自的实例。
-pub trait PaymentGateway: Send + Sync {
-    fn channel(&self) -> &'static str;
-    fn id(&self) -> usize;
-    fn charge<'request>(
-        &'request self,
-        total_cents: u64,
-        token: &'request str,
-    ) -> ChargeFuture<'request>;
-}
+use crate::{
+    config::AppConfig,
+    domain::{ChargeFuture, CheckoutError, PaymentGateway},
+};
 
 struct PaymentClient {
     id: usize,
@@ -38,6 +23,7 @@ impl PaymentGateway for PaymentClient {
     fn channel(&self) -> &'static str {
         self.channel
     }
+    #[cfg(test)]
     fn id(&self) -> usize {
         self.id
     }

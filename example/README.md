@@ -14,7 +14,7 @@ workspace 的成员复用框架依赖和工具链。
 在仓库根目录执行：
 
 ```bash
-cargo nestrs run -p nestrs-di-example
+cargo nestrs run -p nestrs-di-example -- sample
 cargo nestrs graph -p nestrs-di-example
 ```
 
@@ -22,12 +22,14 @@ cargo nestrs graph -p nestrs-di-example
 
 ```bash
 cd example/di-checkout
-cargo nestrs run
+cargo nestrs run -- sample
 cargo nestrs graph
-cargo nestrs test --tests
+cargo nestrs test --all-targets
 ```
 
-`di-checkout` 只提供正常的 `checkout` 程序入口。项目图导出在图校验和文件写入成功时
+`di-checkout` 是单 binary 应用，`main.rs` 直接组织私有业务模块，不额外导出应用库。
+`sample` 运行四个业务场景；`place-order` 接收真实下单参数；无子命令时显示帮助。
+它只提供正常的 `checkout` 程序入口。项目图导出在图校验和文件写入成功时
 返回退出码 `0`，默认写入 workspace 的 `target/nestrs-di.html`；不会因为框架负例而失败。
 进入 `example/` 父目录不会自动选择某个示例，应进入子目录或使用 `-p` 指定 package。
 
@@ -41,7 +43,8 @@ cargo nestrs test --tests
 - 在 `example/<场景名>/` 下建立一个项目，目录名描述业务场景，不直接把源码放进 `example/`。
 - 为项目设置唯一的 Cargo package 名称，并在仓库根 `Cargo.toml` 的 workspace members 中登记。
 - 以可运行的正常业务流程展示框架能力；在项目 README 中说明运行命令、预期结果、模拟资源和阅读顺序。
-- 业务与流程回归放在示例自己的 `tests/`。故意违反 DI 声明或生命周期规则的用例放在
+- 业务与生命周期回归可放在应用内部的 `#[cfg(test)]` 模块；进程边界测试放在示例自己的
+  `tests/`。不必为了访问内部代码而创建应用 library。故意违反 DI 声明或生命周期规则的用例放在
   `cargo-nestrs/tests/fixtures/`，由工具回归测试驱动，避免正常示例的默认运行与图导出失败。
 - 在本索引中加入目录、package 名称与场景说明；示例中引用仓库 crate 的 path 相对于自己的 `Cargo.toml` 计算。
 

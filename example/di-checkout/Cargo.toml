@@ -8,6 +8,7 @@ default-run = "checkout"
 description = "用电商下单演示 Nestrs 静态依赖图与异步 DI 生命周期"
 
 [dependencies]
+clap = { workspace = true }
 nestrs-core = { path = "../../nestrs-core" }
 tokio = { workspace = true }
 thiserror = { workspace = true }

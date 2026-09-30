@@ -20,7 +20,7 @@ fn initial_products() -> Mutex<BTreeMap<String, Stock>> {
 
 /// 跨请求共享的库存。预留在短临界区内完成，支付等待期间不持有 Mutex。
 #[injectable]
-pub struct Inventory {
+pub(crate) struct Inventory {
     #[value(initial_products())]
     products: Mutex<BTreeMap<String, Stock>>,
     #[value(crate::observe::created("Inventory"))]
@@ -28,11 +28,7 @@ pub struct Inventory {
 }
 
 impl Inventory {
-    pub fn id(&self) -> usize {
-        self.id
-    }
-
-    pub fn remaining(&self, sku: &str) -> Option<u32> {
+    pub(crate) fn remaining(&self, sku: &str) -> Option<u32> {
         self.products
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -80,7 +76,10 @@ impl Inventory {
             committed: false,
         };
         // From here on even a panic while recording the event has a rollback guard.
-        crate::observe::event(format!("业务库存预留 {sku} × {quantity}"));
+        crate::observe::event(format!(
+            "业务库存预留 {sku} × {quantity}（库存 #{}）",
+            self.id
+        ));
         Ok(reservation)
     }
 }

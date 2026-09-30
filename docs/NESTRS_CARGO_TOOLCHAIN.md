@@ -81,7 +81,7 @@ export PATH="$PWD/target/debug:$PATH"
 cargo nestrs doctor
 cargo nestrs init
 cargo nestrs check -p nestrs-di-example --all-targets
-cargo nestrs run -p nestrs-di-example -- --eager --warm-up-scopes
+cargo nestrs run -p nestrs-di-example -- sample --eager --warm-up-scopes
 cargo nestrs test -p nestrs-di-example
 cargo nestrs graph -p nestrs-di-example
 ```
@@ -97,7 +97,7 @@ $env:PATH = "$PWD\target\debug;$env:PATH"
 cargo nestrs doctor
 cargo nestrs init
 cargo nestrs check -p nestrs-di-example --all-targets
-cargo nestrs run -p nestrs-di-example -- --eager --warm-up-scopes
+cargo nestrs run -p nestrs-di-example -- sample --eager --warm-up-scopes
 cargo nestrs graph -p nestrs-di-example
 ```
 

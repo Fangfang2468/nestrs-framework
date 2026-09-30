@@ -1,15 +1,16 @@
 //! 使用真实宏注册与业务服务，覆盖两种初始化模式下同一套下单和生命周期契约。
 
+use crate::{
+    checkout::{CheckoutService, ReceiptFormatter, RequestContext},
+    domain::{
+        AuditEvent, CheckoutError, CheckoutRequest, FraudCheck, Order, OrderStore, PaymentGateway,
+        PaymentMethod,
+    },
+    infrastructure::{Database, Inventory, Repository},
+};
 use nestrs_core::{
     InitializationMode, ServiceKey, ServiceProvider, ServiceProviderOptions, get_keyed_service,
     get_required_keyed_service, get_required_service, get_service,
-};
-use nestrs_di_example::{
-    domain::{AuditEvent, CheckoutError, CheckoutRequest, Order, PaymentMethod},
-    services::{
-        CheckoutService, Database, FraudCheck, Inventory, OrderStore, PaymentGateway,
-        ReceiptFormatter, Repository,
-    },
 };
 
 fn request(customer: &str, sku: &str, quantity: u32, payment: PaymentMethod) -> CheckoutRequest {
@@ -58,11 +59,15 @@ async fn exercise_checkout(initialization: InitializationMode) {
         .await
         .unwrap();
     assert!(std::ptr::eq(first, first_again));
+    let context = get_required_service!(first_scope.service_provider(), RequestContext)
+        .await
+        .unwrap();
+    assert_eq!(context.id(), first.context_id());
     assert_ne!(first.context_id(), second.context_id());
     assert_eq!(first.store_id(), second.store_id());
     assert_eq!(first.database_id(), second.database_id());
-    assert_eq!(first.formatter_id(), first_again.formatter_id());
-    assert_ne!(first.formatter_id(), second.formatter_id());
+    assert_eq!(first.formatter_id(), first_again.formatter_id(),);
+    assert_ne!(first.formatter_id(), second.formatter_id(),);
     assert!(get_service!(provider, CheckoutService).await.is_err());
 
     let store = get_required_service!(provider, dyn OrderStore)
@@ -223,4 +228,57 @@ async fn lazy_checkout_preserves_business_and_di_contracts() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn eager_checkout_preserves_business_and_di_contracts() {
     exercise_checkout(InitializationMode::Eager).await;
+}
+
+#[tokio::test]
+async fn request_boundary_audits_actual_outcomes_and_preserves_shared_state() {
+    let provider = ServiceProvider::build().await.unwrap();
+    let success = crate::application::handle_checkout(
+        &provider,
+        request("AuditCustomer", "KEYBOARD", 1, PaymentMethod::Wallet),
+        true,
+    )
+    .await
+    .unwrap();
+    assert!(success.result.unwrap().contains("AuditCustomer"));
+    let mut declined = request("RejectedCustomer", "KEYBOARD", 2, PaymentMethod::Card);
+    declined.payment_token = "declined".into();
+    let failure = crate::application::handle_checkout(&provider, declined, false)
+        .await
+        .unwrap();
+    assert!(matches!(
+        failure.result,
+        Err(CheckoutError::PaymentDeclined)
+    ));
+    let audit = get_required_service!(provider, Repository<AuditEvent>)
+        .await
+        .unwrap();
+    let entries = audit.all();
+    assert_eq!(entries.len(), 2);
+    assert!(
+        entries[0]
+            .message
+            .contains("客户 AuditCustomer 下单成功：ORD-")
+    );
+    assert!(
+        entries[1]
+            .message
+            .contains("客户 RejectedCustomer 下单拒绝：支付渠道拒绝")
+    );
+    assert_eq!(
+        get_required_service!(provider, Inventory)
+            .await
+            .unwrap()
+            .remaining("KEYBOARD"),
+        Some(4)
+    );
+    assert_eq!(
+        get_required_service!(provider, dyn OrderStore)
+            .await
+            .unwrap()
+            .all()
+            .len(),
+        1
+    );
+    provider.dispose_async().await.unwrap();
 }

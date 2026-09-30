@@ -1,6 +1,8 @@
 # 电商结账：完整的 Nestrs DI 示例
 
-这个示例把依赖注入放进一段可以实际运行的业务流程：读取商品库存、选择支付渠道、保存订单、生成收据，并在请求结束后关闭 scope。两个并发请求共享库存与订单存储，保留各自的请求上下文。
+这个项目是一个可直接接收下单参数的电商结账 CLI。它从用户输入创建请求，预留库存、选择支付渠道、保存订单、生成收据，再根据实际成功或失败结果记录审计。每笔请求有自己的 scope，应用在退出前等待容器关闭。
+
+项目采用单个可执行程序的组织方式：`src/main.rs` 声明私有模块并启动应用，业务实现属于这个 binary；没有为了演示或集成测试而额外导出的 `lib.rs`。命令行、应用生命周期、业务模型和基础设施分别承担明确职责。
 
 本项目根目录为 `example/di-checkout/`，Cargo package 名称保持 `nestrs-di-example`，唯一程序入口为 `checkout`。父目录 `example/` 只组织多个示例，完整索引见[示例目录](../README.md)。
 
@@ -11,30 +13,59 @@
 先按[仓库 README](../../README.md)构建匹配的 CLI、driver 与私有桥接库，并将 CLI 加入 PATH，然后在仓库根目录执行：
 
 ```bash
-cargo nestrs run -p nestrs-di-example
+cargo nestrs run -p nestrs-di-example -- sample
 ```
 
 也可以进入本目录运行默认的 `checkout` 二进制：
 
 ```bash
 cd example/di-checkout
-cargo nestrs run
+cargo nestrs run -- sample
 ```
 
-示例复用应用的 Tokio runtime。默认采用 Lazy 模式，只在查询服务时激活所需的依赖。下面的参数用于对照不同初始化方式：
+`sample` 会执行后文的四个固定业务场景。日常下单使用 `place-order`，输入由 CLI 解析并转换成 `CheckoutRequest`：
+
+```bash
+cargo nestrs run -p nestrs-di-example -- place-order \
+  --customer Alice --sku KEYBOARD --quantity 1 \
+  --payment card --payment-token approved
+
+# 只提供客户名称时，使用默认商品、数量和 card 渠道
+cargo nestrs run -p nestrs-di-example -- place-order --customer Bob
+
+# 查看入口与下单命令的帮助
+cargo nestrs run -p nestrs-di-example
+cargo nestrs run -p nestrs-di-example -- place-order --help
+```
+
+`place-order` 参数如下：
+
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `--customer NAME` | 必填 | 下单客户名称 |
+| `--sku SKU` | `KEYBOARD` | 商品编号 |
+| `--quantity N` | `1` | 购买数量，金额由商品目录计算 |
+| `--payment CHANNEL` | `card` | 支付渠道，支持 `card`、`wallet` |
+| `--payment-token TOKEN` | `approved` | 本地模拟支付凭据；`declined` 表示拒付 |
+
+不提供子命令时只显示帮助，不构造 DI 容器或执行下单。`card` 和 `wallet` 是可用支付渠道；本地支付适配器以 `declined` token 模拟业务拒付。每次启动程序都从一份新的内存数据开始，因此两次独立 CLI 调用不会共享订单或库存。
+
+单笔下单成功退出码为 `0`，业务拒绝或初始化等应用错误为 `1`，CLI 参数错误为 `2`。`sample` 中拒付与缺货是预设场景，处理完整个流程后正常退出 `0`。无参数帮助和显式 `--help` 也退出 `0`。
+
+示例复用应用的 Tokio runtime。默认采用 Lazy 模式，只在查询服务时激活所需的依赖。下面的全局参数可放在子命令之前或之后，用于对照不同初始化方式：
 
 ```bash
 # 预先初始化所有 Singleton 及其必要依赖
-cargo nestrs run -p nestrs-di-example -- --eager
+cargo nestrs run -p nestrs-di-example -- sample --eager
 
 # 建立 scope 后，先预热该 scope 的 Scoped 服务
-cargo nestrs run -p nestrs-di-example -- --warm-up-scopes
+cargo nestrs run -p nestrs-di-example -- sample --warm-up-scopes
 
 # 将整个 provider 的构造并发上限设为 1，观察初始化顺序
-cargo nestrs run -p nestrs-di-example -- --max-concurrency 1
+cargo nestrs run -p nestrs-di-example -- sample --max-concurrency 1
 
 # 参数可以组合使用
-cargo nestrs run -p nestrs-di-example -- --eager --warm-up-scopes --max-concurrency 1
+cargo nestrs run -p nestrs-di-example -- sample --eager --warm-up-scopes --max-concurrency 1
 
 cargo nestrs run -p nestrs-di-example -- --help
 ```
@@ -73,20 +104,20 @@ cargo nestrs graph
 `example/di-checkout/target/`；命令会输出实际文件路径。`--output` 相对于调用目录解析，
 例如在本目录内可以用 `--output ../../target/checkout-di.html`。
 
-HTML 包含完整图数据、样式和脚本，不依赖网络、CDN 或本地 Web 服务。业务程序的 `--graph`、`--graph-output`
-参数已经移除，`ServiceProviderOptions` 不再负责 HTML 文件输出。
+HTML 包含完整图数据、样式和脚本，不依赖网络、CDN 或本地 Web 服务。图导出属于 CLI，
+业务代码的 `ServiceProviderOptions` 只配置容器行为。
 
 打开项目页面后可以直接浏览总览，也可以选择 `checkout`，然后这样探索结账流程：
 
 1. 搜索 `CheckoutService`，点击节点查看注入字段、生命周期和声明位置。
 2. 沿 `orders` 字段查看 `dyn OrderStore → Repository<Order> → Database → AppConfig`；接口节点与服务节点分开，虚线“选中实现”表示接口投影。
 3. 查看 `card`、`wallet` 两个字段请求的 `dyn PaymentGateway` 接口节点；它们的 key 不同，分别选择对应的 `PaymentClient` provider。
-4. 查看可选风控输入 `FraudCheck` 的缺席状态，以及 Transient `ReceiptFormatter` 的生命周期。
+4. 查看可选风控输入 `FraudCheck` 的缺席状态，以及 `formatter` 延迟字段与 Transient `ReceiptFormatter` 的生命周期。
 5. 缩放和平移画布，查看 `Repository<AuditEvent>`；它由查询宏贡献闭合类型声明，并与订单仓库共享数据库。
 
 服务节点编号标识 provider 声明，与 `[构造]` 日志里的实例编号不同。接口请求节点
-只是展示请求到实现的关系，不创建另一份实例；本例仍为 10 个服务声明，另有 3 个
-已解析的接口请求。每个字段或参数保留独立输入槽位与连线，所以图上两条边指向同一
+只是展示请求到实现的关系，不创建另一份实例；声明与接口请求的数量以本次导出的图为准。
+每个字段或参数保留独立输入槽位与连线，所以图上两条边指向同一
 Transient 声明，运行时仍会分别构造两个实例。
 
 图展示当前链接单元的静态服务关系，不表示实例初始化状态或业务资源是否可用。
@@ -96,7 +127,7 @@ Transient 声明，运行时仍会分别构造两个实例。
 
 ## 业务场景与预期结果
 
-商品 `KEYBOARD` 初始库存为 **5**，单价为 **19,900 分（199.00 元）**。程序依次执行以下场景：
+商品 `KEYBOARD` 初始库存为 **5**，单价为 **19,900 分（199.00 元）**。`sample` 子命令执行以下场景；`place-order` 只处理本次输入的一笔请求：
 
 | 场景 | 输入 | 预期业务结果 | 库存变化 |
 | --- | --- | --- | --- |
@@ -105,13 +136,17 @@ Transient 声明，运行时仍会分别构造两个实例。
 | 支付拒绝 | 数量 1，支付 token 为 `declined` | 返回支付拒绝，不创建订单，归还预留库存 | 净变化为 0 |
 | 库存不足 | 数量 99 | 在支付前返回库存不足，不扣款、不创建订单 | 不变 |
 
-Alice 和 Bob 的两个成功请求各有自己的 scope，并由 `tokio::join!` 并发驱动。随后 Carol、Dave 各使用新 scope 顺序执行两个拒绝场景。成功请求的完成顺序、订单编号对应关系与日志交错顺序可能变化，但最终应当得到：
+`sample` 只在 CLI 层提供这四笔输入，和 `place-order` 共用应用层的 `process_orders`。应用每批最多处理两笔请求，由 `tokio::join!` 并发推进，各自拥有 scope；等待本批请求及其 scope 关闭完成后再处理下一批。因此 Alice、Bob 属于第一批，Carol、Dave 属于第二批，第二批的两个拒绝场景也并发执行。这个业务并发安排与 DI 构造任务上限是两个不同设置。
+
+库存不足诊断显示的是请求当时的可用数量。Carol 的库存预留尚未回滚时，Dave 可能看到只剩 1 件；拒付处理完成后，最终库存恢复到 2 件。
+
+成功请求的完成顺序、订单编号对应关系与日志交错顺序可能变化，但最终应当得到：
 
 - 成功订单 **2 张**，购买数量分别为 1 和 2。
 - 两张订单的金额分别为 **19,900 分**和 **39,800 分**。
 - `KEYBOARD` 剩余库存 **2 件**。
 - 支付拒绝和库存不足场景没有新增成功订单。
-- 四个业务场景各写入一条审计记录，共 **4 条**。
+- 应用层在每次 `place_order` 返回后，根据实际请求和结果写入审计；四个业务场景共 **4 条**。
 
 忽略日志时间戳，汇总行应为：
 
@@ -123,11 +158,11 @@ Alice 和 Bob 的两个成功请求各有自己的 scope，并由 `tokio::join!`
 
 ## DI 如何组成这段业务
 
-图中的实线表示依赖输入，虚线标注接口选中的实现或可选输入的缺席；驱动代码只在请求入口获取业务服务，业务服务通过已注入的字段调用协作者。
+图中的连线区分普通依赖输入、延迟字段、接口选中的实现和可选输入的缺席；应用层只在请求入口获取业务服务，业务服务通过已注入的字段调用协作者。
 
 ```mermaid
 flowchart LR
-    Driver["CLI 驱动 / scope"] --> Checkout["CheckoutService · Scoped"]
+    Driver["应用层 / 请求 scope"] --> Checkout["CheckoutService · Scoped"]
     Checkout --> Context["RequestContext · Scoped"]
     Checkout --> Inventory["Inventory · Singleton"]
     Checkout -- orders --> Store["dyn OrderStore"]
@@ -203,26 +238,22 @@ let audit = nestrs_core::get_required_service!(
 
 查询类型必须能独立命名，不能让静态根捕获外层泛型函数的 `T`、const 泛型参数或 `impl` 的 `Self`。应在具体调用点写 `Repository<AuditEvent>`，或使用指向闭合类型的别名。
 
-容器变量与查询操作留在驱动层。`CheckoutService` 接收业务输入、调用注入的库存/支付/订单服务并返回业务结果；它不会把 provider 传给下游，也不会在方法内部查询容器。
+容器变量与查询操作留在应用层。`CheckoutService` 接收业务输入、调用注入的库存/支付/订单服务并返回业务结果；它不会把 provider 传给下游，也不会在方法内部查询容器。
 
 ## 输出怎么看
 
-`observe::event` 为日志添加相对时间戳，`observe::created` 打印 `[构造] 类型 #实例编号`。实例编号用于观察对象身份，与业务订单号 `ORD-…` 分开。资源工厂分别模拟 Database **160 ms**、card **100 ms**、wallet **120 ms** 的等待；这些是示例设置的延迟，不是程序总运行时间的保证。
+`observe::event` 为日志添加相对时间戳，`observe::created` 打印 `[构造] 类型 #实例编号`。实例编号用于观察对象身份，与业务订单号 `ORD-…` 分开。初始化延迟是本地模拟设置，不能用它判断生产环境性能。
 
-先观察 `factory start Database`、`factory start PaymentClient[card]`、`factory start PaymentClient[wallet]` 及其 `factory end` 事件，再对照请求和关闭事件：
+- **Lazy**：build 完成后尚未初始化资源，首次查询服务才激活必要依赖。
+- **Eager**：Singleton 初始化在 build 返回之前完成，后续请求复用共享实例。
+- **Scope 预热**：`warm_up` 在业务调用前准备 Scoped 服务，每个请求仍有自己的上下文。
+- **并发构造**：对照 factory 的开始和结束事件，观察独立资源初始化能否重叠。`--max-concurrency 1` 会使构造依次取得名额；它不限制业务请求并发。
+- **业务结果**：成功路径包含库存预留、支付成功、库存提交和订单保存；拒付路径归还预留库存。每笔完成的请求都会写入实际审计结果。面向用户的收据只展示订单、客户、商品、金额和支付信息，实例编号保留在诊断日志中。
+- **关闭事件**：请求处理结束后关闭 scope，应用结束时关闭 root。`cleanup hook …` 是异步回调，`drop … #实例编号` 是 Rust 对象析构。
 
-- **Lazy**：build 完成并不表示模拟连接已经初始化。首次查询 `CheckoutService` 才会触发其必要依赖。
-- **Eager**：Singleton 初始化出现在 build 返回之前，后续 scope 查询复用已完成的共享实例。
-- **Scope 预热**：`warm_up` 使 Scoped 服务在业务调用前准备好，但每个 scope 仍保持自己的 `RequestContext`。
-- **并发上限为 1**：需要构造的服务依次取得构造名额。恢复默认上限后，可从时间戳观察独立初始化的重叠。
-- **请求日志**：比较请求上下文与共享资源标识，观察“请求隔离、资源共享”；不要把并发日志的固定行序作为正确性要求。
-- **业务结果**：沿着 `业务库存预留`、`业务支付成功`、`业务库存提交`、`业务订单保存` 阅读成功路径；`业务支付拒绝` 后应跟随 `业务库存回滚`，最终库存仍为 2。
-- **验证日志**：`[验证]` 展示相同 scope 中的实例复用、不同 scope 的隔离、两次直接查询 Transient 得到不同 formatter、`wallet` keyed 查询、`cash` key 与风控的可选缺席，以及 root 查询 Scoped 返回错误。
-- **关闭日志**：`[关闭] 请求 A 的 scope 已完成` 等事件标记请求边界，最后是 `[关闭] root 已完成`。`cleanup hook …` 表示异步回调，`drop … #实例编号` 表示对应 Rust 对象的实际析构。
+日常运行只处理业务，不穿插 DI 自检。相同 scope 的复用、跨 scope 的隔离、Transient 的独立实例、缺失 key 和 root 查询 Scoped 的限制都由测试验证。并发场景的日志交错顺序和订单编号分配可能变化，不是业务契约。
 
-作为一次实际运行的对照，默认并发的 Lazy 模式在 build 完成后约 **162 ms** 准备好结账依赖；使用 `--eager --warm-up-scopes --max-concurrency 1` 时，观察到 card、wallet、Database 依次初始化，root build 约 **384 ms**。这些时间用于说明独立任务重叠与串行构造的区别；它们包含调度开销，不是固定耗时或日志顺序契约。
-
-本例的 cleanup hook 是**无参数的类型级异步回调**，用于演示框架会等待清理阶段。它拿不到具体服务实例，因此日志不代表“已经关闭某个真实数据库连接”。示例中的实例本来就是内存模拟对象；不要据此推断真实连接池的关闭接口已经接入。
+本例的 cleanup hook 是**无参数的类型级异步回调**，用于演示框架会等待清理阶段。它拿不到具体服务实例，因此日志不代表已经关闭某个真实数据库连接。真实连接池或支付 SDK 的资源关闭，应由相应适配器根据自身 API 实现。
 
 ## 初始化失败与框架负例
 
@@ -231,7 +262,7 @@ let audit = nestrs_core::get_required_service!(
 ### 外部资源初始化失败
 
 ```bash
-NESTRS_EXAMPLE_FAIL_PAYMENT=1 cargo nestrs run -p nestrs-di-example
+NESTRS_EXAMPLE_FAIL_PAYMENT=1 cargo nestrs run -p nestrs-di-example -- sample
 ```
 
 这个开关让模拟支付客户端初始化失败。预期行为是打印带服务来源的初始化错误，关闭已创建的 scope 与 provider，并以非零状态退出。它不会执行正常的“两张订单”流程。
@@ -239,10 +270,10 @@ NESTRS_EXAMPLE_FAIL_PAYMENT=1 cargo nestrs run -p nestrs-di-example
 也可加上 `--eager` 对照：
 
 ```bash
-NESTRS_EXAMPLE_FAIL_PAYMENT=1 cargo nestrs run -p nestrs-di-example -- --eager
+NESTRS_EXAMPLE_FAIL_PAYMENT=1 cargo nestrs run -p nestrs-di-example -- sample --eager
 ```
 
-Lazy 下，资源错误在首次激活相关服务时显现，驱动会关闭两个已创建的请求 scope，再关闭 root。Eager 下，它在 build 的预热阶段显现；build 负责关闭尚未交付的 provider，此时还没有进入请求流程。**图验证成功只说明依赖结构合法，不保证数据库或支付资源初始化成功。**
+Lazy 下，资源错误在首次激活相关服务时显现，应用会关闭已创建的请求 scope，再关闭 root。Eager 下，它在 build 的预热阶段显现；build 负责关闭尚未交付的 provider，此时还没有进入请求流程。**图验证成功只说明依赖结构合法，不保证数据库或支付资源初始化成功。**
 
 ### 非法生命周期回归已移入测试 fixture
 
@@ -261,23 +292,56 @@ cargo nestrs run --manifest-path cargo-nestrs/tests/fixtures/di/Cargo.toml --bin
 工具的 graph fixture 还保留自己的 `invalid_graph`，专门验证项目报告中的部分入口失败，
 与本项目的正常图导出分开。
 
-## 建议的代码阅读顺序
+## 项目结构与代码阅读顺序
 
-1. [src/domain.rs](src/domain.rs)：`CheckoutRequest`、`Order`、`AuditEvent` 与 `CheckoutError`，确认金额以分存储，业务错误与容器错误分开。
-2. [src/services/config.rs](src/services/config.rs) 与 [src/observe.rs](src/observe.rs)：故障开关、本地配置、相对时间戳和实例编号。
-3. [src/services/storage.rs](src/services/storage.rs)：数据库异步 factory、泛型内存仓库、`OrderStore` 绑定；[src/services/payment.rs](src/services/payment.rs)：两个 keyed factory、`PaymentGateway` 投影与业务支付。
-4. [src/services/inventory.rs](src/services/inventory.rs)：并发库存预留和 `Reservation` 回滚；[src/services/checkout.rs](src/services/checkout.rs)：注入字段、Scoped 上下文、Transient formatter 与 `place_order`。
-5. [src/demo.rs](src/demo.rs)：`run` 管理 root，`request_scope` 管理每次请求，`checkout_flow` 驱动四个场景。源码先保存业务/查询结果，再等待关闭，以便错误路径同样执行 disposal。
-6. [src/main.rs](src/main.rs)：CLI 参数、默认业务入口与进程退出状态。
-
-[tests/checkout.rs](tests/checkout.rs) 覆盖业务与 DI 生命周期行为，[tests/cli.rs](tests/cli.rs) 在独立进程中核对默认不写图，以及初始化失败时的关闭与退出结果。非法 DI 注册位于独立工具 fixture；HTML 命令的导出、输出路径和失败行为由 `cargo-nestrs` 的 CLI 测试覆盖。
-
-从仓库根目录运行本示例的自动化验证：
-
-```bash
-cargo nestrs test -p nestrs-di-example --tests
+```text
+src/
+├── main.rs                  # 唯一 binary 入口，声明私有模块并决定退出码
+├── cli.rs                   # clap 命令、参数与输入输出
+├── application.rs           # root/scope 生命周期、请求调度、实际结果审计
+├── domain.rs                # 请求、订单、错误与业务接口
+├── config.rs                # 本地适配器配置、故障开关
+├── checkout/
+│   ├── mod.rs
+│   ├── service.rs           # 下单用例及注入声明
+│   ├── context.rs           # Scoped 请求上下文
+│   └── receipt.rs           # Transient 收据格式器
+├── infrastructure/
+│   ├── mod.rs
+│   ├── database.rs          # 数据库资源的本地异步 factory
+│   ├── repository.rs        # 泛型内存仓库及 OrderStore 实现
+│   ├── payment.rs           # keyed 支付 factory 与 PaymentGateway 实现
+│   └── inventory.rs         # 库存预留、提交及 RAII 回滚
+├── observe.rs               # 示例日志与实例编号
+└── tests.rs                 # binary 内部业务与 DI 回归，仅在测试时编译
+tests/
+└── cli.rs                   # 从进程边界验证命令、输出与退出码
 ```
 
-如果当前目录已经是 `example/di-checkout/`，则使用 `cargo nestrs test --tests`。
+这些模块属于同一个应用，不是分别发布的库。只有业务模型与协作接口需要在模块之间共享；测试可通过 `#[cfg(test)] mod tests` 访问应用内部，无需把整个应用变成公开 API。
 
-测试检查 Lazy/Eager 下的业务结果、共享与隔离关系，以及初始化失败进程的非零退出。对照运行时可以分别使用默认模式、Eager、scope 预热和 Eager + scope 预热 + 单构造名额组合。非法图的构造次数和退出结果由上述 fixture 回归单独检查。
+建议沿一次真实请求阅读：
+
+1. [src/main.rs](src/main.rs) 和 [src/cli.rs](src/cli.rs)：了解命令如何选择 `sample` 或 `place-order`，怎样把用户参数变成请求。
+2. [src/domain.rs](src/domain.rs)：阅读 `CheckoutRequest`、`Order`、`AuditEvent` 与 `CheckoutError`，以及 `OrderStore`、`PaymentGateway`、`FraudCheck` 业务接口。金额使用整数分，业务错误与容器错误分开。
+3. [src/application.rs](src/application.rs)：从 `run` 进入通用的 `process_orders`，跟踪构建 root、分批处理输入、为每笔请求创建 scope、获取结账服务、记录实际结果、等待关闭的完整流程。先保存处理结果再等待 disposal，确保业务或初始化失败也会进入关闭路径。
+4. [src/checkout/service.rs](src/checkout/service.rs)：从 `place_order` 阅读参数校验、库存预留、支付、保存订单与收据生成；再查看 [context.rs](src/checkout/context.rs) 和 [receipt.rs](src/checkout/receipt.rs) 的生命周期声明。
+5. [src/infrastructure/repository.rs](src/infrastructure/repository.rs) 与 [payment.rs](src/infrastructure/payment.rs)：查看普通 trait 实现如何被自动绑定，以及同一个 concrete 类型如何注册为两个 keyed provider。
+6. [src/infrastructure/inventory.rs](src/infrastructure/inventory.rs)、[database.rs](src/infrastructure/database.rs) 和 [src/config.rs](src/config.rs)：了解并发安全的业务状态、可失败的异步初始化与本地模拟边界。
+
+`CheckoutService` 不持有容器，也不在业务方法中查询服务。业务接口放在 `domain.rs`，基础设施实现依赖这些接口；应用层负责把生命周期和具体业务调用接起来。库存预留仍是本地实现，数据库和支付也仍为内存适配；本例没有引入 HTTP 框架或提前实现 `nestrs-bootstrap`。
+
+## 自动化验证
+
+从仓库根目录运行：
+
+```bash
+cargo nestrs check -p nestrs-di-example --all-targets
+cargo nestrs test -p nestrs-di-example --all-targets
+```
+
+如果当前目录已经是 `example/di-checkout/`，可以省略 `-p nestrs-di-example`。
+
+[src/tests.rs](src/tests.rs) 检查业务结果、库存回滚、审计，以及 Singleton/Scoped/Transient 的共享和隔离行为；[tests/cli.rs](tests/cli.rs) 启动真实可执行程序，检查帮助、用户输入、退出码和失败时的关闭行为。测试中的额外查询只属于测试链接单元，不改变普通运行与 HTML 导出的服务图。
+
+故意非法的 DI 注册继续放在框架的独立 fixture 中。它们不会因为加载测试辅助模块而进入这个业务应用，也不会使正常的 `cargo nestrs graph -p nestrs-di-example` 导出失败。

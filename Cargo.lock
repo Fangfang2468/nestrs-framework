@@ -147,6 +147,7 @@ dependencies = [
 name = "nestrs-di-example"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "nestrs-core",
  "thiserror",
  "tokio",

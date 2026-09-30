@@ -20,7 +20,7 @@ python3 tools/build-toolchain.py
 export PATH="$PWD/target/debug:$PATH"
 cargo nestrs doctor
 cargo nestrs init
-cargo nestrs run -p nestrs-di-example
+cargo nestrs run -p nestrs-di-example -- sample
 cargo nestrs graph -p nestrs-di-example
 ```
 
@@ -45,7 +45,7 @@ python tools/build-toolchain.py
 $env:PATH = "$PWD\target\debug;$env:PATH"
 cargo nestrs doctor
 cargo nestrs init
-cargo nestrs run -p nestrs-di-example
+cargo nestrs run -p nestrs-di-example -- sample
 cargo nestrs graph -p nestrs-di-example
 ```
 

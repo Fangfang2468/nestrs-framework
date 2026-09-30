@@ -1,10 +1,10 @@
 use nestrs::factory;
 /// 默认本地配置是单例；异步工厂仅在构造期间借用它并复制需要的配置值。
 #[derive(Debug)]
-pub struct AppConfig {
-    pub database_name: String,
-    pub merchant_name: String,
-    pub fail_payment_initialization: bool,
+pub(crate) struct AppConfig {
+    pub(crate) database_name: String,
+    pub(crate) merchant_name: String,
+    pub(crate) fail_payment_initialization: bool,
 }
 
 #[factory]
