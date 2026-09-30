@@ -17,7 +17,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 /// 面向门面的命令句柄；不持有可变调度状态。
 ///
@@ -43,7 +43,9 @@ impl Runtime {
             commands,
             next_owner: AtomicU64::new(1),
         });
-        tokio::spawn(Coordinator::new(graph, root, receiver, max).run());
+        tokio::spawn(
+            Coordinator::new(graph, root, receiver, runtime.commands.downgrade(), max).run(),
+        );
         (runtime, owner)
     }
 
@@ -149,6 +151,11 @@ pub(super) enum Command {
         owner: OwnerId,
         provider: usize,
         waiter: ResolveWaiter,
+    },
+    ResolveLazy {
+        owner: OwnerId,
+        provider: usize,
+        waiter: watch::Sender<Option<Resolution>>,
     },
     Close {
         owner: Arc<OwnerData>,

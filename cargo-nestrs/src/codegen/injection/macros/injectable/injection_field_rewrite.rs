@@ -15,6 +15,7 @@ pub(crate) fn rewrite_injection_fields(specs: &[FieldSpec], fields: &mut Fields)
         let FieldStrategy::Inject {
             service_type,
             optional,
+            lazy,
             ..
         } = &spec.strategy
         else {
@@ -26,14 +27,19 @@ pub(crate) fn rewrite_injection_fields(specs: &[FieldSpec], fields: &mut Fields)
             .nth(spec.index)
             .expect("FieldSpec index must reference the original field list");
 
+        // 可选性保留在包装外层：图已确定缺席时直接交付 None，而不是留给首次访问
+        // 才发现。包装中的 T 始终是原始服务类型，trait 与闭合泛型使用同一协议。
+        let injection: syn::Type = if *lazy {
+            syn::parse_quote!(::nestrs_core::LazyInjection<#service_type>)
+        } else {
+            syn::parse_quote!(::nestrs_core::Injection<#service_type>)
+        };
         field.ty = if *optional {
             syn::parse_quote! {
-                ::core::option::Option<::nestrs_core::Injection<#service_type>>
+                ::core::option::Option<#injection>
             }
         } else {
-            syn::parse_quote! {
-                ::nestrs_core::Injection<#service_type>
-            }
+            injection
         };
     }
 }

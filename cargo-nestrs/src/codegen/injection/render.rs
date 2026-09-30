@@ -21,6 +21,7 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
     let is_trait_object = is_trait_object(&service_type);
     let key = request.key.clone();
     let optional = request.optional;
+    let lazy = request.lazy;
     let declaration_position = request.declaration_position;
     let input_slot = request.input_slot;
     let label = request.label.clone();
@@ -37,6 +38,11 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
                 },
             ),
             optional: {{ optional }},
+            lazy: @RenderLazyInput(
+                service_type = service_type.clone(),
+                optional = optional,
+                lazy = lazy,
+            ),
             label: @RenderFieldLabel(label = label.clone()),
             delivery: @RenderDelivery(
                 service_type = service_type.clone(),
@@ -46,6 +52,26 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
             provider_source: @RenderProviderSource(
                 service_type = service_type.clone(),
             ),
+        }
+    }
+}
+
+/// 延迟包装和真实实例的投影是两个不同的阶段，不能用 lazy preparer 替换 delivery。
+/// 前者创建可 await 的句柄；后者在目标完成后仍负责准确的 concrete/trait 类型恢复。
+#[zyn::element]
+fn render_lazy_input(service_type: syn::Type, optional: bool, lazy: bool) -> zyn::TokenStream {
+    zyn! {
+        @if (*lazy) {
+            ::core::option::Option::Some(
+                @if (*optional) {
+                    ::nestrs_core::activation::prepare_lazy_optional::<{{ service_type }}>
+                } @else {
+                    ::nestrs_core::activation::prepare_lazy_required::<{{ service_type }}>
+                }
+                as ::nestrs_core::activation::LazyInputPreparer
+            )
+        } @else {
+            ::core::option::Option::None
         }
     }
 }

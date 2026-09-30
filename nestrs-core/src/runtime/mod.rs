@@ -6,10 +6,11 @@
 //! 三个关键不变量：
 //! - 只有协调器修改任务图和 owner 状态；worker 永远不递归调用 resolver。
 //! - 成功实例先进入实际 owner 的 journal，再通知等待者或推进消费者。
-//! - 关闭先排空已接受任务，再逐 owner 按逆发布顺序完成 cleanup；内存保活独立于 Tokio。
+//! - 关闭先排空已接受任务，再逐 owner 按消费者优先的依赖顺序完成 cleanup；内存保活独立于 Tokio。
 
 mod coordinator;
 mod handle;
+mod lazy;
 mod owner;
 mod task;
 mod worker;

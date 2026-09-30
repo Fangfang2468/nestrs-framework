@@ -155,6 +155,9 @@ fn validate_entry_graph(graph: &Value) -> Result<(), &'static str> {
                     .any(|key| string_field(dependency, key).is_none())
                 || !valid_key(dependency.get("key"))
                 || !dependency.get("optional").is_some_and(Value::is_boolean)
+                // 旧版图没有 lazy 字段，按普通注入展示；新字段一旦出现必须是布尔值，
+                // 不能把字符串 "false" 等真值误画成延迟边。
+                || dependency.get("lazy").is_some_and(|value| !value.is_boolean())
             {
                 return Err("invalid or duplicate input slot");
             }
@@ -301,6 +304,25 @@ mod tests {
         );
         data["entries"][0]["graph"]["nodes"][0]["dependencies"][0]["optional"] = true.into();
         assert!(render_html(&data).is_ok());
+    }
+
+    #[test]
+    fn lazy_input_metadata_is_validated_and_has_an_explicit_visual_legend() {
+        let mut data = project_data();
+        data["entries"][0]["graph"]["nodes"][0]["dependencies"] = serde_json::json!([{
+            "slot": 1, "label": "report", "requested": "app::Report",
+            "requestedLabel": "Report", "optional": true, "lazy": true,
+            "key": null, "target": null
+        }]);
+        let html = render_html(&data).expect("lazy optional absence remains a valid frozen edge");
+        assert!(html.contains("legend-lazy"));
+        assert!(html.contains("延迟注入（首次 get().await 获取）"));
+        assert!(html.contains("data-lazy"));
+        data["entries"][0]["graph"]["nodes"][0]["dependencies"][0]["lazy"] = "false".into();
+        assert!(
+            render_html(&data).is_err(),
+            "lazy metadata must use a real boolean"
+        );
     }
 
     #[test]

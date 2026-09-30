@@ -16,6 +16,7 @@
 .project-panel{border:1px solid var(--border);border-radius:12px;background:var(--panel);padding:18px;margin-bottom:18px}.project-panel[hidden]{display:none}.project-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}.project-heading h2{font-size:15px;line-height:1.6;overflow-wrap:anywhere}.project-summary{color:var(--muted);line-height:1.7;font-size:12px;margin-top:5px}.entry-select{display:flex;gap:10px;align-items:center;flex:none}.entry-select label{font-size:12px;color:var(--muted)}select{font:inherit;color:var(--text);background:#172231;border:1px solid #40536f;border-radius:8px;min-height:44px;padding:8px 32px 8px 12px;max-width:310px}select:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.entry-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-top:16px;max-height:330px;overflow:auto;padding:3px}.entry-card{border:1px solid var(--border);border-radius:9px;background:#141e2c;min-width:0;overflow:hidden}.entry-card[data-status="error"]{border-color:#85554c}.entry-card[data-status="skipped"]{border-color:#705e3f}.entry-card.is-active{box-shadow:inset 0 0 0 1px var(--accent)}.entry-open{width:100%;border:0;background:transparent;border-radius:0;text-align:left;min-height:76px;padding:13px}.entry-card-heading{display:flex;align-items:center;justify-content:space-between;gap:10px}.entry-name{font:600 13px/1.6 var(--mono);overflow-wrap:anywhere}.entry-status{font-size:11px;white-space:nowrap;color:var(--accent)}.entry-card[data-status="error"] .entry-status{color:#ffb4a8}.entry-card[data-status="skipped"] .entry-status{color:#f3c87e}.entry-meta{display:block;font-size:11px;line-height:1.8;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}.entry-features{padding:0 13px 10px}.entry-diagnostic{border-top:1px solid var(--border);padding:10px 13px;font-size:12px}.entry-diagnostic summary{cursor:pointer;min-height:24px;line-height:24px;color:#ffcdc4}.entry-card[data-status="skipped"] summary{color:#f3c87e}.entry-diagnostic pre,.diagnostic-text{font:11px/1.8 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;color:#d3deec;margin:10px 0 0;max-height:260px;overflow:auto}.status-chip.is-partial{color:#f3c87e}.status-chip.is-partial .status-dot{background:#f3c87e}.entry-band-title{fill:#b8d7d3;font:600 12px var(--mono)}.entry-band-border{fill:#16223144;stroke:#38504e;stroke-dasharray:5 5;pointer-events:none}.badge.shared{color:var(--accent);border-color:#337366}.project-note{font-size:11px;color:var(--muted);line-height:1.8;margin-top:12px}.entry-context{color:var(--accent);font:12px/1.7 var(--mono);overflow-wrap:anywhere;margin-bottom:12px}.project-mode .workspace-body{height:calc(100vh - 450px);min-height:570px}.project-mode .status-chip{max-width:210px;white-space:normal;line-height:1.7}.project-mode .node-id{font-size:10px}
 @media(max-width:800px){.project-panel{padding:14px}.project-heading{flex-direction:column;gap:12px}.entry-select{width:100%}.entry-select select{flex:1;min-width:0;max-width:none}.entry-cards{grid-template-columns:repeat(auto-fit,minmax(220px,1fr));max-height:280px}.project-mode .workspace-body{height:auto;min-height:0}.entry-diagnostic summary{min-height:36px;line-height:36px}.entry-open{min-height:82px}}
 .node.is-projection .node-frame{fill:#242039;stroke:#9b86bd;stroke-width:1.5}.node.is-projection:hover .node-frame{fill:#302744;stroke:#d0b5f2}.node.is-projection.is-selected .node-frame{fill:#193734;stroke:var(--accent);stroke-width:2}.node.is-projection .node-name{fill:#e2cffb}.node-projection-title{fill:#c8b1ea;font:600 10px var(--font)}.legend-interface{width:9px;height:9px;border:1.5px solid #c5a2ff;transform:rotate(45deg)}.legend-projection{width:19px;border-top:2px dashed #b39ccc}.legend-absent{width:12px;height:9px;border:1px dashed #d4b475;border-radius:2px}.edge.is-projection{stroke:#a58bbd;stroke-dasharray:7 5;opacity:.9}.edge.is-optional{stroke-dasharray:2 4}.edge-label{fill:#bccbdd;stroke:#111925;stroke-width:4px;paint-order:stroke;font:10px var(--mono);pointer-events:none}.edge-label.projection-label{fill:#d1b7ee;font-family:var(--font)}.edge-label.is-muted{opacity:.16}.edge-label.is-related{fill:#b8f5e8}.badge.projection{color:#dbc1f8;background:#2b2240;border-color:#675080}.search-dot.projection{border:1px solid #d1b7ee;background:transparent!important;border-radius:0;transform:rotate(45deg);width:8px;height:8px}.search-dot.missing{border:1px dashed #edc781;background:transparent!important;width:8px;height:8px}.mapping-note{font-size:12px;line-height:1.8;color:var(--muted);margin-top:12px}.mapping-key{font:12px/1.8 var(--mono);overflow-wrap:anywhere;color:#e0cef6}.projection-card{border-color:#66517d}.graph-topline{padding-bottom:9px}.graph-topline-label{letter-spacing:.04em}.project-mode .graph-topline-label{font-size:10px}.node-kind{font-size:10px}@media(max-width:800px){.projection-stat{display:none}.legend{row-gap:9px}.graph-topline{gap:12px}.graph-topline-label{font-size:10px}}
+.legend-lazy{width:19px;border-top:2px dotted #efbd77}.edge.is-lazy{stroke:#d9a75f;stroke-dasharray:9 3 2 3}.edge.is-lazy.is-related{stroke:var(--accent)}
 </style>
 </head>
 <body>
@@ -61,7 +62,7 @@
   <div class="workspace-body">
     <section class="graph-panel" aria-label="依赖关系画布">
       <div id="graph-notice" class="graph-notice" role="status" hidden></div>
-      <div class="graph-topline"><span class="graph-topline-label">消费者 → 请求接口 → 选中实现</span><div class="legend" aria-label="节点与连线图例"><span class="legend-item"><span class="legend-interface"></span>接口请求</span><span class="legend-item"><span class="legend-projection"></span>选中实现</span><span class="legend-item"><span class="legend-absent"></span>可选缺席</span><span class="legend-item"><span class="legend-dot" style="background:var(--singleton)"></span>Singleton</span><span class="legend-item"><span class="legend-dot" style="background:var(--scoped)"></span>Scoped</span><span class="legend-item"><span class="legend-dot" style="background:var(--transient)"></span>Transient</span></div></div>
+      <div class="graph-topline"><span class="graph-topline-label">消费者 → 请求接口 → 选中实现</span><div class="legend" aria-label="节点与连线图例"><span class="legend-item"><span class="legend-interface"></span>接口请求</span><span class="legend-item"><span class="legend-projection"></span>选中实现</span><span class="legend-item"><span class="legend-absent"></span>可选缺席</span><span class="legend-item"><span class="legend-lazy"></span>延迟注入</span><span class="legend-item"><span class="legend-dot" style="background:var(--singleton)"></span>Singleton</span><span class="legend-item"><span class="legend-dot" style="background:var(--scoped)"></span>Scoped</span><span class="legend-item"><span class="legend-dot" style="background:var(--transient)"></span>Transient</span></div></div>
       <div id="graph-viewport" class="viewport" tabindex="0" role="region" aria-label="交互式依赖图。方向键平移，加减号缩放，0 适配。点击服务或按 Tab 选择服务。">
         <svg id="graph-svg" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="服务与依赖连线">
           <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#7690ae" stroke-width="1.5"/></marker><marker id="arrow-active" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#66e2d1" stroke-width="1.5"/></marker></defs>
@@ -170,7 +171,7 @@
           }
         }
         inputTargets.set(inputIdentity(node, dep), target);
-        visualEdges.push({ source: node.id, target, kind: "input", optional: dep.optional, dependency: dep });
+        visualEdges.push({ source: node.id, target, kind: "input", optional: dep.optional, lazy: dep.lazy === true, dependency: dep });
       }
     }
     for (const node of visualNodes) { children.set(node.id, new Set()); parents.set(node.id, new Set()); }
@@ -494,7 +495,7 @@
       const offset = Math.max(30, (x2 - x1) * .47);
       const isProjection = edge.kind === "projection";
       const dep = edge.dependency;
-      const title = isProjection ? "选中实现：" + edge.mapping.name + " → " + byId.get(edge.target).name + "；key=" + keyLabel(edge.mapping.key) : dep.label + " · slot " + dep.slot + " · key=" + keyLabel(dep.key) + "\n请求：" + dep.requested + (dep.optional ? " · optional" : "");
+      const title = isProjection ? "选中实现：" + edge.mapping.name + " → " + byId.get(edge.target).name + "；key=" + keyLabel(edge.mapping.key) : dep.label + " · slot " + dep.slot + " · key=" + keyLabel(dep.key) + "\n请求：" + dep.requested + (dep.optional ? " · optional" : "") + (dep.lazy ? " · 延迟注入（首次 get().await 获取）" : "");
       const route = state.edgeRoutes.get(edge);
       let pathData = "M " + x1 + " " + y1 + " C " + (x1 + offset) + " " + y1 + ", " + (x2 - offset) + " " + y2 + ", " + x2 + " " + y2;
       if (route) {
@@ -502,8 +503,8 @@
         const lastGutter = x2 - 12 - (route.lane % 4) * 4;
         pathData = "M " + x1 + " " + y1 + " H " + (firstGutter - 8) + " Q " + firstGutter + " " + y1 + " " + firstGutter + " " + (y1 + 8) + " V " + (route.y - 8) + " Q " + firstGutter + " " + route.y + " " + (firstGutter + 8) + " " + route.y + " H " + (lastGutter - 8) + " Q " + lastGutter + " " + route.y + " " + lastGutter + " " + (route.y - 8) + " V " + (y2 + 8) + " Q " + lastGutter + " " + y2 + " " + (lastGutter + 8) + " " + y2 + " H " + x2;
       }
-      const attributes = { d: pathData, class: "edge" + (isProjection ? " is-projection" : edge.optional ? " is-optional" : ""), "marker-end": "url(#arrow)", "data-edge-source": edge.source, "data-edge-target": edge.target, "data-edge-kind": edge.kind, "aria-label": title };
-      if (dep) Object.assign(attributes, { "data-slot": dep.slot, "data-input-label": dep.label, "data-requested": dep.requested, "data-key-kind": dep.key === null ? "none" : dep.key.kind, "data-key-value": dep.key === null ? "" : dep.key.value });
+      const attributes = { d: pathData, class: "edge" + (isProjection ? " is-projection" : edge.optional ? " is-optional" : "") + (edge.lazy ? " is-lazy" : ""), "marker-end": "url(#arrow)", "data-edge-source": edge.source, "data-edge-target": edge.target, "data-edge-kind": edge.kind, "aria-label": title };
+      if (dep) Object.assign(attributes, { "data-slot": dep.slot, "data-lazy": dep.lazy === true, "data-input-label": dep.label, "data-requested": dep.requested, "data-key-kind": dep.key === null ? "none" : dep.key.kind, "data-key-value": dep.key === null ? "" : dep.key.value });
       const path = svg("path", attributes);
       path.append(svg("title", {}, title));
       edgeContainer.append(path);
@@ -513,7 +514,7 @@
       if (isProjection) label.textContent = "选中实现";
       else {
         label.setAttribute("data-slot", String(dep.slot));
-        label.append(svg("tspan", { x: labelX, dy: 0 }, truncate(dep.label + " · slot " + dep.slot, 27)));
+        label.append(svg("tspan", { x: labelX, dy: 0 }, truncate(dep.label + " · slot " + dep.slot, 27) + (dep.lazy ? " · lazy" : "")));
         if (dep.key !== null) label.append(svg("tspan", { x: labelX, dy: 12 }, truncate("key=" + keyLabel(dep.key), 27)));
       }
       label.append(svg("title", {}, title));
@@ -640,7 +641,7 @@
       card.setAttribute("data-input-slot", String(dep.slot));
       const heading = html("div", "dependency-heading");
       heading.append(html("span", "", dep.label), html("span", "dependency-slot", "slot " + dep.slot));
-      card.append(heading, html("p", "dependency-type", consumer.label + "  #" + providerId(consumer)), html("p", "dependency-meta", "key=" + keyLabel(dep.key) + (dep.optional ? " · optional" : "")));
+      card.append(heading, html("p", "dependency-type", consumer.label + "  #" + providerId(consumer)), html("p", "dependency-meta", "key=" + keyLabel(dep.key) + (dep.optional ? " · optional" : "") + (dep.lazy ? " · 延迟注入（首次 get().await 获取）" : "")));
       inputs.append(card);
     }
     if (node.inputs.length > state.dependencyLimit) {
@@ -724,12 +725,12 @@
       card.append(heading, html("p", "dependency-type", dep.requestedLabel));
       if (target) {
         card.append(html("p", "dependency-target", (route.projection ? "接口请求 → " : "→ ") + target.label + "  #" + providerId(target)));
-        card.append(html("p", "dependency-meta", target.lifetime + (dep.optional ? " · optional" : "") + (dep.key !== null ? " · key=" + keyLabel(dep.key) : "")));
+        card.append(html("p", "dependency-meta", target.lifetime + (dep.optional ? " · optional" : "") + (dep.lazy ? " · 延迟注入（首次 get().await 获取）" : "") + (dep.key !== null ? " · key=" + keyLabel(dep.key) : "")));
       } else {
         card.append(html("p", "dependency-absent", "optional · 未注册，输入为空"));
         if (dep.key !== null) card.append(html("p", "dependency-meta", "key=" + keyLabel(dep.key)));
       }
-      card.title = dep.requested + (target ? " → " + target.name : " [optional, absent]");
+      card.title = dep.requested + (target ? " → " + target.name : " [optional, absent]") + (dep.lazy ? " · 延迟注入：不会作为消费者构造的就绪前提，仍接受完整静态图校验" : "");
       list.append(card);
     }
     dependencies.append(list);

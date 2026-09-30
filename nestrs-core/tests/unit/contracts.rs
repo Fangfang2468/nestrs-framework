@@ -56,6 +56,7 @@ mod class_provider {
                     label: Some("database"),
                     token: ServiceIdentifier::from(ServiceType::create::<Database>()),
                     optional: false,
+                    lazy: None,
                     delivery: Delivery::Direct(crate::activation::prepare_required::<Database>),
                     provider_source: ProviderSource::Registered,
                 },
@@ -68,6 +69,7 @@ mod class_provider {
                         ServiceType::create::<dyn Audit>(),
                     ),
                     optional: true,
+                    lazy: None,
                     delivery: Delivery::RequiresBindingOrAbsent(
                         crate::activation::prepare_optional_absent::<dyn Audit>,
                     ),
@@ -226,6 +228,7 @@ mod provider_definition {
             label: Some("repository"),
             token: ServiceIdentifier::from(ServiceType::create::<Repository<Entity>>()),
             optional: false,
+            lazy: None,
             delivery: Delivery::Direct(prepare_required::<Repository<Entity>>),
             provider_source: ProviderSource::Materialize(callback),
         };
@@ -373,6 +376,7 @@ mod escaped_adapter {
                 input_slot: InputSlot::new(0),
                 token: ServiceIdentifier::from(ServiceType::create::<Dependency>()),
                 optional: false,
+                lazy: None,
                 label: Some("captured_dependency"),
                 delivery: Delivery::Direct(prepare_required::<Dependency>),
                 provider_source: ProviderSource::Registered,

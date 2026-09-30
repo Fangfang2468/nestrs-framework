@@ -12,7 +12,7 @@ use crate::codegen::injection::{
             self, DependencyRequest, FACTORY_MESSAGES, inject_key, split_optional,
             unparenthesized_type,
         },
-        value,
+        lazy, value,
     },
 };
 
@@ -81,6 +81,7 @@ impl FactoryParameterSpec {
             service_type: self.service_type.clone(),
             key: self.key.clone(),
             optional: self.optional,
+            lazy: false,
             label: Some(self.ident.clone()),
         }
     }
@@ -212,6 +213,12 @@ fn take_parameter_key(attributes: &mut Vec<Attribute>) -> syn::Result<Option<Ser
     for attribute in attributes.iter() {
         if inject::is_marker(attribute) {
             continue;
+        }
+        if lazy::is_marker(attribute) {
+            return Err(syn::Error::new_spanned(
+                attribute,
+                "`#[factory]` 参数暂不支持 #[lazy]；请在 #[injectable] 的 #[inject] 字段上使用",
+            ));
         }
         if value::is_marker(attribute) {
             return Err(syn::Error::new_spanned(

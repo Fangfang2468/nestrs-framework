@@ -117,6 +117,17 @@ Failed 时直接返回结果，命中 Building 时共享该活跃任务。Transi
 class adapter 取得带 lease 的 Injection；factory adapter 借用 worker 内真实的
 FactoryLeaseFrame。两者继续使用不同的交付方式，不伪造 `'static` 引用。
 
+字段的 `#[lazy]` 由 [lazy.rs](../nestrs-core/src/activation/lazy.rs) 类型化为
+`LazyInjection<T>`。activation 只依赖 `LazyResolver` 协议，不反向依赖 runtime；
+[runtime/lazy.rs](../nestrs-core/src/runtime/lazy.rs) 实现请求合并与弱 owner 归属。
+运行时 watch 保存一次 occurrence 的结果，使等待取消后仍能重新连接同一初始化；
+句柄内 OnceCell 保存准确类型的 Injection，保证返回引用的存活期。两者不能合并成
+“OnceCell 初始化闭包直接重新 resolve”，否则 Transient 在取消重入后可能创建两次。
+
+`get()` 不通过 Deref 隐藏异步等待。构造 worker 的 task-local 阻止同任务内等待未完成
+延迟字段，但不传播到业务自行 spawn 的任务；factory 不能借派生任务绕过此限制。
+未来若支持构造重入，需要独立设计挂起、名额归还和等待环诊断协议。
+
 ## 5. 关闭和最终内存释放
 
 协调器中的 owner 阶段是：
@@ -126,8 +137,11 @@ Open → Draining → Cleaning { running: false/true } → Closed
 ```
 
 Draining 拒绝新解析并排空已经接受的任务。进入 Cleaning 后清除缓存中的重复持有，
-从 journal 逆成功发布时间取实例。每个 owner 同时只有一个 cleanup worker，上一项
-hook 和当前触发的释放完成后才推进下一项。root 必须先等待所有 scope 关闭。
+图没有延迟输入时从 journal 逆成功发布时间取实例。含延迟输入时，消费者可能先于
+依赖发布，所以先在完整冻结 DAG 上反向执行 Kahn 算法：消费者的实例全部清理后才
+允许清理依赖，同步满足条件的实例优先取较晚发布者。没有实例的节点也参与约束传播，
+不会漏掉间接依赖。每个 owner 同时只有一个 cleanup worker，上一项 hook 和当前
+触发的释放完成后才推进下一项。root 必须先等待所有 scope 关闭。
 
 外部原子状态只用于跨线程判断是否还能接受请求；详细关闭阶段只由协调器维护。
 显式关闭、取消关闭等待和 Owner 的非阻塞 Drop 都提交同一种幂等 Close 命令。

@@ -14,7 +14,7 @@ mod names;
 use std::{collections::HashMap, fmt};
 
 use crate::{
-    activation::{ClassConstructor, InputPreparer, InputSlot},
+    activation::{ClassConstructor, InputPreparer, InputSlot, LazyInputPreparer},
     registration::provider::{FactoryInvoker, ProviderCommon},
     service::{ServiceIdentifier, ServiceSource},
 };
@@ -61,6 +61,8 @@ pub(crate) struct CompiledDependency {
     /// 保留原始请求用于诊断，不能用选中的 concrete 身份覆盖 trait/key/缺席信息。
     pub(crate) requested: ServiceIdentifier,
     pub(crate) optional: bool,
+    /// 延迟字段在消费者构造时交付句柄；目标边仍参与完整图验证与关闭排序。
+    pub(crate) lazy: Option<LazyInputPreparer>,
     /// None 只在成功图中表示已确定缺席的 optional 输入。
     pub(crate) target: Option<ProviderId>,
     /// 目标发布后用此类型化函数准备槽位；target 为 None 时写入合法缺席值。

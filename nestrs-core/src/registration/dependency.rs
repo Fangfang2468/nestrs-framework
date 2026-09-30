@@ -6,7 +6,7 @@
 //! 描述结构本身不是“已验证”的标志。
 
 use crate::{
-    activation::{InputPreparer, InputSlot},
+    activation::{InputPreparer, InputSlot, LazyInputPreparer},
     registration::provider::Provider,
     service::ServiceIdentifier,
 };
@@ -31,6 +31,12 @@ pub struct DependencyRequest {
 
     /// 缺失依赖时是否允许交付 `None`。
     pub optional: bool,
+
+    /// 延迟注入槽位的类型化准备函数。None 表示必须在消费者构造前完成依赖。
+    ///
+    /// 延迟只改变激活时机，不能改变目标选择、缺失校验或生命周期规则；delivery
+    /// 仍保留真实实例发布后需要使用的 concrete 地址或 trait 投影准备函数。
+    pub lazy: Option<LazyInputPreparer>,
 
     /// 依赖诊断或元数据使用的可读标签。
     pub label: Option<&'static str>,

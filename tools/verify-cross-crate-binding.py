@@ -15,6 +15,7 @@ from toolchain_support import bridge_name, executable_name
 
 
 BINARIES = {
+    "lazy_cross_crate": "cross-crate lazy: library field shares the upstream private async factory instance",
     "downstream_demand": "cross-crate downstream demand: public class and private factory share singleton projections",
     "sibling_selection": "cross-crate siblings: primary, exact key and present/absent optional injection passed",
     "transitive_reuse": "cross-crate transitive reuse: repeated automatic pairs share one logical route",
@@ -85,6 +86,14 @@ def verify_graph(path, binary):
 
     def inputs(node):
         return {dependency["label"]: dependency for dependency in node["dependencies"]}
+
+    if binary == "lazy_cross_crate":
+        consumer = select("nestrs_cross_upstream_consumer::LazyConnectionConsumer")
+        connection = select("nestrs_cross_primary_provider::implementation::PrivateConnection")
+        dependency = inputs(consumer)["connection"]
+        assert dependency["lazy"] is True, "library metadata lost the deferred input edge"
+        assert dependency["target"] == connection["id"]
+        assert connection["kind"] == "async factory"
 
     if binary in {"downstream_demand", "transitive_reuse"}:
         checkout = select("nestrs_cross_upstream_consumer::Checkout")

@@ -171,7 +171,7 @@ flowchart LR
     Checkout -- wallet --> WalletGateway["dyn PaymentGateway<br/>key=wallet"]
     CardGateway -. "选中实现" .-> CardPayment["PaymentClient · Singleton<br/>key=card"]
     WalletGateway -. "选中实现" .-> WalletPayment["PaymentClient · Singleton<br/>key=wallet"]
-    Checkout --> Receipt["ReceiptFormatter · Transient"]
+    Checkout -. "formatter：延迟获取" .-> Receipt["ReceiptFormatter · Transient"]
     Checkout -. "可选依赖：未注册" .-> Fraud["dyn FraudCheck"]
     Orders --> Database["Database · Singleton"]
     AuditQuery["审计仓库查询宏"] --> Audit["Repository&lt;AuditEvent&gt; · Singleton"]
@@ -185,6 +185,7 @@ flowchart LR
 | Singleton | `AppConfig`、`Database`、`Inventory`、两个闭合仓库，以及两个 keyed `PaymentClient` | 同一个 root 的多个 scope 共享这些实例；不同 key 的支付客户端仍是两个独立实例 |
 | Scoped | `RequestContext`、`CheckoutService` | 同一 scope 中重复获取会复用实例，不同 scope 的请求上下文隔离 |
 | Transient | `ReceiptFormatter` | 每次消费或直接获取时创建；注入 Scoped 服务的 formatter 会随那个服务实例复用，不会在每次业务方法调用时自动重建 |
+| 延迟字段 | `#[inject] #[lazy] formatter: ReceiptFormatter` | 消费者构造时只接收句柄，成功订单首次格式化收据时才 `get().await`；拒付和缺货分支不创建格式器 |
 | 异步 factory | 模拟数据库和支付客户端初始化 | 依赖满足后才能启动，互不依赖的初始化可以重叠执行 |
 | Trait 注入 | `dyn OrderStore` 绑定到 `Repository<Order>`；`dyn PaymentGateway` 绑定到 `PaymentClient` | 业务代码依赖接口；订单绑定的闭合泛型实现会在图编译期间被纳入 |
 | Keyed 注入 | `#[inject("card")]` 与 `#[inject("wallet")]` 的字段均为 `dyn PaymentGateway` | trait 查询继承请求 key，取得同一 concrete 类型的两个独立客户端 |
@@ -199,6 +200,25 @@ flowchart LR
 `CheckoutService::place_order` 在短 Mutex 临界区内预留库存，释放锁后再等待支付。未提交的 `Reservation` 在支付拒绝、future 取消或展开栈时通过普通 Rust `Drop` 归还库存；保存订单后调用 `commit`。这是业务 RAII，和容器的 cleanup hook 是两条不同的清理路径。
 
 一个 `CheckoutService` 同时声明了两种支付渠道，所以 **Lazy 首次构造它时也会初始化 card 和 wallet**。运行期的 `PaymentMethod` 只决定本次调用哪个已注入的渠道，不会改变静态依赖闭包。
+
+收据则使用字段级延迟注入：
+
+```rust
+#[inject]
+#[lazy]
+formatter: ReceiptFormatter,
+```
+
+它被改写为 `LazyInjection<ReceiptFormatter>`。`format_receipt` 是异步方法，内部先调用
+`self.formatter.get().await?`，再同步格式化。`application::handle_checkout` 只在订单成功后
+等待这个方法，因此 `sample` 的四笔请求只构造两个格式器，拒付和缺货各自的 scope
+无需创建它们。相同字段再次获取仍返回同一实例；不同请求、普通查询仍保持 Transient
+的独立实例语义。
+
+延迟字段在 build 时仍参与完整图验证；它不会把类型或 key 留到运行时发现。
+本例的目标是 Transient，因此 `--eager` 和 `--warm-up-scopes` 也不会单独预热它。
+若把目标改成 Singleton / Scoped，对应的全量预热仍会选择目标；字段延迟不等于
+服务级别的“永不预热”。消费者和较晚创建的格式器仍按依赖关系安全关闭。
 
 ## 声明、构建、查询与执行业务的边界
 
@@ -247,6 +267,7 @@ let audit = nestrs_core::get_required_service!(
 - **Lazy**：build 完成后尚未初始化资源，首次查询服务才激活必要依赖。
 - **Eager**：Singleton 初始化在 build 返回之前完成，后续请求复用共享实例。
 - **Scope 预热**：`warm_up` 在业务调用前准备 Scoped 服务，每个请求仍有自己的上下文。
+- **字段延迟**：`ReceiptFormatter` 的 `[构造]` 出现在成功下单后；失败请求不会为了生成不存在的收据创建格式器。
 - **并发构造**：对照 factory 的开始和结束事件，观察独立资源初始化能否重叠。`--max-concurrency 1` 会使构造依次取得名额；它不限制业务请求并发。
 - **业务结果**：成功路径包含库存预留、支付成功、库存提交和订单保存；拒付路径归还预留库存。每笔完成的请求都会写入实际审计结果。面向用户的收据只展示订单、客户、商品、金额和支付信息，实例编号保留在诊断日志中。
 - **关闭事件**：请求处理结束后关闭 scope，应用结束时关闭 root。`cleanup hook …` 是异步回调，`drop … #实例编号` 是 Rust 对象析构。

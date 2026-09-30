@@ -89,7 +89,7 @@ async fn completed_shared_success_retires_tasks_and_preserves_owner_cache() {
     // 构造完成后任务表为空，但后续查询仍取得同一实例，证明缓存不再借用“完成任务”。
     for lifetime in [ServiceLifetime::Singleton, ServiceLifetime::Scoped] {
         SHARED_SUCCESS_CALLS.store(0, Ordering::SeqCst);
-        let (_sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         let root = super::OwnerData::new(super::ROOT);
         let first_scope = super::OwnerData::new(1);
         let second_scope = super::OwnerData::new(2);
@@ -102,6 +102,7 @@ async fn completed_shared_success_retires_tasks_and_preserves_owner_cache() {
             )]),
             root.clone(),
             receiver,
+            sender.downgrade(),
             4,
         );
         coordinator.handle_command(super::Command::Register(first_scope.clone()));
@@ -193,7 +194,7 @@ fn counted_failure(inputs: ConstructionInputs) -> Result<ErasedService, Construc
 async fn completed_shared_failure_retires_tasks_without_retrying_or_publishing() {
     for lifetime in [ServiceLifetime::Singleton, ServiceLifetime::Scoped] {
         SHARED_FAILURE_CALLS.store(0, Ordering::SeqCst);
-        let (_sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         let root = super::OwnerData::new(super::ROOT);
         let scope = super::OwnerData::new(1);
         let mut coordinator = super::Coordinator::new(
@@ -205,6 +206,7 @@ async fn completed_shared_failure_retires_tasks_without_retrying_or_publishing()
             )]),
             root.clone(),
             receiver,
+            sender.downgrade(),
             4,
         );
         coordinator.handle_command(super::Command::Register(scope.clone()));
@@ -261,15 +263,20 @@ async fn completed_shared_failure_retires_tasks_without_retrying_or_publishing()
 
 #[test]
 fn failed_transient_tasks_are_retired_without_disposing_the_owner() {
-    let (_sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
     let graph = graph(vec![node::<Chain>(
         0,
         ServiceLifetime::Transient,
         Constructor::Class(chain_leaf),
         vec![],
     )]);
-    let mut coordinator =
-        super::Coordinator::new(graph, super::OwnerData::new(super::ROOT), receiver, 1);
+    let mut coordinator = super::Coordinator::new(
+        graph,
+        super::OwnerData::new(super::ROOT),
+        receiver,
+        sender.downgrade(),
+        1,
+    );
     for _ in 0..10_000 {
         let task = pending(coordinator.ensure_task(super::ROOT, 0, &mut vec![]));
         coordinator.settle(
@@ -299,6 +306,7 @@ async fn retiring_a_failed_parent_still_drains_its_previously_accepted_children(
                 ServiceType::create::<u32>(),
             ),
             optional: false,
+            lazy: None,
             target: Some(provider),
             prepare: prepare_required::<u32>,
             label: None,
@@ -324,9 +332,10 @@ async fn retiring_a_failed_parent_still_drains_its_previously_accepted_children(
             dependencies,
         ),
     ]);
-    let (_sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
     let owner = super::OwnerData::new(super::ROOT);
-    let mut coordinator = super::Coordinator::new(graph, owner.clone(), receiver, 1);
+    let mut coordinator =
+        super::Coordinator::new(graph, owner.clone(), receiver, sender.downgrade(), 1);
     let cached = pending(coordinator.ensure_task(super::ROOT, 0, &mut vec![]));
     coordinator.settle(
         cached,
@@ -416,6 +425,7 @@ fn deep_graph_activation_and_shutdown_do_not_use_a_recursive_rust_stack() {
                                         ServiceType::create::<Chain>(),
                                     ),
                                     optional: false,
+                                    lazy: None,
                                     target: Some(index - 1),
                                     prepare: prepare_required::<Chain>,
                                     label: Some("previous"),
@@ -599,6 +609,7 @@ async fn a_ready_successor_does_not_wait_for_an_unrelated_slow_node() {
                     ServiceType::create::<Fast>(),
                 ),
                 optional: false,
+                lazy: None,
                 target: Some(0),
                 prepare: prepare_required::<Fast>,
                 label: Some("fast"),

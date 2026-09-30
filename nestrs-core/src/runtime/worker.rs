@@ -22,6 +22,7 @@ pub(super) async fn activate(
     graph: Arc<ValidatedGraph>,
     provider: usize,
     inputs: Vec<Option<DependencyLease>>,
+    lazy_inputs: Vec<Option<crate::activation::lazy::LazyDependency>>,
     domain: Arc<ReleaseDomain>,
 ) -> Resolution {
     let node = &graph.nodes[provider];
@@ -31,10 +32,16 @@ pub(super) async fn activate(
     // 每个 worker 只准备当前节点的输入，依赖实例已由调度器构造并以强 lease 传入。
     // Preparation 对写入失败负责回滚，factory frame 则持有跨 await 的真实借用对象。
     let mut preparation = ActivationPreparation::new(node.dependencies.len());
-    for (dependency, input) in node.dependencies.iter().zip(inputs) {
-        preparation
-            .prepare(dependency.slot, dependency.prepare, input)
-            .map_err(convert)?;
+    for ((dependency, input), lazy_input) in node.dependencies.iter().zip(inputs).zip(lazy_inputs) {
+        if let Some(preparer) = dependency.lazy {
+            preparation
+                .prepare_lazy(dependency.slot, preparer, lazy_input)
+                .map_err(convert)?;
+        } else {
+            preparation
+                .prepare(dependency.slot, dependency.prepare, input)
+                .map_err(convert)?;
+        }
     }
     let (service, dependencies) = match node.constructor {
         Constructor::Class(constructor) => {

@@ -47,6 +47,7 @@ use crate::codegen::utility::{
 /// 将模块作用域内的结构体标记为可注入服务。
 ///
 /// 字段来源由属性决定：`#[inject]` 从容器输入取得只读 `Injection<T>` 令牌；
+/// 配合字段级 `#[lazy]` 时改为 `LazyInjection<T>`，通过 `get().await` 延迟获取目标；
 /// `#[value(<Rust expression>)]` 则在词法隔离的隐藏构造 adapter 被 container
 /// 调用时求值。因此它统一支持字面量、模块常量/静态项、可见路径、函数调用与普通
 /// 组合表达式，并由 Rust 完成名称解析和类型检查。字符串字面量及模块常量/静态项

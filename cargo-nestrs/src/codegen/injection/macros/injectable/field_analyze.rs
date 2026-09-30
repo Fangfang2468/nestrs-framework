@@ -8,7 +8,7 @@ use crate::codegen::injection::{
     macros_attrs::service_key::ServiceKeySpec,
     sub_macros::{
         inject::{self, DependencyRequest, INJECTABLE_MESSAGES, inject_key, split_optional},
-        value,
+        lazy, value,
     },
 };
 
@@ -29,6 +29,8 @@ pub(crate) enum FieldStrategy {
         key: Option<ServiceKeySpec>,
         /// 缺失服务时是否允许交付 `None`。
         optional: bool,
+        /// 延迟字段在首次异步访问时取得实例；仍有完整、静态的依赖描述。
+        lazy: bool,
     },
     /// 在宏生成的构造 adapter 中原样求值的字段表达式。
     Value { expression: Expr },
@@ -71,6 +73,7 @@ impl FieldSpec {
             service_type,
             key,
             optional,
+            lazy,
         } = &self.strategy
         else {
             unreachable!("only injected fields have a dependency request");
@@ -84,6 +87,7 @@ impl FieldSpec {
             service_type: service_type.clone(),
             key: key.clone(),
             optional: *optional,
+            lazy: *lazy,
             label: self.field_name.clone(),
         }
     }
@@ -130,6 +134,14 @@ pub(crate) fn collect_field_specs(fields: &Fields) -> syn::Result<Vec<FieldSpec>
     for (index, field) in fields.iter().enumerate() {
         let has_inject = field.attrs.iter().any(inject::is_marker);
         let has_value = field.attrs.iter().any(value::is_marker);
+        let lazy = lazy::parse(&field.attrs)?;
+
+        if lazy && !has_inject {
+            return Err(syn::Error::new_spanned(
+                field,
+                "#[lazy] 只能用于同时标注 #[inject] 的字段，不能用于 #[value] 或默认字段",
+            ));
+        }
 
         if has_inject && has_value {
             return Err(syn::Error::new_spanned(
@@ -149,6 +161,7 @@ pub(crate) fn collect_field_specs(fields: &Fields) -> syn::Result<Vec<FieldSpec>
                 service_type,
                 key,
                 optional,
+                lazy,
             }
         } else {
             match value::parse(&field.attrs)? {
@@ -191,9 +204,11 @@ pub(crate) fn collect_field_specs(fields: &Fields) -> syn::Result<Vec<FieldSpec>
 /// 结构体。
 fn remove_field_strategy_attributes(fields: &mut Fields) {
     for field in fields.iter_mut() {
-        field
-            .attrs
-            .retain(|attribute| !inject::is_marker(attribute) && !value::is_marker(attribute));
+        field.attrs.retain(|attribute| {
+            !inject::is_marker(attribute)
+                && !value::is_marker(attribute)
+                && !lazy::is_marker(attribute)
+        });
     }
 }
 
@@ -244,6 +259,7 @@ mod tests {
                 service_type,
                 key,
                 optional,
+                ..
             } => {
                 assert_eq!(service_type.to_token_stream().to_string(), "Database");
                 assert_eq!(key, &None);
@@ -257,6 +273,7 @@ mod tests {
                 service_type,
                 key: Some(ServiceKeySpec::Named(key)),
                 optional,
+                ..
             } => {
                 assert_eq!(service_type.to_token_stream().to_string(), "dyn Audit");
                 assert_eq!(key, "audit");

@@ -22,10 +22,11 @@ use crate::{
 };
 
 use super::{
-    CloseWaiter, OwnerId, Resolution, ResolveWaiter, TaskId,
+    CloseWaiter, OwnerId, Resolution, TaskId,
     handle::{Command, coordinator_stopped},
+    lazy::LazySlot,
     owner::{CacheEntry, OwnerData, OwnerPhase, OwnerState, ROOT},
-    task::{Activation, TaskRequest, TaskState},
+    task::{Activation, ResolutionWaiter, TaskRequest, TaskState},
     worker::{activate, cleanup},
 };
 
@@ -46,6 +47,8 @@ pub(super) struct Coordinator {
     domain: Arc<ReleaseDomain>,
     commands: mpsc::UnboundedReceiver<Command>,
     commands_open: bool,
+    // 弱通道不延长 root 的逻辑存活；只供已冻结的延迟槽位提交请求。
+    lazy_commands: mpsc::WeakUnboundedSender<Command>,
     owners: HashMap<OwnerId, OwnerState>,
     tasks: HashMap<TaskId, Activation>,
     next_task: TaskId,
@@ -62,6 +65,7 @@ impl Coordinator {
         graph: Arc<ValidatedGraph>,
         root: Arc<OwnerData>,
         commands: mpsc::UnboundedReceiver<Command>,
+        lazy_commands: mpsc::WeakUnboundedSender<Command>,
         max_activations: usize,
     ) -> Self {
         Self {
@@ -69,6 +73,7 @@ impl Coordinator {
             domain: ReleaseDomain::new(),
             commands,
             commands_open: true,
+            lazy_commands,
             owners: HashMap::from([(ROOT, OwnerState::new(root))]),
             tasks: HashMap::new(),
             next_task: 0,
@@ -125,11 +130,24 @@ impl Coordinator {
             } => {
                 self.accept_resolution(owner, provider, waiter);
             }
+            Command::ResolveLazy {
+                owner,
+                provider,
+                waiter,
+            } => {
+                self.accept_resolution(owner, provider, ResolutionWaiter::Lazy(waiter));
+            }
             Command::Close { owner, waiter } => self.begin_close(owner, waiter),
         }
     }
 
-    fn accept_resolution(&mut self, owner: OwnerId, provider: usize, waiter: ResolveWaiter) {
+    fn accept_resolution(
+        &mut self,
+        owner: OwnerId,
+        provider: usize,
+        waiter: impl Into<ResolutionWaiter>,
+    ) {
+        let waiter = waiter.into();
         // 句柄提交前的原子检查只是快速失败；命令在排队期间可能发生关闭，
         // 因此真正“接受工作”的决定仍由协调器在这里作出。
         let open = self
@@ -137,15 +155,15 @@ impl Coordinator {
             .get(&owner)
             .is_some_and(|owner| owner.phase == OwnerPhase::Open);
         if !open || self.owners[&ROOT].phase != OwnerPhase::Open {
-            let _ = waiter.send(Err(ResolveError::closed()));
+            waiter.send(Err(ResolveError::closed()));
             return;
         }
         let Some(node) = self.graph.nodes.get(provider) else {
-            let _ = waiter.send(Err(ResolveError::new("无效的 provider 计划编号".into())));
+            waiter.send(Err(ResolveError::new("无效的 provider 计划编号".into())));
             return;
         };
         if owner == ROOT && node.requires_scope {
-            let _ = waiter.send(Err(ResolveError::construction(
+            waiter.send(Err(ResolveError::construction(
                 &node.identifier,
                 node.common.source,
                 "此服务的依赖闭包需要 scope，不能从 root provider 获取".into(),
@@ -155,7 +173,7 @@ impl Coordinator {
         let mut expansion = Vec::new();
         match self.ensure_task(owner, provider, &mut expansion) {
             TaskRequest::Cached(result) => {
-                let _ = waiter.send(result);
+                waiter.send(result);
             }
             TaskRequest::Pending(task) => self.tasks.get_mut(&task).unwrap().waiters.push(waiter),
         }
@@ -224,7 +242,13 @@ impl Coordinator {
             let targets: Vec<_> = self.graph.nodes[provider]
                 .dependencies
                 .iter()
-                .map(|dependency| dependency.target)
+                .map(|dependency| {
+                    if dependency.lazy.is_some() {
+                        None
+                    } else {
+                        dependency.target
+                    }
+                })
                 .collect();
             let mut failure = None;
             for (index, target) in targets.into_iter().enumerate() {
@@ -306,7 +330,7 @@ impl Coordinator {
                     .insert(activation.provider, CacheEntry::completed(&result));
             }
             for waiter in activation.waiters {
-                let _ = waiter.send(result.clone());
+                waiter.send(result.clone());
             }
             for (parent, input) in activation.parents {
                 let Some(parent_state) = self.tasks.get_mut(&parent) else {
@@ -354,8 +378,29 @@ impl Coordinator {
             let provider = activation.provider;
             let graph = self.graph.clone();
             let domain = self.domain.clone();
+            // 此处已使用 activation 的真实 owner：Singleton 的句柄永远绑定 root。
+            // 延迟输入不创建目标任务，只携带选定 provider、投影和可取消等待状态。
+            let lazy_inputs = graph.nodes[provider]
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    dependency.lazy.and(dependency.target).map(|target| {
+                        LazySlot::dependency(
+                            &self.owners[&activation.owner].data,
+                            self.lazy_commands.clone(),
+                            target,
+                            &graph.nodes[provider],
+                            dependency,
+                        )
+                    })
+                })
+                .collect();
             let handle = self.jobs.spawn(async move {
-                JobCompletion::Activation(activate(graph, provider, inputs, domain).await)
+                JobCompletion::Activation(
+                    crate::activation::lazy::IN_ACTIVATION
+                        .scope((), activate(graph, provider, inputs, lazy_inputs, domain))
+                        .await,
+                )
             });
             self.job_kinds
                 .insert(handle.id(), JobKind::Activation(task));
@@ -444,6 +489,7 @@ impl Coordinator {
                 let state = self.owners.get_mut(&owner).unwrap();
                 // 此时活跃任务全部退役；去掉缓存强 lease，journal 独立持有待清理实例。
                 state.cache.clear();
+                state.data.order_cleanup(&self.graph);
                 state.phase = OwnerPhase::Cleaning { running: false };
             }
             if self.owners[&owner].phase != (OwnerPhase::Cleaning { running: false }) {

@@ -66,8 +66,14 @@ async fn exercise_checkout(initialization: InitializationMode) {
     assert_ne!(first.context_id(), second.context_id());
     assert_eq!(first.store_id(), second.store_id());
     assert_eq!(first.database_id(), second.database_id());
-    assert_eq!(first.formatter_id(), first_again.formatter_id(),);
-    assert_ne!(first.formatter_id(), second.formatter_id(),);
+    assert_eq!(
+        first.formatter_id().await.unwrap(),
+        first_again.formatter_id().await.unwrap(),
+    );
+    assert_ne!(
+        first.formatter_id().await.unwrap(),
+        second.formatter_id().await.unwrap(),
+    );
     assert!(get_service!(provider, CheckoutService).await.is_err());
 
     let store = get_required_service!(provider, dyn OrderStore)
@@ -100,7 +106,7 @@ async fn exercise_checkout(initialization: InitializationMode) {
         .unwrap();
     assert!(!std::ptr::eq(formatter_one, formatter_two));
     assert_ne!(formatter_one.id(), formatter_two.id());
-    assert_ne!(formatter_one.id(), first.formatter_id());
+    assert_ne!(formatter_one.id(), first.formatter_id().await.unwrap());
     assert!(!first.has_fraud_check());
     assert!(!second.has_fraud_check());
     assert!(
@@ -168,7 +174,7 @@ async fn exercise_checkout(initialization: InitializationMode) {
     assert!(!second_order.payment_reference.is_empty());
     assert!(first_order.payment_reference.starts_with("card-"));
     assert!(second_order.payment_reference.starts_with("wallet-"));
-    let receipt = first.format_receipt(&first_order);
+    let receipt = first.format_receipt(&first_order).await.unwrap();
     assert!(receipt.contains(&first_order.id));
     assert!(receipt.contains("Alice"));
     assert!(receipt.contains("199.00"));

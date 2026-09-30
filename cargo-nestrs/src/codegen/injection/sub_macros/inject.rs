@@ -40,6 +40,9 @@ pub(crate) struct DependencyRequest {
     /// 缺失依赖时是否允许交付 `None`。
     pub(crate) optional: bool,
 
+    /// 消费者先取得延迟句柄，目标实例只在首次异步访问时获取。
+    pub(crate) lazy: bool,
+
     /// 具名字段或参数的名称；元组字段为 `None`。
     pub(crate) label: Option<syn::Ident>,
 }

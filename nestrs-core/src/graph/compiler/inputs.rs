@@ -5,8 +5,8 @@
 //! 也保留全部槽位；对 Transient 而言，每个槽位代表独立的实例消费。
 
 use super::{
-    CompiledDependency, CompiledNode, Declaration, GraphDiagnostic, Kind, dependency_label,
-    routes::SelectedRoutes, source, token,
+    CompiledDependency, CompiledNode, Constructor, Declaration, GraphDiagnostic, Kind,
+    dependency_label, routes::SelectedRoutes, source, token,
 };
 use crate::{
     ServiceLifetime,
@@ -40,6 +40,16 @@ pub(super) fn compile(
             );
             // Factory 当前交付的是真实 frame 内借用，不能把尚未解析的延迟句柄当作
             // &T 传入。即使内部手写描述绕过宏，也必须在任何构造前报告协议不匹配。
+            if request.lazy.is_some() && matches!(declaration.constructor, Constructor::Factory(_))
+            {
+                diagnostics.push(
+                    GraphDiagnostic::new(
+                        Kind::InvalidMetadata,
+                        format!("factory 参数不支持延迟注入：{location}"),
+                    )
+                    .at(&declaration.identifier, declaration.common.source),
+                );
+            }
             if request.input_slot.index() != position {
                 diagnostics.push(
                     GraphDiagnostic::new(
@@ -150,6 +160,7 @@ pub(super) fn compile(
                     slot: request.input_slot,
                     requested: request.token.clone(),
                     optional: request.optional,
+                    lazy: request.lazy,
                     target: route.map(|route| route.provider),
                     prepare,
                     label: request.label,

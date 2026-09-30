@@ -24,6 +24,7 @@ pub(crate) fn snapshot(graph: &ValidatedGraph) -> Value {
                         "requestedLabel": names[dependency.requested.service_type.name],
                         "key": key_value(dependency.requested.service_key.as_ref()),
                         "optional": dependency.optional,
+                        "lazy": dependency.lazy.is_some(),
                         "target": dependency.target.map(|target| target + 1),
                     })
                 })

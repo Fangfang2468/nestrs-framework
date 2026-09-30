@@ -58,6 +58,7 @@ fn dependency(
         target,
         requested: identifier(requested),
         optional: target.is_none(),
+        lazy: None,
         prepare: prepare_required::<()>,
         label: Some(label),
     }
@@ -152,6 +153,7 @@ fn preserves_provider_metadata_trait_selection_keys_and_optional_absence() {
             "requestedLabel": "dyn Payment",
             "key": { "kind": "named", "value": "card" },
             "optional": true,
+            "lazy": false,
             "target": 2,
         })
     );
@@ -279,6 +281,7 @@ fn compiler_enumeration_order_does_not_change_snapshot() {
                 input_slot: InputSlot::new(0),
                 token: database,
                 optional: false,
+                lazy: None,
                 label: Some("database"),
                 delivery: Delivery::Direct(prepare_required::<Database>),
                 provider_source: ProviderSource::Registered,

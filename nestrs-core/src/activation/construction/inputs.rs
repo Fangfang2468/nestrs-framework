@@ -8,7 +8,7 @@
 use std::{any::Any, mem};
 
 use crate::{
-    activation::{DependencyLease, Injection},
+    activation::{DependencyLease, Injection, LazyInjection},
     service::Injectable,
 };
 
@@ -35,6 +35,8 @@ pub struct PreparedInput {
 enum InputKind {
     Required,
     Optional,
+    LazyRequired,
+    LazyOptional,
 }
 
 impl PreparedInput {
@@ -64,6 +66,31 @@ impl PreparedInput {
         }
     }
 
+    /// 延迟句柄尚无实例 lease；成功获取时由句柄自己收纳真实 token。
+    pub(super) fn lazy_required<T>(token: LazyInjection<T>) -> Self
+    where
+        T: Injectable + ?Sized,
+    {
+        Self {
+            lease: None,
+            kind: InputKind::LazyRequired,
+            value: Box::new(token),
+            service_type_name: std::any::type_name::<T>(),
+        }
+    }
+
+    pub(super) fn lazy_optional<T>(token: Option<LazyInjection<T>>) -> Self
+    where
+        T: Injectable + ?Sized,
+    {
+        Self {
+            lease: None,
+            kind: InputKind::LazyOptional,
+            value: Box::new(token),
+            service_type_name: std::any::type_name::<T>(),
+        }
+    }
+
     pub(super) fn dependency(&self) -> Option<DependencyLease> {
         self.lease.clone()
     }
@@ -74,6 +101,22 @@ impl PreparedInput {
         T: Injectable + ?Sized,
     {
         self.validate::<Injection<T>>(slot, InputKind::Required, std::any::type_name::<T>())?;
+        Ok(self.into_value())
+    }
+
+    /// 延迟可选目标就绪后复用原有的真实投影载荷，准确恢复其 token。
+    pub(crate) fn into_optional<T>(
+        self,
+        slot: InputSlot,
+    ) -> Result<Option<Injection<T>>, ConstructionError>
+    where
+        T: Injectable + ?Sized,
+    {
+        self.validate::<Option<Injection<T>>>(
+            slot,
+            InputKind::Optional,
+            std::any::type_name::<T>(),
+        )?;
         Ok(self.into_value())
     }
 
@@ -88,6 +131,8 @@ impl PreparedInput {
             return Err(match kind {
                 InputKind::Required => ConstructionError::RequiredInputExpected { slot },
                 InputKind::Optional => ConstructionError::OptionalInputExpected { slot },
+                InputKind::LazyRequired => ConstructionError::LazyRequiredInputExpected { slot },
+                InputKind::LazyOptional => ConstructionError::LazyOptionalInputExpected { slot },
             });
         }
         if !self.value.is::<Value>() {
@@ -156,6 +201,25 @@ impl ConstructionInputs {
         T: Injectable + ?Sized,
     {
         self.take_value(slot, InputKind::Optional, std::any::type_name::<T>())
+    }
+
+    /// 移交必选延迟字段；读取句柄本身不会启动目标构造。
+    pub fn take_lazy<T>(&mut self, slot: InputSlot) -> Result<LazyInjection<T>, ConstructionError>
+    where
+        T: Injectable + ?Sized,
+    {
+        self.take_value(slot, InputKind::LazyRequired, std::any::type_name::<T>())
+    }
+
+    /// 移交可选延迟字段；缺席只由冻结图决定，目标初始化失败不会伪装成 `None`。
+    pub fn take_optional_lazy<T>(
+        &mut self,
+        slot: InputSlot,
+    ) -> Result<Option<LazyInjection<T>>, ConstructionError>
+    where
+        T: Injectable + ?Sized,
+    {
+        self.take_value(slot, InputKind::LazyOptional, std::any::type_name::<T>())
     }
 
     /// 拒绝仍遗留在 adapter 输入中的槽位。

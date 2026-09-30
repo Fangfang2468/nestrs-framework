@@ -32,6 +32,12 @@ pub enum ConstructionError {
     #[error("构造输入槽位 {slot:?} 需要可选依赖")]
     OptionalInputExpected { slot: InputSlot },
 
+    #[error("构造输入槽位 {slot:?} 需要必选延迟依赖")]
+    LazyRequiredInputExpected { slot: InputSlot },
+
+    #[error("构造输入槽位 {slot:?} 需要可选延迟依赖")]
+    LazyOptionalInputExpected { slot: InputSlot },
+
     #[error("构造输入槽位 {slot:?} 的必选依赖不存在")]
     RequiredDependencyAbsent { slot: InputSlot },
 

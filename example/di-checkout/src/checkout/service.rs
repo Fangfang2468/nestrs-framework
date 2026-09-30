@@ -1,4 +1,5 @@
 use nestrs::injectable;
+use nestrs_core::ResolveError;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::{
@@ -27,6 +28,7 @@ pub(crate) struct CheckoutService {
     #[inject("wallet")]
     wallet: dyn PaymentGateway,
     #[inject]
+    #[lazy]
     formatter: ReceiptFormatter,
     #[inject]
     fraud: Option<dyn FraudCheck>,
@@ -90,11 +92,13 @@ impl CheckoutService {
         self.orders.database_id()
     }
     #[cfg(test)]
-    pub(crate) fn formatter_id(&self) -> usize {
-        self.formatter.id()
+    pub(crate) async fn formatter_id(&self) -> Result<usize, ResolveError> {
+        Ok(self.formatter.get().await?.id())
     }
-    pub(crate) fn format_receipt(&self, order: &Order) -> String {
-        self.formatter.format(order)
+    pub(crate) async fn format_receipt(&self, order: &Order) -> Result<String, ResolveError> {
+        // 只有成功订单才需要收据。拒付、缺货等分支不会创建这个 Transient；
+        // 同一个请求多次生成收据仍使用该字段已经取得的同一个格式器。
+        Ok(self.formatter.get().await?.format(order))
     }
     #[cfg(test)]
     pub(crate) fn has_fraud_check(&self) -> bool {

@@ -308,3 +308,153 @@ fn invalid_inputs_keep_extractor_and_configuration_diagnostics() {
         assert!(rendered.contains("compile_error"), "{rendered}");
     }
 }
+
+#[test]
+fn lazy_fields_lower_to_typed_handles_without_losing_keys_or_optional_routes() {
+    let tokens = expand_injectable(
+        TokenStream::new(),
+        quote! {
+            struct Consumer<T: Send + Sync + 'static> {
+                #[inject("reports")]
+                #[lazy]
+                report: Report<T>,
+                #[nestrs::lazy]
+                #[nestrs::inject(7)]
+                audit: Option<dyn Audit>,
+                #[inject]
+                immediate: Database,
+            }
+        },
+    );
+    let expanded = file(tokens.clone());
+    let item = expanded
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Struct(item) => Some(item),
+            _ => None,
+        })
+        .unwrap();
+    let fields: Vec<_> = item.fields.iter().collect();
+    assert_eq!(
+        fields[0].ty,
+        syn::parse_quote!(::nestrs_core::LazyInjection<Report<T>>)
+    );
+    assert_eq!(
+        fields[1].ty,
+        syn::parse_quote!(::core::option::Option<::nestrs_core::LazyInjection<dyn Audit>>)
+    );
+    assert_eq!(
+        fields[2].ty,
+        syn::parse_quote!(::nestrs_core::Injection<Database>)
+    );
+    assert!(fields.iter().all(|field| field.attrs.is_empty()));
+    let rendered = tokens.to_string();
+    assert!(
+        rendered.contains("take_lazy :: < Report < T > >"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("take_optional_lazy :: < dyn Audit >"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("prepare_lazy_required :: < Report < T > >"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("prepare_lazy_optional :: < dyn Audit >"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("RequiresBindingOrAbsent"),
+        "trait projection must remain intact"
+    );
+    assert!(
+        rendered.contains("ServiceKey :: Indexed (7"),
+        "key must remain intact"
+    );
+}
+
+#[test]
+fn lazy_attribute_rejects_orphans_arguments_duplicates_and_factory_parameters() {
+    for (input, message) in [
+        (
+            quote!(
+                struct Bad {
+                    #[lazy]
+                    value: Service,
+                }
+            ),
+            "#[lazy] 只能用于同时标注 #[inject] 的字段",
+        ),
+        (
+            quote!(
+                struct Bad {
+                    #[lazy]
+                    #[value(1)]
+                    value: usize,
+                }
+            ),
+            "#[lazy] 只能用于同时标注 #[inject] 的字段",
+        ),
+        (
+            quote!(
+                struct Bad {
+                    #[inject]
+                    #[lazy]
+                    #[nestrs::lazy]
+                    value: Service,
+                }
+            ),
+            "重复的 #[lazy] 属性",
+        ),
+        (
+            quote!(
+                struct Bad {
+                    #[inject]
+                    #[lazy(true)]
+                    value: Service,
+                }
+            ),
+            "只接受无参数的 #[lazy]",
+        ),
+        (
+            quote!(
+                struct Bad {
+                    #[inject]
+                    #[lazy()]
+                    value: Service,
+                }
+            ),
+            "只接受无参数的 #[lazy]",
+        ),
+        (
+            quote!(
+                struct Bad {
+                    #[inject]
+                    #[lazy = true]
+                    value: Service,
+                }
+            ),
+            "只接受无参数的 #[lazy]",
+        ),
+    ] {
+        let output = expand_injectable(TokenStream::new(), input).to_string();
+        assert!(
+            output.contains("compile_error") && output.contains(message),
+            "{output}"
+        );
+    }
+    for marker in [quote!(#[lazy]), quote!(#[nestrs::lazy])] {
+        let output = expand_factory(
+            TokenStream::new(),
+            quote!(fn build(#marker input: Service) -> Output { Output }),
+        )
+        .to_string();
+        assert!(
+            output.contains("compile_error") && output.contains("参数暂不支持 #[lazy]"),
+            "{output}"
+        );
+    }
+}

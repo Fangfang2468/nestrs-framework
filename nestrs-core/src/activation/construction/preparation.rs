@@ -6,9 +6,9 @@
 
 use super::{
     ConstructionError, ConstructionInputs, FactoryLeaseFrame, InputPreparer, InputSlot,
-    PreparedInput,
+    LazyInputPreparer, PreparedInput,
 };
-use crate::activation::DependencyLease;
+use crate::activation::{DependencyLease, lazy::LazyDependency};
 
 /// 一次构造的准备事务；与固定槽位缓冲区共置，集中维护输入和 lease 的提交顺序。
 pub(crate) struct ActivationPreparation {
@@ -40,6 +40,18 @@ impl ActivationPreparation {
             self.dependencies.push(dependency);
         }
         Ok(())
+    }
+
+    /// 延迟槽位只提交完整句柄，不把尚不存在的目标加入构造帧的依赖 lease。
+    /// 插入失败时句柄按正常 Rust 所有权回滚；未调用 resolver，故没有构造副作用。
+    pub(crate) fn prepare_lazy(
+        &mut self,
+        slot: InputSlot,
+        preparer: LazyInputPreparer,
+        input: Option<LazyDependency>,
+    ) -> Result<(), ConstructionError> {
+        let prepared = preparer(slot, input)?;
+        self.buffer.insert(slot, prepared)
     }
 
     pub(crate) fn finish_class(

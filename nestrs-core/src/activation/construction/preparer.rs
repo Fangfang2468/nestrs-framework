@@ -8,7 +8,10 @@ use std::ptr::NonNull;
 
 use super::{ConstructionError, InputSlot, PreparedInput};
 use crate::{
-    activation::{DependencyLease, Injection, erased_service::ErasedServiceRef},
+    activation::{
+        DependencyLease, Injection, LazyInjection, erased_service::ErasedServiceRef,
+        lazy::LazyDependency,
+    },
     service::Injectable,
 };
 
@@ -18,6 +21,39 @@ use crate::{
 /// `ActivationPreparation` 只有在成功后才会把该值写入槽位并收纳对应 dependency lease。
 pub type InputPreparer =
     fn(InputSlot, Option<ErasedServiceRef>) -> Result<PreparedInput, ConstructionError>;
+
+/// 延迟字段的准备函数只交付句柄，不取得服务地址，也不触发目标构造。
+pub type LazyInputPreparer =
+    fn(InputSlot, Option<LazyDependency>) -> Result<PreparedInput, ConstructionError>;
+
+/// 为必选延迟字段交付类型化句柄。
+#[doc(hidden)]
+pub fn prepare_lazy_required<T>(
+    slot: InputSlot,
+    input: Option<LazyDependency>,
+) -> Result<PreparedInput, ConstructionError>
+where
+    T: Injectable + ?Sized,
+{
+    let dependency = input.ok_or(ConstructionError::RequiredDependencyAbsent { slot })?;
+    Ok(PreparedInput::lazy_required(LazyInjection::<T>::new(
+        dependency, slot,
+    )))
+}
+
+/// 缺席可选依赖在构造时就是 `None`；已有候选才交付稍后可获取的句柄。
+#[doc(hidden)]
+pub fn prepare_lazy_optional<T>(
+    slot: InputSlot,
+    input: Option<LazyDependency>,
+) -> Result<PreparedInput, ConstructionError>
+where
+    T: Injectable + ?Sized,
+{
+    Ok(PreparedInput::lazy_optional(input.map(|dependency| {
+        LazyInjection::<T>::new(dependency, slot)
+    })))
+}
 
 /// 将必选 concrete 输入准备为不可变载荷。
 #[doc(hidden)]

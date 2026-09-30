@@ -1491,6 +1491,12 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   保持库的 Lazy / 32 基线。Cargo 的自定义顶层节警告不等于 Nestrs 未读取配置。
 * 任何服务构造前验证全部注册及可物化的闭合类型；结构错误在容器构建入口 panic，
   成功后冻结图。之后不再读取注册清单、展开泛型或变更图。
+* 字段 `#[inject] #[lazy]` 生成 `LazyInjection<T>`，通过 `get().await` 首次获取。
+  optional 字段为 `Option<LazyInjection<T>>`；key、trait 与闭合泛型仍使用冻结选择。
+  延迟边参与缺失、歧义、环与 Scope 检查，但不作为消费者构造的就绪前提。
+  同一字段合并并发访问并固定一次 occurrence（包括 Transient 的成功/失败），取消等待
+  不重复提交。句柄弱持有 owner/命令通道，成功后强 lease 保活目标；不提供透明同步 Deref。
+  当前仅支持字段标记，尚未实现服务级 lazy override 或 factory 参数延迟注入。
 * 图编译、激活任务展开、失败传播和实例释放使用非递归算法。
 * Singleton 可以依赖 Transient，但整个激活闭包不得包含 Scoped；需要 Scoped 的
   Transient 只能从 scope 查询。factory 参数同样参与生命周期验证。
@@ -1508,7 +1514,12 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 * Singleton/Scoped 失败缓存至 owner 关闭，Transient 失败只属于该 occurrence。
   factory Result 要求 E: Debug；构造 panic 进入 ResolveError。
 * 取消查询仅取消等待，接受的初始化继续。关闭先排空接受的任务，再按 owner
-  逆发布顺序逐个完成 cleanup/释放；每 owner 至多一个 cleanup worker，root 等 scopes。
+  按消费者先于依赖的约束逐个完成 cleanup/释放；含延迟边时用冻结 DAG 重排 journal，
+  可同时清理的实例优先逆发布时间，无延迟边保留原逆发布顺序。每 owner 至多一个
+  cleanup worker，root 等 scopes。
+* 当前构造 worker 内首次等待未就绪延迟字段会明确报错，避免占据激活名额等待新任务。
+  task-local 标记不传播到业务自行 spawn 的任务；factory 不得通过派生任务间接等待
+  未就绪延迟字段，工具无法自动识别任意用户任务因果。此限制不是自动挂起/归还名额协议。
 * dispose_async 等待取消不取消关闭；Drop 只发送幂等关闭请求，不新建 runtime 或
   block_on。Tokio 退出后只保证同步安全释放，不能保证异步 cleanup。
 * 逃逸 token 延长必要内存存活但不阻塞逻辑关闭；cleanup panic 聚合成 DisposeError，

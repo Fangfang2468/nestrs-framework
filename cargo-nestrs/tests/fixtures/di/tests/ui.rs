@@ -90,8 +90,8 @@ fn macro_declarations_preserve_all_ui_contracts() {
     assert_eq!(passing.len(), 15, "preserve every original passing case");
     assert_eq!(
         failing.len(),
-        38,
-        "preserve original errors and independently verify private modules/root exports"
+        39,
+        "preserve original errors and independently verify private modules/root exports and lazy target borrowing"
     );
     assert_eq!(
         macro_passing.len(),

@@ -66,6 +66,7 @@ fn dependency<T: Send + Sync + 'static>(slot: usize, key: Option<ServiceKey>) ->
         input_slot: InputSlot::new(slot),
         token: token::<T>(key),
         optional: false,
+        lazy: None,
         label: Some("dependency"),
         delivery: Delivery::Direct(prepare_required::<T>),
         provider_source: ProviderSource::Registered,
@@ -93,6 +94,7 @@ fn trait_dependency(optional: bool, key: Option<ServiceKey>) -> DependencyReques
         input_slot: InputSlot::new(0),
         token: token::<dyn Audit>(key),
         optional,
+        lazy: None,
         label: Some("audit"),
         delivery: if optional {
             Delivery::RequiresBindingOrAbsent(prepare_optional_absent::<dyn Audit>)
@@ -1101,4 +1103,132 @@ fn demanded_blueprint_catalog_rejects_conflicting_callbacks_in_any_order() {
             .unwrap_err();
         assert!(error.to_string().contains("闭合 Provider 回调声明冲突"));
     }
+}
+
+/// 延迟边只影响激活展开，完整静态图中仍然保留目标、槽位与拓扑约束。
+#[test]
+fn lazy_dependencies_preserve_all_graph_validation_rules() {
+    let lazy_alpha = || {
+        let mut request = dependency::<Alpha>(0, None);
+        request.lazy = Some(crate::activation::prepare_lazy_required::<Alpha>);
+        request
+    };
+    let missing = compile(vec![provider::<Consumer>(
+        None,
+        ServiceLifetime::Singleton,
+        vec![lazy_alpha()],
+    )])
+    .unwrap_err();
+    assert!(
+        missing
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.kind == GraphDiagnosticKind::MissingDependency)
+    );
+
+    let scoped = compile(vec![
+        provider::<Consumer>(None, ServiceLifetime::Singleton, vec![lazy_alpha()]),
+        provider::<Alpha>(None, ServiceLifetime::Scoped, vec![]),
+    ])
+    .unwrap_err();
+    assert!(
+        scoped
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.kind == GraphDiagnosticKind::ScopeRequired)
+    );
+
+    let cycle = compile(vec![
+        provider::<Consumer>(None, ServiceLifetime::Singleton, vec![lazy_alpha()]),
+        provider::<Alpha>(
+            None,
+            ServiceLifetime::Singleton,
+            vec![dependency::<Consumer>(0, None)],
+        ),
+    ])
+    .unwrap_err();
+    assert!(
+        cycle
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.kind == GraphDiagnosticKind::Cycle)
+    );
+
+    let graph = compile(vec![
+        provider::<Consumer>(None, ServiceLifetime::Singleton, vec![lazy_alpha()]),
+        provider::<Alpha>(None, ServiceLifetime::Transient, vec![]),
+    ])
+    .unwrap();
+    let consumer = graph.routes[&token::<Consumer>(None)].provider;
+    let alpha = graph.routes[&token::<Alpha>(None)].provider;
+    assert_eq!(graph.nodes[consumer].dependencies[0].target, Some(alpha));
+    assert!(graph.nodes[consumer].dependencies[0].lazy.is_some());
+    assert!(graph.dependents[alpha].contains(&consumer));
+    assert!(
+        graph
+            .topological_order
+            .iter()
+            .position(|id| *id == alpha)
+            .unwrap()
+            < graph
+                .topological_order
+                .iter()
+                .position(|id| *id == consumer)
+                .unwrap()
+    );
+    assert_eq!(
+        snapshot(&graph)["nodes"][consumer]["dependencies"][0]["lazy"],
+        true
+    );
+}
+
+#[test]
+fn lazy_optional_traits_freeze_absence_but_do_not_hide_ambiguity() {
+    let mut request = trait_dependency(true, None);
+    request.lazy = Some(crate::activation::prepare_lazy_optional::<dyn Audit>);
+    let consumer = || provider::<Consumer>(None, ServiceLifetime::Singleton, vec![request.clone()]);
+    let graph = compile(vec![consumer()]).unwrap();
+    assert!(graph.nodes[0].dependencies[0].target.is_none());
+    assert!(graph.nodes[0].dependencies[0].lazy.is_some());
+
+    let error = GraphCompiler::compile_snapshot(crate::registration::catalog::RegistrySnapshot {
+        providers: vec![
+            consumer(),
+            provider::<Alpha>(None, ServiceLifetime::Singleton, vec![]),
+            provider::<Beta>(None, ServiceLifetime::Singleton, vec![]),
+        ],
+        bindings: vec![binding::<Alpha>(), binding::<Beta>()],
+        ..Default::default()
+    })
+    .unwrap_err();
+    assert!(
+        error
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.kind == GraphDiagnosticKind::AmbiguousTrait)
+    );
+}
+
+#[test]
+fn lazy_factory_inputs_are_rejected_before_invoking_any_factory() {
+    let mut request = dependency::<Alpha>(0, None);
+    request.lazy = Some(crate::activation::prepare_lazy_required::<Alpha>);
+    let factory = Provider::Factory(FactoryProvider {
+        provide: token::<Consumer>(None),
+        common: common(ServiceLifetime::Singleton),
+        dependencies: vec![request],
+        invoker: FactoryInvoker::Sync(|_| panic!("invalid metadata must never invoke factory")),
+    });
+    let error = compile(vec![
+        factory,
+        provider::<Alpha>(None, ServiceLifetime::Singleton, vec![]),
+    ])
+    .unwrap_err();
+    assert!(
+        error
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.kind == GraphDiagnosticKind::InvalidMetadata)
+    );
+    assert!(error.to_string().contains("factory 参数不支持延迟注入"));
 }

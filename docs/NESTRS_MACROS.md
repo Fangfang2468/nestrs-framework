@@ -15,6 +15,7 @@ Nestrs 用属性声明服务、用字段或函数参数声明依赖，再通过�
 | `#[factory]` | 用同步或异步函数创建服务 | `use nestrs::factory;` |
 | `#[primary]` | 同一个接口有多个候选时，指定优先实现 | `use nestrs::primary;` |
 | `#[inject]` | 结构体字段需要另一个服务；也可指定工厂参数的 key | 声明内的辅助属性，不单独导入 |
+| `#[lazy]` | 将 `#[inject]` 字段改为首次 `get().await` 才获取目标的延迟句柄 | `injectable` 字段内的辅助属性，不单独导入 |
 | `#[value(表达式)]` | 为结构体中的普通字段提供初始值 | 声明内的辅助属性，不单独导入 |
 | `get_required_service!` 等四个查询宏 | 从 root 或 scope 取得服务 | 从 `nestrs_core` 导入 |
 
@@ -36,8 +37,8 @@ struct AppConfig;
 struct AppConfig;
 ```
 
-后文使用导入后的短名称。辅助属性也支持 `#[nestrs::inject]` 和
-`#[nestrs::value(...)]`，但不要写 `use nestrs::{inject, value};`：它们不能脱离
+后文使用导入后的短名称。辅助属性也支持 `#[nestrs::inject]`、`#[nestrs::lazy]` 和
+`#[nestrs::value(...)]`，但不要写 `use nestrs::{inject, lazy, value};`：它们不能脱离
 `#[injectable]` 或 `#[factory]` 单独工作。
 
 ## 2. 跑通第一个程序
@@ -156,6 +157,7 @@ cargo nestrs graph
 | `#[inject("mail")] port: dyn SomeTrait` | 解析字符串 key 为 `"mail"` 的服务 |
 | `#[inject(123)] dependency: SomeService` | 解析整数 key 为 `123` 的服务 |
 | `#[inject] optional: Option<SomeService>` | 没有注册时注入 `None` |
+| `#[inject] #[lazy] dependency: SomeService` | 注入 `LazyInjection<SomeService>`，首次 `get().await` 获取目标 |
 | `#[value(表达式)] field: T` | 创建实例时执行表达式并初始化字段 |
 | `field: T`，没有上述属性 | 创建实例时调用 `T::default()`，不会自动注入 |
 
@@ -181,7 +183,7 @@ struct RetryPolicy {
 一个字段只能选择一种策略，不能同时写 `#[inject]` 和 `#[value(...)]`。
 不带属性的字段必须实现 `Default`；若希望它来自容器，请明确写 `#[inject]`。
 
-注入字段按只读共享引用使用，可以直接调用 `self.notifier.notify(...)`。
+普通注入字段按只读共享引用使用，可以直接调用 `self.notifier.notify(...)`。
 需要传给接收 `&T` 的函数时，可以显式写 `&*self.dependency`。这些字段由宏改写为
 容器管理的只读注入类型，不应当作可直接移动或可变借用的普通 `T`；业务可变状态
 应使用 `Mutex`、`RwLock` 或原子类型等同步机制。
@@ -215,6 +217,95 @@ struct RetryPolicy {
 所有服务类型都需要满足 `Send + Sync + 'static`。`'static` 表示服务不能借用短期
 外部数据，不表示每个服务都要存活到程序结束。接口通常声明为
 `trait MyService: Send + Sync { ... }`，且必须能作为 `dyn MyService` 使用。
+
+### 3.3 用 lazy 推迟某个字段的依赖初始化
+
+某些服务只在少数业务分支使用，例如导出订单报表的客户端。给注入字段增加
+`#[lazy]` 后，创建消费者不再要求这个目标及其依赖已经完成构造：
+
+```rust
+use nestrs::{factory, injectable};
+use nestrs_core::ResolveError;
+
+struct ReportService;
+
+impl ReportService {
+    fn generate(&self) -> String {
+        "订单报表".to_owned()
+    }
+}
+
+#[factory]
+async fn report_service() -> ReportService {
+    // 可以在这里建立异步连接；只在目标确实需要初始化时执行。
+    tokio::task::yield_now().await;
+    ReportService
+}
+
+#[injectable]
+struct OrderService {
+    #[inject]
+    #[lazy]
+    reports: ReportService,
+}
+
+impl OrderService {
+    async fn export_report(&self) -> Result<String, ResolveError> {
+        let reports = self.reports.get().await?;
+        Ok(reports.generate())
+    }
+}
+```
+
+源码仍声明业务类型 `ReportService`，工具将该字段改写为
+`nestrs_core::LazyInjection<ReportService>`。`get().await` 返回借用句柄的 `&ReportService`；
+目标就绪后，普通同步业务方法仍可直接调用。句柄没有同步 `Deref`，不能省略首次获取
+所需的异步等待而写成 `self.reports.generate()`。
+
+字段还可以组合 key、接口、闭合泛型及 optional：
+
+```rust
+#[inject("sales")]
+#[lazy]
+reports: dyn ReportPort,
+
+#[inject]
+#[lazy]
+cache: ReportCache<Customer>,
+
+#[inject]
+#[lazy]
+optional_reports: Option<ReportService>,
+```
+
+最后一种形式生成 `Option<LazyInjection<ReportService>>`。注册不存在时是 `None`；
+存在时先取句柄，再调用 `get().await`。初始化失败仍是错误，不会变成 `None`。
+
+生命周期决定目标的共享范围：Singleton 在 root 内共享，Scoped 在其所属 scope 内共享；
+Transient 每个延迟字段拥有独立的一次构造。同一字段的多次和并发 `get()` 共享这次结果，
+包括初始化失败；需要新的 Transient 尝试时，须通过新的消费槽位获取。
+取消一次等待不会取消已接受的初始化，也不会让下一次等待重复构造。
+
+图仍在 `build()` 时完整验证并冻结。延迟字段的缺失依赖、key 歧义、循环和生命周期冲突
+都会提前报告，不会因为尚未访问而被跳过。特别是 Singleton 不能借助 `#[lazy]` 依赖
+Scoped；依赖 Scoped 的 Transient 仍须从 scope 查询。
+
+字段上的延迟标记不改变目标自身的预热选择。全局 Eager 仍会初始化所有 Singleton；
+如果其他普通注入字段需要同一个目标，它也会提前创建。当前只支持 `#[injectable]`
+注入字段上的无参数 `#[lazy]`，不支持服务声明级别、factory 参数上的标记，或者
+`#[lazy(true)]` / `#[lazy(false)]`。
+
+在容器的构造 worker 中，尚未完成初始化的延迟句柄调用 `get()` 会返回明确的
+`ResolveError`。该保护覆盖同步构造、`#[value]` / `Default` 和同一任务内的 factory
+异步调用链，避免构造任务占着名额等待另一构造任务而死锁。构造所需的前置依赖应使用
+普通依赖字段或 factory 参数声明；业务方法执行期间再使用延迟获取。
+用户另外启动的 `tokio::spawn` / `spawn_blocking` 任务不会继承此阶段标记，框架无法识别
+任意用户任务间的因果关系；factory 也不能通过派生任务等待尚未初始化的延迟字段，
+这种写法仍可能耗尽构造名额。
+
+owner 开始关闭后，未初始化句柄拒绝新建目标。已成功取得的目标由强 lease 保活；
+即使安全代码把句柄移出消费者，内存仍保持有效，但 cleanup 后不承诺业务资源可用。
+关闭会先完成消费者 cleanup，再清理它的目标，即使目标晚于消费者发布。
 
 ## 4. 用 factory 控制创建过程
 

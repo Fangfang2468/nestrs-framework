@@ -153,6 +153,7 @@ fn take_injected_field_value(spec: FieldSpec, context: syn::Ident) -> zyn::Token
     let FieldStrategy::Inject {
         service_type,
         optional,
+        lazy,
         ..
     } = &spec.strategy
     else {
@@ -160,19 +161,32 @@ fn take_injected_field_value(spec: FieldSpec, context: syn::Ident) -> zyn::Token
     };
     let service_type = service_type.clone();
     let optional = *optional;
+    let lazy = *lazy;
     let position = spec
         .input_slot
         .expect("inject field must have an input slot");
 
     zyn! {
-        @if (optional) {
-            {{ context }}.take_optional::<{{ service_type }}>(
-                ::nestrs_core::activation::InputSlot::new({{ position }})
-            )?
+        @if (lazy) {
+            @if (optional) {
+                {{ context }}.take_optional_lazy::<{{ service_type }}>(
+                    ::nestrs_core::activation::InputSlot::new({{ position }})
+                )?
+            } @else {
+                {{ context }}.take_lazy::<{{ service_type }}>(
+                    ::nestrs_core::activation::InputSlot::new({{ position }})
+                )?
+            }
         } @else {
-            {{ context }}.take::<{{ service_type }}>(
-                ::nestrs_core::activation::InputSlot::new({{ position }})
-            )?
+            @if (optional) {
+                {{ context }}.take_optional::<{{ service_type }}>(
+                    ::nestrs_core::activation::InputSlot::new({{ position }})
+                )?
+            } @else {
+                {{ context }}.take::<{{ service_type }}>(
+                    ::nestrs_core::activation::InputSlot::new({{ position }})
+                )?
+            }
         }
     }
 }

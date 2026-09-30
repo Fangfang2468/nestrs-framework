@@ -34,6 +34,7 @@ declare ordinary injected fields.
 | Binary | Runtime assertions |
 | --- | --- |
 | `downstream_demand` | An upstream class and private async factory satisfy a later consumer's requests; an external blanket impl supplies a second interface for the private factory type, all projections share Singleton identity, two scopes share the private Singleton, cleanup and Drop run once |
+| `lazy_cross_crate` | A lazy field declared in a library selects an upstream private async factory through a trait; constructing the consumer does not construct its target, and later accesses share the Singleton with root queries |
 | `sibling_selection` | A contracts-only consumer receives providers from sibling crates; primary applies to default key, named audit key remains independent, optional present/absent injection follows the selected routes |
 | `transitive_reuse` | Demands repeated in two consumer crates and the binary reuse the same instances and one logical route per actual concrete/interface pair, including the private factory projection |
 | `alias_identity` | Renamed trait/type exports use legal public paths, same-named types from different crates remain distinct, and one projection pair serves default and named concrete providers |

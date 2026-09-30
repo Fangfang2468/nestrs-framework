@@ -35,5 +35,31 @@ pub(super) struct Activation {
     pub(super) state: TaskState,
     // 同一个消费者可出现多个不同输入槽位，逐一保留才能维持重复注入语义。
     pub(super) parents: Vec<(TaskId, usize)>,
-    pub(super) waiters: Vec<ResolveWaiter>,
+    pub(super) waiters: Vec<ResolutionWaiter>,
+}
+
+/// 一次性查询与延迟槽位使用同一个任务完成协议。延迟槽位的接收端由句柄自身保留，
+/// 因而调用者取消等待时，协调器仍能交付并缓存已经接受的 occurrence。
+pub(super) enum ResolutionWaiter {
+    Query(ResolveWaiter),
+    Lazy(tokio::sync::watch::Sender<Option<Resolution>>),
+}
+
+impl From<ResolveWaiter> for ResolutionWaiter {
+    fn from(waiter: ResolveWaiter) -> Self {
+        Self::Query(waiter)
+    }
+}
+
+impl ResolutionWaiter {
+    pub(super) fn send(self, result: Resolution) {
+        match self {
+            Self::Query(waiter) => {
+                let _ = waiter.send(result);
+            }
+            Self::Lazy(waiter) => {
+                let _ = waiter.send(Some(result));
+            }
+        }
+    }
 }

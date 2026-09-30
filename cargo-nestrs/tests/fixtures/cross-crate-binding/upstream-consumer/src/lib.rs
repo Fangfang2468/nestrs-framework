@@ -60,3 +60,18 @@ impl Checkout {
 pub fn linked_provider_constructions() -> usize {
     primary_provider::total_constructions()
 }
+
+/// 延迟字段定义在业务库中，目标则是上游库不公开的 async factory 成功类型。
+/// 下游只能通过接口调用，整个链条不得依赖公开 concrete 或手工 binding。
+#[injectable]
+pub struct LazyConnectionConsumer {
+    #[nestrs::lazy]
+    #[nestrs::inject]
+    connection: dyn ConnectionPort,
+}
+
+impl LazyConnectionConsumer {
+    pub async fn connection_identity(&self) -> Result<usize, nestrs_core::ResolveError> {
+        Ok(self.connection.get().await?.identity())
+    }
+}

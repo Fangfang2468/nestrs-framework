@@ -25,7 +25,8 @@ pub use factory::{AsyncConstructor, FactoryConstructor, FactoryFuture, FactoryIn
 pub use inputs::{ConstructionInputs, PreparedInput};
 pub(crate) use preparation::ActivationPreparation;
 pub use preparer::{
-    InputPreparer, prepare_bound_optional, prepare_bound_required, prepare_optional,
-    prepare_optional_absent, prepare_required,
+    InputPreparer, LazyInputPreparer, prepare_bound_optional, prepare_bound_required,
+    prepare_lazy_optional, prepare_lazy_required, prepare_optional, prepare_optional_absent,
+    prepare_required,
 };
 pub use slot::InputSlot;

@@ -34,7 +34,7 @@ pub use lifetime::ServiceLifetime;
 pub use options::{InitializationMode, ServiceProviderOptions};
 pub use service::ServiceKey;
 
-pub use activation::Injection;
+pub use activation::{Injection, LazyInjection};
 
 // 测试实体统一放在 crate 根 tests/；这里只声明挂载点，使白盒测试继续受同一
 // crate 的私有边界约束，不为测试暴露生产内部 API。

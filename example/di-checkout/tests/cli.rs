@@ -68,6 +68,12 @@ fn sample_processes_orders_without_exporting_a_graph_or_running_di_probes() {
     );
     assert!(!stdout.contains("[验证]"), "{diagnostic}");
     assert_eq!(stdout.matches("[审计]").count(), 4, "{diagnostic}");
+    // 四笔请求只有两笔成功；延迟字段使两个失败请求不创建收据格式器。
+    assert_eq!(
+        stdout.matches("[构造] ReceiptFormatter").count(),
+        2,
+        "{diagnostic}"
+    );
 }
 
 #[test]
@@ -156,6 +162,7 @@ fn business_rejection_is_audited_rolls_back_stock_and_exits_unsuccessfully() {
         "{diagnostic}"
     );
     assert!(stdout.contains("业务库存回滚"), "{diagnostic}");
+    assert!(!stdout.contains("[构造] ReceiptFormatter"), "{diagnostic}");
     assert!(
         stdout.contains("成功订单 0 笔；剩余库存 5 件；成交金额 0.00 元；审计 1 条"),
         "{diagnostic}"

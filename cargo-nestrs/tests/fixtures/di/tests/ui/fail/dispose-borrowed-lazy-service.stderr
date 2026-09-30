@@ -1,0 +1,1 @@
+error[E0505]: cannot move out of `provider` because it is borrowed

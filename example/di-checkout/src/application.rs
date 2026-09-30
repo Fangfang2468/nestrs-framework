@@ -156,7 +156,12 @@ pub(crate) async fn handle_checkout(
         let entry = AuditEvent { message };
         audit.insert(entry.clone());
         event(format!("[审计] {}", entry.message));
-        let result = result.map(|order| checkout.format_receipt(&order));
+        // 成功分支才获取延迟注入的收据格式器。初始化错误仍由应用层统一关闭 scope
+        // 后传播，业务拒绝则保留原来的 CheckoutError，不触发额外服务构造。
+        let result = match result {
+            Ok(order) => Ok(checkout.format_receipt(&order).await?),
+            Err(error) => Err(error),
+        };
         Ok(CheckoutResponse {
             customer: customer.clone(),
             result,

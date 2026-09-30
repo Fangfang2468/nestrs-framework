@@ -299,6 +299,7 @@ fn same_metadata(left: &Declaration, right: &Declaration) -> bool {
                     && left.input_slot == right.input_slot
                     && left.declaration_position == right.declaration_position
                     && left.optional == right.optional
+                    && left.lazy.is_some() == right.lazy.is_some()
                     && left.label == right.label
                     && std::mem::discriminant(&left.delivery)
                         == std::mem::discriminant(&right.delivery)
