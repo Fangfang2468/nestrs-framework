@@ -61,6 +61,43 @@ fn settings() -> Settings { Settings }
 owner、scope、借用与关闭 API 不变。`nestrs` extern 名被工具保留，同名 Cargo
 依赖会报冲突；不要添加一个宏依赖来覆盖它。
 
+## Cargo.toml 中的容器启动配置
+
+在应用 package 的 `Cargo.toml` 顶层加入以下配置，然后使用 `ServiceProvider::build().await`：
+
+```toml
+[nestrs-cli]
+initialization = "eager"
+max-concurrent-activations = 16
+```
+
+| 配置键 | 取值 | 缺省值 |
+| --- | --- | --- |
+| `initialization` | `"lazy"`：先验证图，查询时构造；`"eager"`：在 build 返回前预热 Singleton 及必要依赖 | `"lazy"` |
+| `max-concurrent-activations` | 大于零且能由目标平台 `usize` 表示的整数；全 root / scope 共享的构造任务上限 | `32` |
+
+`[nestrs-cli]` 是 Nestrs 管理的自定义顶层配置节，不写成 `[package.nestrs-cli]` 或
+`[package.metadata.nestrs.di]`。Cargo 本身会提示 `unused manifest key: nestrs-cli`；
+这表示它不处理该节，不影响 Nestrs 的配置读取。工具对未知键、错误类型、拼错的模式、
+零与负并发数报中文错误，包含 manifest 路径和配置键。
+
+配置属于入口 package：同一个 package 的 binary / test 使用同一份设置，不自动继承
+workspace 或依赖库的设置。在依赖库中调用 core 的 build，仍按最终入口配置启动。
+多 package workspace 应在各个应用成员的 Cargo.toml 分别配置；虚拟 workspace 根中
+的同名表不会作为成员默认值。
+
+工具在编译时读取并固化设置，同时把 Cargo.toml 加入 rustc 的依赖跟踪。仅修改设置
+也会使对应入口重新编译。运行产物不需要读取源码或 Cargo.toml，因此直接启动 binary
+与 `cargo nestrs run` 使用相同的设置；配置修改后必须重新构建。
+
+`ServiceProvider::build_with_options(options)` 保留并完整覆盖项目配置。
+`ServiceProviderOptions::default()` 仍为 Lazy / 32，不隐式读取项目配置；因此
+`build_with_options(Default::default())` 表示显式选用库的基线。
+
+这些设置只控制服务激活，不跳过全图校验，也不改变 scope 的隔离语义。
+`create_scope()` 仍不构造服务，需要预热时显式调用 `scope.warm_up().await`。
+`cargo nestrs graph` 仍只分析图，即使配置为 Eager 也不执行 factory 或 cleanup。
+
 ## 工具链与命令
 
 适配身份以 [toolchain.json](../cargo-nestrs/toolchain.json) 为准：

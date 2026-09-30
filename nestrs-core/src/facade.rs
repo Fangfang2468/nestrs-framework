@@ -12,6 +12,7 @@ use crate::{
     activation::InputSlot,
     error::{BuildError, DisposeError, ResolveError},
     graph::{GraphCompiler, ValidatedGraph},
+    registration::catalog::{RegistrySnapshot, collect},
     runtime::{Owner, Runtime},
     service::{ServiceIdentifier, ServiceType},
 };
@@ -30,17 +31,28 @@ pub struct ServiceProvider {
 }
 
 impl ServiceProvider {
-    /// 使用 Lazy 与 32 个构造名额的默认选项建立容器。
+    /// 使用入口 package 的 Cargo.toml 中由工具链固化的启动配置建立容器。
+    /// 未配置的字段采用 Lazy 与 32 个构造名额；运行时不读取 Cargo.toml。
     pub async fn build() -> Result<Self, BuildError> {
-        Self::build_with_options(ServiceProviderOptions::default()).await
+        Self::build_from_snapshot(collect(), None).await
     }
 
-    /// 在执行任何构造函数之前完整验证图；结构错误立即 panic。
+    /// 显式选项完整覆盖项目配置。在执行任何构造函数之前完整验证图；结构错误立即 panic。
     pub async fn build_with_options(options: ServiceProviderOptions) -> Result<Self, BuildError> {
+        Self::build_from_snapshot(collect(), Some(options)).await
+    }
+
+    /// 两个公开入口共享同一次描述收集、结构验证与启动流程。配置和声明来自同一入口
+    /// 快照，不为了读取选项再次执行描述回调，也不让被依赖库提供应用默认配置。
+    async fn build_from_snapshot(
+        snapshot: RegistrySnapshot,
+        overrides: Option<ServiceProviderOptions>,
+    ) -> Result<Self, BuildError> {
+        let options = overrides.unwrap_or_else(|| snapshot.options.clone());
         // 先核查全部结构，再启动协调器；即使没有 Tokio runtime，非法图也不会
         // 因为环境检查而绕过诊断，更不会在验证完成前执行任何服务构造。
         let graph = Arc::new(
-            GraphCompiler::compile_static()
+            GraphCompiler::compile_snapshot(snapshot)
                 .unwrap_or_else(|error| panic!("DI 依赖图验证失败: {error}")),
         );
         tokio::runtime::Handle::try_current().map_err(|_| BuildError::RuntimeUnavailable)?;

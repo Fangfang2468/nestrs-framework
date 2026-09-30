@@ -23,11 +23,13 @@ use rustc_middle::mir::{self, BasicBlock, BasicBlockData, Local, Operand, Place,
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::{FileName, Span, Spanned, Symbol};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 /// This symbol is owned by the compiler/runtime ABI, never by application API.
 pub const ENTRY_NAME: &str = "__nestrs_registry_v1";
 const ENTRY_SOURCE: &str = "nestrs compiler registry";
+const OPTIONS_HELPER: &str = "registry_set_options";
 
 type MirBuilt = for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> &'tcx Steal<mir::Body<'tcx>>;
 static ORIGINAL_MIR_BUILT: OnceLock<MirBuilt> = OnceLock::new();
@@ -55,6 +57,9 @@ pub fn prepare(compiler: &interface::Compiler, krate: &mut ast::Crate) {
     {
         return;
     }
+    // 在两个编译阶段都读取并校验当前入口的 package 配置。即使 cargo check 不生成
+    // 最终目标代码，配置错误也会当场报告；不能等到首次构图才发现拼写或数值错误。
+    startup_options(&compiler.sess);
     // Exporting the symbol is compiler work, not an unsafe source declaration
     // in the user's crate. This also preserves #![forbid(unsafe_code)].
     let source =
@@ -87,6 +92,55 @@ pub fn prepare(compiler: &interface::Compiler, krate: &mut ast::Crate) {
             }
         }
     }
+}
+
+/// 配置归最终入口所属 package 所有。CARGO_MANIFEST_* 由 Cargo 为每个编译单元设置，
+/// 因此上游 rlib 的 metadata 不会把自己的启动策略传播到宿主 binary/test。
+///
+/// 使用 SourceMap 而非直接 fs::read，令 Cargo.toml 同时进入 rustc dep-info 和现有
+/// SnapshotLoader/CheckedLoader：仅修改 [nestrs-cli] 也必须重编译，两个编译阶段之间
+/// 改动文件则拒绝继续。编译后的程序只含配置值，运行时无需部署或读取 Cargo.toml。
+fn startup_options(session: &rustc_session::Session) -> cargo_nestrs::project_config::DiConfig {
+    let manifest = std::env::var_os("CARGO_MANIFEST_PATH")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("CARGO_MANIFEST_DIR")
+                .map(|directory| PathBuf::from(directory).join("Cargo.toml"))
+        });
+    let Some(manifest) = manifest else {
+        // 直接调用 rustc_driver 的 ABI 回归探针不是 Cargo 项目，保留原有缺省行为。
+        return cargo_nestrs::project_config::DiConfig::default();
+    };
+    let source = session
+        .source_map()
+        .load_file(&manifest)
+        .unwrap_or_else(|error| {
+            session.dcx().fatal(format!(
+                "无法读取入口项目配置 {}：{error}",
+                manifest.display(),
+            ))
+        });
+    let source = source.src.as_deref().unwrap_or_else(|| {
+        session.dcx().fatal(format!(
+            "入口项目配置没有可读取的内容：{}",
+            manifest.display(),
+        ))
+    });
+    let options = cargo_nestrs::project_config::parse_manifest(source).unwrap_or_else(|error| {
+        session
+            .dcx()
+            .fatal(format!("{}：{error}", manifest.display()))
+    });
+    // Driver 自身可能是 64 位，而应用是 32 位目标。不得将宿主 usize 配置静默截断。
+    let target_max = u128::MAX >> (128 - session.target.pointer_width);
+    if options.max_concurrent_activations as u128 > target_max {
+        session.dcx().fatal(format!(
+            "{}：[nestrs-cli].max-concurrent-activations 超出 {} 位目标 usize 的范围",
+            manifest.display(),
+            session.target.pointer_width,
+        ));
+    }
+    options
 }
 
 /// The generated source signature is intentionally safe so it does not add an
@@ -252,10 +306,34 @@ fn fill_registry_mir<'tcx>(
     original: &'tcx Steal<mir::Body<'tcx>>,
 ) -> &'tcx Steal<mir::Body<'tcx>> {
     let callbacks = collect_callbacks(tcx);
-    let helpers = collect_helpers(tcx);
+    let (helpers, options_helper) = collect_helpers(tcx);
     let mut body = original.steal();
     let source_info = body.basic_blocks[mir::START_BLOCK].terminator().source_info;
     let mut blocks = IndexVec::new();
+    if let Some(helper) = options_helper {
+        validate_options_helper(tcx, helper, body.local_decls[Local::new(1)].ty);
+        let options = startup_options(tcx.sess);
+        let unit = body
+            .local_decls
+            .push(mir::LocalDecl::new(tcx.types.unit, source_info.span));
+        // 只有最终入口写一次配置，随后才汇总本 crate 和依赖中的服务描述。
+        // 传入普通标量并调用真实 typed sink，不伪造 options 内存布局或 enum 判别值。
+        blocks.push(call_block(
+            tcx,
+            helper,
+            vec![
+                Operand::Copy(Local::new(1).into()),
+                constant_operand(mir::Const::from_bool(tcx, options.eager), source_info.span),
+                constant_operand(
+                    mir::Const::from_usize(tcx, options.max_concurrent_activations as u64),
+                    source_info.span,
+                ),
+            ],
+            unit.into(),
+            BasicBlock::new(1),
+            source_info,
+        ));
+    }
     for (kind, callback) in callbacks {
         let helper = *helpers.get(&kind).unwrap_or_else(|| {
             tcx.dcx().fatal(format!(
@@ -396,7 +474,7 @@ fn callback_descriptor<'tcx>(tcx: TyCtxt<'tcx>, kind: Kind, callback: DefId) -> 
     output
 }
 
-fn collect_helpers(tcx: TyCtxt<'_>) -> BTreeMap<Kind, DefId> {
+fn collect_helpers(tcx: TyCtxt<'_>) -> (BTreeMap<Kind, DefId>, Option<DefId>) {
     let mut cores: Vec<_> = tcx
         .crates(())
         .iter()
@@ -411,7 +489,7 @@ fn collect_helpers(tcx: TyCtxt<'_>) -> BTreeMap<Kind, DefId> {
             .fatal("Nestrs registry requires one compatible nestrs-core crate identity");
     }
     let Some(core) = cores.first().copied() else {
-        return BTreeMap::new();
+        return (BTreeMap::new(), None);
     };
     let definitions: Vec<_> = if core == LOCAL_CRATE {
         // MIR construction happens during analysis. iter_local_def_id waits
@@ -431,10 +509,17 @@ fn collect_helpers(tcx: TyCtxt<'_>) -> BTreeMap<Kind, DefId> {
             .collect()
     };
     let mut helpers = BTreeMap::new();
+    let mut options_helper = None;
     for definition in definitions {
         let Some(name) = tcx.opt_item_name(definition) else {
             continue;
         };
+        if name.as_str() == OPTIONS_HELPER
+            && definition_path(tcx, definition)
+                == format!("registration::catalog::{OPTIONS_HELPER}")
+        {
+            options_helper = Some(definition);
+        }
         for kind in [
             Kind::Provider,
             Kind::Binding,
@@ -450,7 +535,40 @@ fn collect_helpers(tcx: TyCtxt<'_>) -> BTreeMap<Kind, DefId> {
             }
         }
     }
-    helpers
+    let options_helper = options_helper.unwrap_or_else(|| {
+        tcx.dcx().fatal(format!(
+            "Nestrs registry ABI is missing {OPTIONS_HELPER}; rebuild nestrs-core with compatible cargo nestrs",
+        ))
+    });
+    (helpers, Some(options_helper))
+}
+
+/// 与描述 sink 一样核对真实 DefId 的完整 ABI，不能仅凭函数名生成任意 MIR 调用。
+fn validate_options_helper<'tcx>(tcx: TyCtxt<'tcx>, helper: DefId, pointer: Ty<'tcx>) {
+    if tcx.def_kind(helper) != DefKind::Fn || tcx.is_foreign_item(helper) {
+        tcx.dcx()
+            .fatal("Nestrs startup options sink must be a Rust function definition");
+    }
+    if tcx.generics_of(helper).count() != 0 {
+        tcx.dcx()
+            .fatal("Nestrs startup options sink must have a closed signature");
+    }
+    let sink = tcx
+        .fn_sig(helper)
+        .instantiate_identity()
+        .skip_normalization()
+        .skip_binder();
+    if sink.abi() != ExternAbi::Rust
+        || sink.c_variadic()
+        || sink.safety().is_safe()
+        || sink.inputs() != [pointer, tcx.types.bool, tcx.types.usize]
+        || sink.output() != tcx.types.unit
+    {
+        tcx.dcx().fatal(format!(
+            "incompatible Nestrs startup options ABI for {}",
+            tcx.def_path_str(helper),
+        ));
+    }
 }
 
 fn validate_callback<'tcx>(
@@ -494,6 +612,14 @@ fn function_operand<'tcx>(tcx: TyCtxt<'tcx>, definition: DefId, span: Span) -> O
             definition,
             std::iter::empty::<ty::GenericArg<'tcx>>(),
         )),
+    }))
+}
+
+fn constant_operand(value: mir::Const<'_>, span: Span) -> Operand<'_> {
+    Operand::Constant(Box::new(mir::ConstOperand {
+        span,
+        user_ty: None,
+        const_: value,
     }))
 }
 

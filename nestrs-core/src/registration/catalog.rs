@@ -6,6 +6,9 @@ use super::{binding::TraitBinding, provider::Provider, root::RootDeclaration};
 /// roots 是调用点已知类型。所有 Vec 都只存描述，不代表服务已经构造或可直接使用。
 #[derive(Default)]
 pub struct RegistrySnapshot {
+    /// 最终可执行入口所属 package 的启动配置；依赖库只贡献声明，不覆盖宿主设置。
+    /// 普通 Cargo 的隔离测试没有编译器入口，因此仍使用 Lazy / 32 的缺省值。
+    pub options: crate::ServiceProviderOptions,
     pub providers: Vec<Provider>,
     pub bindings: Vec<TraitBinding>,
     pub roots: Vec<RootDeclaration>,
@@ -58,6 +61,29 @@ append!(
     TraitBinding
 );
 append!(registry_push_blueprint, blueprints, RootDeclaration);
+
+/// 将编译时校验过的项目配置写入当前构图快照，不安装进程级可变配置。
+///
+/// # Safety
+/// `output` 必须指向 collect 传入的唯一、仍存活的 RegistrySnapshot。
+#[allow(dead_code)] // 仅由最终 binary/test 的编译器 registry MIR 调用。
+pub unsafe fn registry_set_options(
+    output: *mut (),
+    eager: bool,
+    max_concurrent_activations: usize,
+) {
+    let options = crate::ServiceProviderOptions {
+        initialization: if eager {
+            crate::InitializationMode::Eager
+        } else {
+            crate::InitializationMode::Lazy
+        },
+        max_concurrent_activations: std::num::NonZeroUsize::new(max_concurrent_activations)
+            .expect("编译器注册入口的构造并发上限必须大于 0"),
+    };
+    // SAFETY: 入口和指针遵循上方 collect 的唯一借用协议，所有字段均按真实类型写入。
+    unsafe { &mut *output.cast::<RegistrySnapshot>() }.options = options;
+}
 
 /// CLI 图诊断入口只编译静态图并序列化描述，不构造 Provider，也不执行业务 main。
 pub fn dependency_graph_json() -> Result<String, String> {

@@ -1483,6 +1483,12 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   不提供普通公开查询方法或单独 register!。
 * build/build_with_options、create_scope、service_provider、warm_up 和消费 owner
   的 dispose_async 保留普通方法。引用绑定实际 root/scope owner 的借用期。
+* 容器启动默认值由入口 package 的 Cargo.toml 顶层 `[nestrs-cli]` 设置：
+  `initialization = "lazy" | "eager"`、`max-concurrent-activations = 正整数`。
+  未设置字段仍为 Lazy / 32。工具编译时读取、校验并固化进当前 binary/test 入口，
+  manifest 参与编译依赖跟踪；core 运行时不读取 TOML，不继承依赖或 workspace 默认配置。
+  `build()` 使用项目默认值；`build_with_options` 完整显式覆盖；Options::default
+  保持库的 Lazy / 32 基线。Cargo 的自定义顶层节警告不等于 Nestrs 未读取配置。
 * 任何服务构造前验证全部注册及可物化的闭合类型；结构错误在容器构建入口 panic，
   成功后冻结图。之后不再读取注册清单、展开泛型或变更图。
 * 图编译、激活任务展开、失败传播和实例释放使用非递归算法。

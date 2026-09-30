@@ -8,4 +8,6 @@ pub mod commands;
 pub mod graph;
 #[doc(hidden)]
 pub mod ide;
+#[doc(hidden)]
+pub mod project_config;
 pub mod toolchain;

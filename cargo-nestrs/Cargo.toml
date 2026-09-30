@@ -17,6 +17,7 @@ clap = { workspace = true }
 zyn = { workspace = true, features = ["derive", "diagnostics", "ext"] }
 serde_json = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+toml = { workspace = true }
 
 [[bin]]
 name = "cargo-nestrs"

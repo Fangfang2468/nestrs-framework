@@ -169,6 +169,8 @@ pub(super) fn expand(
         mut roots,
         mut automatic_bindings,
         mut blueprints,
+        // 启动选项只决定冻结之后如何激活，不参与图结构与路由选择。
+        options: _,
     } = snapshot;
 
     blueprints.sort_by_key(|entry| (entry.service_type.name, entry.source));

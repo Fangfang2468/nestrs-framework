@@ -1007,6 +1007,7 @@ fn closed_blueprint_catalog_is_passive_and_exact_explicit_dependencies_win() {
         roots: vec![],
         automatic_bindings: vec![],
         blueprints: vec![blueprint],
+        ..Default::default()
     })
     .unwrap();
     assert!(unused.nodes.is_empty());
@@ -1024,6 +1025,7 @@ fn closed_blueprint_catalog_is_passive_and_exact_explicit_dependencies_win() {
             roots: vec![],
             automatic_bindings: vec![],
             blueprints: vec![blueprint],
+            ..Default::default()
         })
         .unwrap();
     assert_eq!(explicit.nodes.len(), 2);
@@ -1056,6 +1058,7 @@ fn closed_blueprint_catalog_expands_dependencies_without_changing_their_keys() {
         roots: vec![],
         automatic_bindings: vec![],
         blueprints: vec![blueprint, blueprint],
+        ..Default::default()
     })
     .unwrap();
     assert_eq!(graph.nodes.len(), 2);
@@ -1093,6 +1096,7 @@ fn demanded_blueprint_catalog_rejects_conflicting_callbacks_in_any_order() {
                 roots: vec![],
                 automatic_bindings: vec![],
                 blueprints,
+                ..Default::default()
             })
             .unwrap_err();
         assert!(error.to_string().contains("闭合 Provider 回调声明冲突"));
