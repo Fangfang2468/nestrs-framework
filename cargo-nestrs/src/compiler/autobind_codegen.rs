@@ -32,57 +32,6 @@ pub struct SourceInsertion {
     pub offset: usize,
     pub expected_source: String,
     pub bindings: Vec<BindingSpec>,
-    pub blueprints: Vec<BlueprintSpec>,
-}
-
-/// A finite closed ProviderDefinition discovered through rustc substitution.
-#[derive(Clone, Debug)]
-pub struct BlueprintSpec {
-    pub service: String,
-    /// A path from an accessible outer type to an inaccessible nested type.
-    pub path: Option<Vec<usize>>,
-    pub source_file: String,
-    pub source_line: u32,
-    pub source_column: u32,
-}
-
-fn blueprint_source(blueprint: &BlueprintSpec) -> String {
-    let service = &blueprint.service;
-    let source_file = format!("{:?}", blueprint.source_file);
-    let source_line = blueprint.source_line;
-    let source_column = blueprint.source_column;
-    if let Some(slots) = &blueprint.path {
-        let mut path = String::from("()");
-        for slot in slots.iter().rev() {
-            path = format!("(::nestrs_core::registration::root::DependencySlot<{slot}>, {path})");
-        }
-        return format!(
-            r#"const _: () = {{
-        #[allow(dead_code)]
-    fn __nestrs_reflect_blueprint_path() -> ::nestrs_core::registration::root::RootDeclaration {{
-        ::nestrs_core::registration::compiler::compiler_blueprint_path::<{service}, {path}>();
-        let mut declaration = (<{service} as ::nestrs_core::registration::root::DependencyPath<{path}>>::BLUEPRINT)();
-        declaration.source = ::nestrs_core::service::ServiceSource::new({source_file}, {source_line}, {source_column});
-        declaration
-    }}
-}};
-"#
-        );
-    }
-    format!(
-        r#"const _: () = {{
-        #[allow(dead_code)]
-    fn __nestrs_reflect_blueprint() -> ::nestrs_core::registration::root::RootDeclaration {{
-        ::nestrs_core::registration::compiler::compiler_blueprint::<{service}>();
-        ::nestrs_core::registration::root::RootDeclaration {{
-            service_type: ::nestrs_core::service::ServiceType::create::<{service}>(),
-            materialize: Some(::nestrs_core::registration::provider::provider_definition::<{service}>),
-            source: ::nestrs_core::service::ServiceSource::new({source_file}, {source_line}, {source_column}),
-        }}
-    }}
-}};
-"#
-    )
 }
 
 /// Reuse the existing audited binding ABI; rustc checks each ordinary coercion.
@@ -95,12 +44,24 @@ fn blueprint_source(blueprint: &BlueprintSpec) -> String {
 pub fn binding_source(binding: &BindingSpec) -> String {
     let concrete = &binding.concrete;
     let interface = &binding.interface;
-    let source_file = format!("{:?}", binding.source_file);
-    let source_line = binding.source_line;
-    let source_column = binding.source_column;
+    let origin = format!(
+        "{:?}",
+        format!(
+            "{}:{}:{}",
+            binding.source_file, binding.source_line, binding.source_column
+        )
+    );
     format!(
         r#"#[allow(clippy::unused_unit)]
+#[doc = {origin}]
 const _: () = {{
+    #[allow(dead_code)]
+    mod __nestrs_reflect {{
+        #[inline(never)]
+        pub const fn compiler_automatic_binding<C: ?Sized, I: ?Sized>() {{
+            let _ = (core::marker::PhantomData::<C>, core::marker::PhantomData::<I>);
+        }}
+    }}
     type __NestrsBoundInterface = {interface};
 
     fn __nestrs_project_bound_service(
@@ -111,14 +72,11 @@ const _: () = {{
     }}
         #[allow(dead_code)]
     #[allow(clippy::needless_borrow)]
-    fn __nestrs_reflect_automatic_binding() -> ::nestrs_core::registration::binding::TraitBinding {{
-        ::nestrs_core::registration::compiler::compiler_automatic_binding::<{concrete}, __NestrsBoundInterface>();
-        use ::nestrs_core::registration::root::ProbeProvider as _;
-        let __nestrs_probe = ::nestrs_core::registration::root::Probe::<{concrete}>::new();
-        ::nestrs_core::registration::binding::TraitBinding {{
+    fn __nestrs_reflect_automatic_binding() -> ::nestrs_core::activation::adapter::ProjectionAdapter {{
+        __nestrs_reflect::compiler_automatic_binding::<{concrete}, __NestrsBoundInterface>();
+        ::nestrs_core::activation::adapter::ProjectionAdapter {{
             trait_type: ::nestrs_core::service::ServiceType::create::<__NestrsBoundInterface>(),
             concrete_type: ::nestrs_core::service::ServiceType::create::<{concrete}>(),
-            materialize: (&&__nestrs_probe).provider_callback(),
             prepare_required: (|
                 slot: ::nestrs_core::activation::InputSlot,
                 input: ::core::option::Option<::nestrs_core::activation::ErasedServiceRef>,
@@ -135,9 +93,15 @@ const _: () = {{
                     {concrete}, __NestrsBoundInterface,
                 >(slot, input, __nestrs_project_bound_service)
             }}) as ::nestrs_core::activation::InputPreparer,
-            source: ::nestrs_core::service::ServiceSource::new(
-                {source_file}, {source_line}, {source_column},
-            ),
+            project: (|
+                slot: ::nestrs_core::activation::InputSlot,
+                input: ::nestrs_core::activation::ErasedServiceRef,
+                target: &mut ::nestrs_core::activation::ProjectionTarget<'_>,
+            | {{
+                ::nestrs_core::activation::project_bound::<
+                    {concrete}, __NestrsBoundInterface,
+                >(slot, input, target, __nestrs_project_bound_service)
+            }}) as ::nestrs_core::activation::ServiceProjector,
         }}
     }}
 
@@ -168,7 +132,7 @@ impl OverlayFileLoader {
     ) -> io::Result<Self> {
         let mut grouped: BTreeMap<PathBuf, Vec<SourceInsertion>> = BTreeMap::new();
         for insertion in insertions {
-            if insertion.bindings.is_empty() && insertion.blueprints.is_empty() {
+            if insertion.bindings.is_empty() {
                 continue;
             }
             let path = insertion.path.canonicalize()?;
@@ -212,12 +176,7 @@ impl OverlayFileLoader {
                     // source whose line numbers could be affected.
                     replacement.push('\n');
                 }
-                for source in insertion
-                    .bindings
-                    .iter()
-                    .map(binding_source)
-                    .chain(insertion.blueprints.iter().map(blueprint_source))
-                {
+                for source in insertion.bindings.iter().map(binding_source) {
                     let start = replacement.len();
                     generated.push_str(&source);
                     generated.push('\n');
@@ -363,7 +322,6 @@ mod tests {
                 source_line: 1,
                 source_column: 1,
             }],
-            blueprints: vec![],
         }
     }
 
@@ -411,7 +369,10 @@ mod tests {
         let syn::Type::Path(output) = &**output else {
             panic!("typed binding path");
         };
-        assert_eq!(output.path.segments.last().unwrap().ident, "TraitBinding");
+        assert_eq!(
+            output.path.segments.last().unwrap().ident,
+            "ProjectionAdapter"
+        );
 
         let Stmt::Expr(Expr::Call(marker), _) = &callback.block.stmts[0] else {
             panic!("callback must retain a type-bearing capability marker");

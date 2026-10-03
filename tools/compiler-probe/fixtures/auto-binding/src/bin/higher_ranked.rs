@@ -49,15 +49,12 @@ struct Consumer {
 #[tokio::main]
 async fn main() {
     let provider = ServiceProvider::build().await.unwrap();
-    let concrete = nestrs_core::get_required_service!(provider, Reader)
+    let concrete = provider.get_required_service::<Reader>().await.unwrap();
+    let interface = provider
+        .get_required_service::<dyn for<'a> TextPort<&'a str>>()
         .await
         .unwrap();
-    let interface = nestrs_core::get_required_service!(provider, dyn for<'a> TextPort<&'a str>)
-        .await
-        .unwrap();
-    let consumer = nestrs_core::get_required_service!(provider, Consumer)
-        .await
-        .unwrap();
+    let consumer = provider.get_required_service::<Consumer>().await.unwrap();
     let owned_text = String::from("abc");
     assert_eq!(interface.measure(&owned_text), 12);
     assert_eq!(consumer.reader.measure(&owned_text), 12);

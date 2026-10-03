@@ -1,8 +1,9 @@
-//! This executable is intentionally invalid; other binaries never request this trait.
+//! 未被查询的服务也必须在最终入口编译时报告跨 crate 歧义。
 
 use contracts::AmbiguousPort;
+use fallback_provider as _;
 use nestrs::injectable;
-use nestrs_core::ServiceProvider;
+use primary_provider as _;
 
 #[injectable]
 struct NeedsConflict {
@@ -10,25 +11,10 @@ struct NeedsConflict {
     _port: dyn AmbiguousPort,
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
-    assert_eq!(primary_provider::total_constructions(), 0);
-    assert_eq!(fallback_provider::conflict_constructions(), 0);
-    let panic = tokio::spawn(ServiceProvider::build())
-        .await
-        .err()
-        .expect("same-key candidates from different crates must be ambiguous");
-    assert!(panic.is_panic());
-    let payload = panic.into_panic();
-    let message = payload
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| payload.downcast_ref::<&str>().copied())
-        .expect("graph failure must contain a diagnostic");
-    assert!(message.contains("trait 候选不唯一"), "{message}");
-    assert!(message.contains("AmbiguousPort"), "{message}");
-    assert_eq!(primary_provider::total_constructions(), 0);
-    assert_eq!(fallback_provider::conflict_constructions(), 0);
-    eprintln!("cross-crate ambiguity: rejected before any provider construction");
-    std::process::exit(23);
+// 这里故意不调用 ServiceProvider::build：图结构检查不依赖用户执行容器入口。
+fn main() {
+    if let Some(path) = std::env::var_os("NESTRS_CROSS_AMBIGUITY_SENTINEL") {
+        std::fs::write(path, "invalid application main executed").unwrap();
+    }
+    panic!("invalid graph must be rejected during compilation");
 }

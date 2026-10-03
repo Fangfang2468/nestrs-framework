@@ -9,9 +9,7 @@ use std::{
 use super::{
     before_separator, metadata_options, reject_wrappers, replace_target_directory, target_directory,
 };
-use crate::toolchain::{
-    Toolchain, cargo_program, library_path_variable, runtime_library_directories,
-};
+use crate::toolchain::{Toolchain, cargo_program};
 
 #[derive(Clone, Debug)]
 struct GraphTarget {
@@ -54,14 +52,6 @@ pub(super) fn run(options: super::cli::GraphOptions) -> Result<u8, String> {
     validate_selectors(&args)?;
     let toolchain = Toolchain::discover()?;
     reject_wrappers(&toolchain)?;
-    let requested_target =
-        super::option_value(&args, "--target")?.or_else(|| std::env::var_os("CARGO_BUILD_TARGET"));
-    if requested_target
-        .as_ref()
-        .is_some_and(|target| target != toolchain.identity.host.as_str())
-    {
-        return Err("graph requires a target executable on the pinned host; cross-target graph execution is not supported".into());
-    }
     let target = target_directory(&args)?;
     let metadata = Command::new(cargo_program())
         .args(["metadata", "--no-deps", "--format-version", "1"])
@@ -254,15 +244,12 @@ fn per_entry_arguments(args: &[OsString]) -> Result<Vec<OsString>, String> {
     let mut retained = Vec::new();
     let mut args = args.iter();
     while let Some(arg) = args.next() {
-        if ["-p", "--package", "--bin", "--target"]
-            .iter()
-            .any(|flag| arg == *flag)
-        {
+        if ["-p", "--package", "--bin"].iter().any(|flag| arg == *flag) {
             args.next()
                 .ok_or_else(|| format!("{} requires a value", arg.to_string_lossy()))?;
         } else if arg != "--workspace"
             && !arg.to_str().is_some_and(|arg| {
-                ["--package=", "--bin=", "--target="]
+                ["--package=", "--bin="]
                     .iter()
                     .any(|flag| arg.starts_with(flag))
             })
@@ -281,6 +268,12 @@ fn inspect_target(
 ) -> Result<serde_json::Value, EntryFailure> {
     let mut identity = std::collections::hash_map::DefaultHasher::new();
     (&entry.package_id, &entry.binary).hash(&mut identity);
+    // 每组 feature/profile/target 编译都有自己的 sidecar。否则 A -> B -> A 时 Cargo
+    // 可能复用 A 的 metadata，却读取最后一次 B 覆盖的图数据。
+    args.hash(&mut identity);
+    std::env::var_os("CARGO_BUILD_TARGET").hash(&mut identity);
+    std::env::var_os("RUSTFLAGS").hash(&mut identity);
+    std::env::var_os("CARGO_ENCODED_RUSTFLAGS").hash(&mut identity);
     let isolated = if cfg!(windows) {
         // MSVC also limits paths of build-script outputs. Hash the complete
         // compiler/tool/entry identity into one short graph directory.
@@ -299,10 +292,9 @@ fn inspect_target(
         .manifest_dir
         .canonicalize()
         .map_err(|error| format!("cannot resolve graph package: {error}"))?;
-    let proof_path = isolated.join("graph-entry.json");
     let mut build = Command::new(cargo_program());
     build
-        .arg("build")
+        .arg("check")
         .args(replace_target_directory(args.to_vec(), &isolated)?)
         .args([
             "--package",
@@ -310,8 +302,6 @@ fn inspect_target(
             "--bin",
             &entry.binary,
             "--message-format=json",
-            "--target",
-            &toolchain.identity.host,
         ]);
     toolchain.configure(&mut build)?;
     build
@@ -319,7 +309,7 @@ fn inspect_target(
         .env("NESTRS_GRAPH_BINARY", &entry.binary)
         .env("NESTRS_GRAPH_MANIFEST", &manifest_dir)
         .env("NESTRS_GRAPH_SOURCE", &entry.source)
-        .env("NESTRS_GRAPH_PROOF", &proof_path)
+        .env("NESTRS_GRAPH_PLAN", "1")
         .env_remove("NESTRS_IDE_CAPTURE")
         .env("NESTRS_COMPILER_OUTPUT", isolated.join("compiler"));
     let built = build
@@ -344,7 +334,7 @@ fn inspect_target(
         });
     }
     eprint!("{stderr}");
-    let mut executable = None;
+    let mut artifacts = Vec::new();
     let mut diagnostics = Vec::new();
     for line in built
         .stdout
@@ -371,12 +361,28 @@ fn inspect_target(
             && message["target"]["src_path"]
                 .as_str()
                 .is_some_and(|path| same_path(std::path::Path::new(path), &entry.source))
-            && let Some(path) = message["executable"].as_str()
-            && executable.replace(PathBuf::from(path)).is_some()
         {
-            return Err("Cargo produced multiple graph executables"
-                .to_owned()
+            // 必须跟随 Cargo 本次选中的 metadata 工件。不同编译配置可能复用不同
+            // rmeta；读取固定路径会把另一次编译留下的计划误认为当前配置的图。
+            let metadata = message["filenames"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(std::path::PathBuf::from)
+                .filter(|path| {
+                    path.extension()
+                        .is_some_and(|extension| extension == "rmeta")
+                })
+                .collect::<Vec<_>>();
+            if metadata.len() != 1 {
+                return Err(format!(
+                    "Cargo graph 工件包含 {} 个 rmeta 文件，期望一个",
+                    metadata.len()
+                )
                 .into());
+            }
+            artifacts.extend(metadata);
         }
     }
     if !built.status.success() {
@@ -407,67 +413,64 @@ fn inspect_target(
         )
         .into());
     }
-    let executable = executable.ok_or_else(|| "Cargo produced no graph executable".to_owned())?;
-    let proof: serde_json::Value =
-        serde_json::from_slice(&fs::read(&proof_path).map_err(|error| {
-            format!(
-                "missing graph entry verification; refusing to execute {}: {error}",
-                executable.display()
-            )
-        })?)
-        .map_err(|error| format!("invalid graph entry verification: {error}"))?;
-    if proof["binary"] != entry.binary
-        || proof["crate"] != entry.binary.replace('-', "_")
-        || !proof["manifest"]
-            .as_str()
-            .is_some_and(|path| same_path(std::path::Path::new(path), &manifest_dir))
-        || !proof["source"]
-            .as_str()
-            .is_some_and(|path| same_path(std::path::Path::new(path), &entry.source))
-    {
-        return Err(
-            "graph entry verification does not match the selected binary; refusing to execute it"
-                .to_owned()
-                .into(),
-        );
-    }
-    let mut inspect = Command::new(&executable);
-    let mut library_paths =
-        runtime_library_directories(&toolchain.sysroot, &toolchain.identity.host);
-    library_paths.push(
-        toolchain
-            .sysroot
-            .join("lib/rustlib")
-            .join(&toolchain.identity.host)
-            .join("lib"),
-    );
-    if let Some(profile) = executable.parent() {
-        library_paths.extend([profile.to_owned(), profile.join("deps")]);
-    }
-    let library_variable = library_path_variable();
-    if let Some(current) = std::env::var_os(library_variable) {
-        library_paths.extend(std::env::split_paths(&current));
-    }
-    inspect.env(
-        library_variable,
-        std::env::join_paths(library_paths).map_err(|error| error.to_string())?,
-    );
-    let graph = inspect
-        .output()
-        .map_err(|error| format!("cannot inspect graph: {error}"))?;
-    if !graph.status.success() {
+    if artifacts.len() != 1 {
         return Err(format!(
-            "graph validation failed: {}",
-            String::from_utf8_lossy(&graph.stderr).trim()
+            "Cargo 返回了 {} 个匹配的 graph metadata 工件，期望一个",
+            artifacts.len()
         )
         .into());
     }
-    let data: serde_json::Value = serde_json::from_slice(&graph.stdout)
-        .map_err(|error| format!("invalid graph response: {error}"))?;
+    let metadata = &artifacts[0];
+    let plan = read_json(
+        &metadata.with_extension("nestrs-plan.json"),
+        "编译器 DI 计划",
+    )?;
+    verify_identity(&plan, entry, &manifest_dir, metadata)?;
+    if plan["version"] != 1 {
+        return Err("不支持的编译器 DI 计划版本".to_owned().into());
+    }
+    let data = plan["graph"].clone();
     if data["version"] != 1 || !data["nodes"].is_array() {
-        return Err("unsupported graph response".to_owned().into());
+        return Err("编译器 DI 计划缺少有效的图数据".to_owned().into());
     }
     Ok(data)
+}
+
+/// 图数据来自编译器进程写出的 sidecar；不链接、启动或替换用户的应用入口。
+fn read_json(path: &std::path::Path, label: &str) -> Result<serde_json::Value, EntryFailure> {
+    let bytes =
+        fs::read(path).map_err(|error| format!("无法读取{label} {}：{error}", path.display()))?;
+    serde_json::from_slice(&bytes).map_err(|error| format!("{label}不是有效 JSON：{error}").into())
+}
+
+fn verify_identity(
+    value: &serde_json::Value,
+    entry: &GraphTarget,
+    manifest_dir: &std::path::Path,
+    metadata: &std::path::Path,
+) -> Result<(), EntryFailure> {
+    if value["binary"] != entry.binary
+        || value["crate"] != entry.binary.replace('-', "_")
+        || !value["manifest"]
+            .as_str()
+            .is_some_and(|path| same_path(std::path::Path::new(path), manifest_dir))
+        || !value["source"]
+            .as_str()
+            .is_some_and(|path| same_path(std::path::Path::new(path), &entry.source))
+    {
+        return Err("编译器 DI 计划的入口身份与所选 binary 不一致"
+            .to_owned()
+            .into());
+    }
+    if !value["metadata"]
+        .as_str()
+        .is_some_and(|path| same_path(std::path::Path::new(path), metadata))
+    {
+        return Err("编译器 DI 计划的 metadata 身份与 Cargo 工件不一致"
+            .to_owned()
+            .into());
+    }
+    Ok(())
 }
 
 fn same_path(left: &std::path::Path, right: &std::path::Path) -> bool {
@@ -738,6 +741,7 @@ mod tests {
         assert_eq!(
             per_entry_arguments(&args).unwrap(),
             arguments(&[
+                "--target=host",
                 "--manifest-path",
                 "project with spaces/Cargo.toml",
                 "--features",

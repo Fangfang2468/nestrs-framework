@@ -180,7 +180,7 @@ fn primary_handoff_can_be_expanded_without_a_proc_macro_host() {
     let result = expand_injectable(TokenStream::new(), quote!(#item));
     file(result.clone());
     let tokens = result.to_string();
-    assert!(tokens.contains("primary : true"));
+    assert!(tokens.contains("0u8 , true , 0u8 >"));
     assert!(!tokens.contains("__nestrs_injectable_primary"));
 }
 
@@ -217,8 +217,8 @@ fn primary_before_factory_preserves_bare_qualified_and_crate_alias_paths() {
         let expanded = expand_factory(TokenStream::new(), quote!(#function));
         file(expanded.clone());
         let rendered = expanded.to_string();
-        assert_eq!(rendered.matches("Provider :: Factory").count(), 1);
-        assert_eq!(rendered.matches("primary : true").count(), 1);
+        assert_eq!(rendered.matches("Constructor :: Factory").count(), 1);
+        assert_eq!(rendered.matches("0u8 , true , 0u8 >").count(), 1);
         assert!(!rendered.contains("__nestrs_factory_primary"));
         assert!(rendered.contains("& '__nestrs_factory_frame Database"));
     }
@@ -367,17 +367,17 @@ fn lazy_fields_lower_to_typed_handles_without_losing_keys_or_optional_routes() {
         "{rendered}"
     );
     assert!(
-        rendered.contains("RequiresBindingOrAbsent"),
+        rendered.contains("prepare_optional_absent :: < dyn Audit >"),
         "trait projection must remain intact"
     );
     assert!(
-        rendered.contains("ServiceKey :: Indexed (7"),
+        rendered.contains("CompilerKey :: Indexed (7"),
         "key must remain intact"
     );
 }
 
 #[test]
-fn lazy_attribute_rejects_orphans_arguments_duplicates_and_factory_parameters() {
+fn lazy_fields_reject_orphans_arguments_and_duplicates() {
     for (input, message) in [
         (
             quote!(
@@ -446,15 +446,121 @@ fn lazy_attribute_rejects_orphans_arguments_duplicates_and_factory_parameters() 
             "{output}"
         );
     }
-    for marker in [quote!(#[lazy]), quote!(#[nestrs::lazy])] {
+}
+
+#[test]
+fn lazy_factory_parameters_lower_to_owned_handles_and_keep_dependency_metadata() {
+    let tokens = expand_factory(
+        TokenStream::new(),
+        quote! {
+            async fn make(
+                #[lazy] reports: Report<User>,
+                #[nestrs::inject("audit")] #[nestrs::lazy] audit: Option<dyn Audit>,
+                #[inject] immediate: Database,
+            ) -> Service {
+                Service { reports, audit, count: immediate.count() }
+            }
+        },
+    );
+    let expanded = file(tokens.clone());
+    let function = expanded
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Fn(item) => Some(item),
+            _ => None,
+        })
+        .expect("factory should keep its user function");
+    let parameters: Vec<_> = function
+        .sig
+        .inputs
+        .iter()
+        .map(|argument| match argument {
+            syn::FnArg::Typed(parameter) => parameter,
+            _ => panic!("expected ordinary parameter"),
+        })
+        .collect();
+    assert_eq!(
+        *parameters[0].ty,
+        syn::parse_quote!(::nestrs_core::LazyInjection<Report<User>>)
+    );
+    assert_eq!(
+        *parameters[1].ty,
+        syn::parse_quote!(::core::option::Option<::nestrs_core::LazyInjection<dyn Audit>>)
+    );
+    assert_eq!(
+        *parameters[2].ty,
+        syn::parse_quote!(&'__nestrs_factory_frame Database)
+    );
+    assert!(
+        parameters
+            .iter()
+            .all(|parameter| parameter.attrs.is_empty())
+    );
+    let rendered = tokens.to_string();
+    assert!(
+        rendered.contains("take_lazy :: < Report < User > >"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("take_optional_lazy :: < dyn Audit >"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("prepare_lazy_required :: < Report < User > >"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("prepare_lazy_optional :: < dyn Audit >"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("compiler_plan_input :: < Report < User > , 0usize , false , true >"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("compiler_plan_input :: < dyn Audit , 1usize , true , true >"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("compiler_plan_input :: < Database , 2usize , false , false >"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("CompilerKey :: Named"));
+    assert!(rendered.contains("prepare_optional_absent :: < dyn Audit >"));
+}
+
+#[test]
+fn lazy_factory_parameters_reject_arguments_and_duplicates() {
+    for marker in [
+        quote!(#[lazy(true)]),
+        quote!(#[nestrs::lazy(false)]),
+        quote!(#[lazy()]),
+        quote!(#[lazy = true]),
+    ] {
         let output = expand_factory(
             TokenStream::new(),
             quote!(fn build(#marker input: Service) -> Output { Output }),
         )
         .to_string();
         assert!(
-            output.contains("compile_error") && output.contains("参数暂不支持 #[lazy]"),
+            output.contains("compile_error")
+                && output.contains("延迟注入参数只接受无参数的 #[lazy] 属性"),
             "{output}"
         );
     }
+    let duplicate = expand_factory(
+        TokenStream::new(),
+        quote!(
+            fn make(
+                #[lazy]
+                #[nestrs::lazy]
+                input: Service,
+            ) -> Output {
+                Output
+            }
+        ),
+    )
+    .to_string();
+    assert!(duplicate.contains("重复的 #[lazy] 属性"), "{duplicate}");
 }

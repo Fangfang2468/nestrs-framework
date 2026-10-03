@@ -1,9 +1,7 @@
 //! Repeated demands in two libraries and this binary must not duplicate pairs.
 
 use contracts::{CatalogPort, ConnectionPort, DeliveryPort};
-use nestrs_core::{
-    ServiceProvider, get_required_service,
-};
+use nestrs_core::ServiceProvider;
 use sibling_consumer::Dispatch;
 use upstream_consumer::Checkout;
 
@@ -19,22 +17,30 @@ async fn main() {
     assert_eq!(upstream_consumer::linked_provider_constructions(), 0);
     let provider = ServiceProvider::build().await.unwrap();
     let scope = provider.create_scope();
-    let checkout = get_required_service!(scope.service_provider(), Checkout)
+    let checkout = scope
+        .service_provider()
+        .get_required_service::<Checkout>()
         .await
         .unwrap();
-    let dispatch = get_required_service!(scope.service_provider(), Dispatch)
+    let dispatch = scope
+        .service_provider()
+        .get_required_service::<Dispatch>()
         .await
         .unwrap();
-    let catalog = get_required_service!(provider, dyn CatalogPort)
+    let catalog = provider
+        .get_required_service::<dyn CatalogPort>()
         .await
         .unwrap();
-    let preferred = get_required_service!(provider, dyn DeliveryPort)
+    let preferred = provider
+        .get_required_service::<dyn DeliveryPort>()
         .await
         .unwrap();
-    let private = get_required_service!(provider, dyn ConnectionPort)
+    let private = provider
+        .get_required_service::<dyn ConnectionPort>()
         .await
         .unwrap();
-    let fallback = get_required_service!(provider, fallback_provider::Service)
+    let fallback = provider
+        .get_required_service::<fallback_provider::Service>()
         .await
         .unwrap();
     assert_eq!(fallback.source(), "fallback");

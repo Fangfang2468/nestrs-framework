@@ -393,9 +393,9 @@ pub async fn verify(eager: bool, limit: usize, explicit: Option<ServiceProviderO
         }.unwrap();
         assert_eq!(STARTED.load(Ordering::SeqCst), if eager { 3 } else { 0 });
         let (first, second, third) = tokio::join!(
-            nestrs_core::get_required_service!(provider, First),
-            nestrs_core::get_required_service!(provider, Second),
-            nestrs_core::get_required_service!(provider, Third),
+            provider.get_required_service::<First>(),
+            provider.get_required_service::<Second>(),
+            provider.get_required_service::<Third>(),
         );
         first.unwrap(); second.unwrap(); third.unwrap();
         provider.dispose_async().await.unwrap();

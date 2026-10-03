@@ -1,4 +1,4 @@
-//! 静态注册、先验证后激活的 DI 门面。
+//! 装载编译计划并按需激活服务的 DI 门面。
 //!
 //! 这里仅组合图、运行时命令和用户可借用的 owner。错误链、调度状态及实例释放
 //! 分别由 error、runtime、activation 管理，门面不保存第二套生命周期状态。
@@ -11,15 +11,14 @@ use crate::{
     InitializationMode, ServiceKey, ServiceLifetime, ServiceProviderOptions,
     activation::InputSlot,
     error::{BuildError, DisposeError, ResolveError},
-    graph::{GraphCompiler, ValidatedGraph},
-    registration::catalog::{RegistrySnapshot, collect},
+    graph::{ValidatedGraph, plan},
     runtime::{Owner, Runtime},
     service::{ServiceIdentifier, ServiceType},
 };
 
-/// 应用级服务 owner。使用查询宏获取服务，结果引用借用实际 owner。
+/// 应用级服务 owner。使用普通异步方法获取服务，结果引用借用实际 owner。
 ///
-/// 服务只可通过宏静态声明，构建后图被冻结。Drop 非阻塞地发起关闭；需要等待所有
+/// 工具链收集服务声明与查询根，在编译期验证并冻结图。Drop 非阻塞地发起关闭；需要等待所有
 /// cleanup 时必须调用 [`Self::dispose_async`]。
 #[must_use]
 pub struct ServiceProvider {
@@ -34,27 +33,28 @@ impl ServiceProvider {
     /// 使用入口 package 的 Cargo.toml 中由工具链固化的启动配置建立容器。
     /// 未配置的字段采用 Lazy 与 32 个构造名额；运行时不读取 Cargo.toml。
     pub async fn build() -> Result<Self, BuildError> {
-        Self::build_from_snapshot(collect(), None).await
+        Self::build_from_plan(None).await
     }
 
-    /// 显式选项完整覆盖项目配置。在执行任何构造函数之前完整验证图；结构错误立即 panic。
+    /// 显式选项完整覆盖项目全局配置；服务声明的 #[lazy] 覆盖继续生效。
+    /// 服务图已由工具链验证；这里只创建运行期状态并完成选中的 Singleton 预热。
     pub async fn build_with_options(options: ServiceProviderOptions) -> Result<Self, BuildError> {
-        Self::build_from_snapshot(collect(), Some(options)).await
+        Self::build_from_plan(Some(options)).await
     }
 
-    /// 两个公开入口共享同一次描述收集、结构验证与启动流程。配置和声明来自同一入口
-    /// 快照，不为了读取选项再次执行描述回调，也不让被依赖库提供应用默认配置。
-    async fn build_from_snapshot(
-        snapshot: RegistrySnapshot,
+    /// 两个入口共享不可变程序计划；每个 build 仍创建独立 owner、缓存、失败与关闭状态。
+    /// 首次 load 只接合真实 typed adapter，后续 build 不再收集描述或分析依赖图。
+    async fn build_from_plan(
         overrides: Option<ServiceProviderOptions>,
     ) -> Result<Self, BuildError> {
-        let options = overrides.unwrap_or_else(|| snapshot.options.clone());
-        // 先核查全部结构，再启动协调器；即使没有 Tokio runtime，非法图也不会
-        // 因为环境检查而绕过诊断，更不会在验证完成前执行任何服务构造。
-        let graph = Arc::new(
-            GraphCompiler::compile_snapshot(snapshot)
-                .unwrap_or_else(|error| panic!("DI 依赖图验证失败: {error}")),
-        );
+        // 普通 Cargo 不会生成应用计划。必须明确提示工具链缺失，不能把未经过
+        // Nestrs 编译的应用伪装成一个合法的空容器。隔离单元测试仍可装载空计划。
+        if !cfg!(any(nestrs_compiler, test)) {
+            return Err(BuildError::CompilerPlanUnavailable);
+        }
+        let application = plan::load();
+        let options = overrides.unwrap_or_else(|| application.options.clone());
+        let graph = application.graph.clone();
         tokio::runtime::Handle::try_current().map_err(|_| BuildError::RuntimeUnavailable)?;
         let (runtime, owner) =
             Runtime::start(graph.clone(), options.max_concurrent_activations.get());
@@ -63,11 +63,16 @@ impl ServiceProvider {
             runtime,
             owner,
         };
-        if options.initialization == InitializationMode::Eager
-            && let Err(error) = provider
-                .runtime
-                .warm_up(&provider.owner, ServiceLifetime::Singleton)
-                .await
+        // Lazy 全局默认也可能存在 #[lazy(false)] Singleton，必须统一选择预热入口。
+        // 选择策略保存在图节点上；不同 root 可使用不同默认值而共享同一不可变计划。
+        if let Err(error) = provider
+            .runtime
+            .warm_up(
+                &provider.owner,
+                ServiceLifetime::Singleton,
+                options.initialization,
+            )
+            .await
         {
             // 容器尚未交付给调用者。预热失败时仍等待已经接受的工作与清理，
             // 同时保留初始化错误和清理错误，不能把部分成功实例直接遗弃。
@@ -78,6 +83,37 @@ impl ServiceProvider {
             });
         }
         Ok(provider)
+    }
+
+    /// 获取默认 key 的必选服务。工具链从真实方法调用收集闭合查询类型，查询本身
+    /// 仅执行已编译的计划；不存在、生命周期不允许或初始化失败均返回错误。
+    pub async fn get_required_service<T: ?Sized + Send + Sync + 'static>(
+        &self,
+    ) -> Result<&T, ResolveError> {
+        self.view().required::<T>(None).await
+    }
+
+    /// 获取默认 key 的可选服务。只有未注册返回 None。
+    pub async fn get_service<T: ?Sized + Send + Sync + 'static>(
+        &self,
+    ) -> Result<Option<&T>, ResolveError> {
+        self.view().query::<T>(None).await
+    }
+
+    /// 使用运行期 key 从已冻结路由中获取服务，不创建新的类型或注册。
+    pub async fn get_required_keyed_service<T: ?Sized + Send + Sync + 'static>(
+        &self,
+        key: ServiceKey,
+    ) -> Result<&T, ResolveError> {
+        self.view().required::<T>(Some(key)).await
+    }
+
+    /// 按精确 key 获取可选服务；初始化失败仍返回错误。
+    pub async fn get_keyed_service<T: ?Sized + Send + Sync + 'static>(
+        &self,
+        key: ServiceKey,
+    ) -> Result<Option<&T>, ResolveError> {
+        self.view().query::<T>(Some(key)).await
     }
 
     fn view(&self) -> ServiceProviderRef<'_> {
@@ -118,11 +154,16 @@ impl ServiceScope<'_> {
             owner: &self.owner,
         }
     }
-    /// 提交当前 scope 的全部 Scoped 根及必要依赖；保持既有生命周期与并发上限。
+    /// 主动预热当前 scope：默认选择 Scoped 根，服务级 #[lazy] 可排除独立入口。
+    /// 普通依赖仍会构造必要目标；全局 Lazy 不取消这次显式预热，创建 scope 本身不构造。
     pub async fn warm_up(&self) -> Result<(), ResolveError> {
         self.provider
             .runtime
-            .warm_up(&self.owner, ServiceLifetime::Scoped)
+            .warm_up(
+                &self.owner,
+                ServiceLifetime::Scoped,
+                InitializationMode::Eager,
+            )
             .await
     }
     /// 消费当前 scope，等待已接受任务及本 scope 的串行 cleanup 完成。
@@ -132,7 +173,7 @@ impl ServiceScope<'_> {
     }
 }
 
-/// 传给查询宏的轻量视图；临时视图不会缩短结果引用的有效期。
+/// 提供异步查询方法的轻量视图；临时视图不会缩短结果引用的有效期。
 #[derive(Clone, Copy)]
 pub struct ServiceProviderRef<'owner> {
     graph: &'owner ValidatedGraph,
@@ -140,6 +181,37 @@ pub struct ServiceProviderRef<'owner> {
     owner: &'owner Arc<Owner>,
 }
 impl<'owner> ServiceProviderRef<'owner> {
+    /// 返回引用绑定实际 owner 的借用期，因此链式 service_provider() 不产生
+    /// 临时视图借用错误；查询等待仍可以取消而不取消已接受的初始化。
+    pub async fn get_required_service<T: ?Sized + Send + Sync + 'static>(
+        self,
+    ) -> Result<&'owner T, ResolveError> {
+        self.required::<T>(None).await
+    }
+
+    /// 默认 key 的可选查询，只有类型未注册返回 None。
+    pub async fn get_service<T: ?Sized + Send + Sync + 'static>(
+        self,
+    ) -> Result<Option<&'owner T>, ResolveError> {
+        self.query::<T>(None).await
+    }
+
+    /// 精确 key 的必选查询。
+    pub async fn get_required_keyed_service<T: ?Sized + Send + Sync + 'static>(
+        self,
+        key: ServiceKey,
+    ) -> Result<&'owner T, ResolveError> {
+        self.required::<T>(Some(key)).await
+    }
+
+    /// 精确 key 的可选查询。
+    pub async fn get_keyed_service<T: ?Sized + Send + Sync + 'static>(
+        self,
+        key: ServiceKey,
+    ) -> Result<Option<&'owner T>, ResolveError> {
+        self.query::<T>(Some(key)).await
+    }
+
     async fn required<T: ?Sized + Send + Sync + 'static>(
         self,
         key: Option<ServiceKey>,
@@ -191,41 +263,4 @@ impl<'owner> ServiceProviderRef<'owner> {
         // 借用检查禁止消费/丢弃该 owner 的门面。上方同时核对 T 和准确的（可能为宽）地址。
         Ok(Some(unsafe { pointer.as_ref() }))
     }
-}
-
-/// 查询宏统一 root 与视图接收者的内部协议。
-/// 返回值借用真正的 owner，不借用这个临时接收者；业务源码不能直接使用该私有接口。
-#[doc(hidden)]
-pub trait QueryTarget<'owner> {
-    fn __nestrs_query_view(self) -> ServiceProviderRef<'owner>;
-}
-
-impl<'owner> QueryTarget<'owner> for &'owner ServiceProvider {
-    fn __nestrs_query_view(self) -> ServiceProviderRef<'owner> {
-        self.view()
-    }
-}
-
-impl<'owner> QueryTarget<'owner> for &ServiceProviderRef<'owner> {
-    fn __nestrs_query_view(self) -> ServiceProviderRef<'owner> {
-        *self
-    }
-}
-
-/// 必选查询的生成代码入口，所在模块保持私有，仅由编译器授权的查询宏访问。
-#[doc(hidden)]
-pub async fn query_required<'owner, T: ?Sized + Send + Sync + 'static>(
-    view: ServiceProviderRef<'owner>,
-    key: Option<ServiceKey>,
-) -> Result<&'owner T, ResolveError> {
-    view.required::<T>(key).await
-}
-
-/// 可选查询的生成代码入口；只有未注册返回 None，初始化等其他失败仍返回错误。
-#[doc(hidden)]
-pub async fn query_optional<'owner, T: ?Sized + Send + Sync + 'static>(
-    view: ServiceProviderRef<'owner>,
-    key: Option<ServiceKey>,
-) -> Result<Option<&'owner T>, ResolveError> {
-    view.query::<T>(key).await
 }

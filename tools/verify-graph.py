@@ -102,7 +102,7 @@ def project_data(path):
 
 def fixture_entries(project):
     entries = {entry["binary"]: entry for entry in project["entries"] if entry["package"] == "nestrs-graph-fixture"}
-    assert set(entries) == {"alpha", "beta", "build-script-build", "invalid_graph", "no_main", "cfg_no_main", "feature_app", "compile_error"}, entries
+    assert set(entries) == {"alpha", "beta", "build-script-build", "invalid_graph", "no_main", "cfg_no_main", "feature_app", "compile_error", "macro_main"}, entries
     for binary in ["alpha", "beta"]:
         assert entries[binary]["status"] == "ok", entries[binary]
         verify_graph_payload(entries[binary]["graph"], binary)
@@ -110,11 +110,16 @@ def fixture_entries(project):
     assert build_named["status"] == "ok", build_named
     assert len(build_named["graph"]["nodes"]) == 1, build_named
     assert build_named["graph"]["nodes"][0]["name"].endswith("::BuildScriptNamedService"), build_named
+    macro_main = entries["macro_main"]
+    assert macro_main["status"] == "ok", macro_main
+    assert len(macro_main["graph"]["nodes"]) == 1, macro_main
+    assert macro_main["graph"]["nodes"][0]["name"].endswith("::MacroMainService"), macro_main
     assert entries["invalid_graph"]["status"] == "error", entries
-    assert "graph validation failed" in entries["invalid_graph"]["diagnostic"], entries
+    assert "DI 依赖图编译失败" in entries["invalid_graph"]["diagnostic"], entries
     for binary in ["no_main", "cfg_no_main"]:
-        assert entries[binary]["status"] == "error", entries[binary]
-        assert "no_main" in entries[binary]["diagnostic"], entries[binary]
+        # 静态图从编译器 metadata 导出，无需执行或替换自定义 main。
+        assert entries[binary]["status"] == "ok", entries[binary]
+        assert entries[binary]["graph"]["nodes"] == [], entries[binary]
     return entries
 
 
@@ -136,7 +141,7 @@ def main():
     output = root / "target/nestrs-graph-verification"
     output.mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()
-    for key in ["RUSTC_BOOTSTRAP", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "NESTRS_GRAPH_TARGET"]:
+    for key in ["RUSTC_BOOTSTRAP", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "NESTRS_GRAPH_TARGET", "NESTRS_GRAPH_PLAN"]:
         environment.pop(key, None)
     if not args.skip_build:
         subprocess.run([sys.executable, str(root / "tools/build-toolchain.py")], cwd=root, env=environment, check=True)
@@ -215,10 +220,8 @@ def main():
         assert verify_graph(output / "relative.html", "beta") == second
 
         for name, package, binary, diagnostic in [
-            ("invalid-graph", "nestrs-graph-fixture", "invalid_graph", "graph validation failed"),
+            ("invalid-graph", "nestrs-graph-fixture", "invalid_graph", "DI 依赖图编译失败"),
             ("missing-core", "nestrs-graph-without-core", "nestrs-graph-without-core", "depend directly on nestrs-core"),
-            ("no-main", "nestrs-graph-fixture", "no_main", "no_main"),
-            ("cfg-no-main", "nestrs-graph-fixture", "cfg_no_main", "no_main"),
             ("missing-feature", "nestrs-graph-fixture", "feature_app", "extras"),
         ]:
             destination = output / f"{name}.html"
@@ -226,6 +229,11 @@ def main():
             destination.write_bytes(previous)
             run(name, ["graph", "--locked", "--manifest-path", str(fixture / "Cargo.toml"), "-p", package, "--bin", binary, "--output", str(destination)], success=False, diagnostic=diagnostic)
             assert destination.read_bytes() == previous, f"{name}: failed graph changed previous output"
+
+        for binary in ["no_main", "cfg_no_main"]:
+            destination = output / f"{binary}.html"
+            run(f"static-{binary}", ["graph", *common, "--bin", binary, "--output", str(destination)])
+            assert graph_data(destination) == {"version": 1, "nodes": []}
 
         # Package selection exports every binary, even though default-run is alpha.
         # Failed or unsupported entries remain diagnostics alongside successful graphs.

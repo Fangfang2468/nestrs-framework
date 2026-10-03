@@ -1,6 +1,6 @@
 //! Expansion-order and source-context regressions for the shared declaration frontend.
 use nestrs::injectable;
-use nestrs_core::{Injection, ServiceProvider, get_required_service};
+use nestrs_core::{Injection, ServiceProvider};
 
 use std::sync::atomic::Ordering;
 
@@ -81,10 +81,12 @@ async fn declaration_lowering_preserves_expansion_context_and_factory_borrows() 
     let provider = ServiceProvider::build().await.unwrap();
     assert_eq!(external::CONSTRUCTIONS.load(Ordering::SeqCst), 0);
 
-    let database = get_required_service!(provider, external::DatabaseAlias)
+    let database = provider
+        .get_required_service::<external::DatabaseAlias>()
         .await
         .unwrap();
-    let generated = get_required_service!(provider, generated::Generated)
+    let generated = provider
+        .get_required_service::<generated::Generated>()
         .await
         .unwrap();
     assert_eq!(generated.label, "generated-service");
@@ -93,7 +95,8 @@ async fn declaration_lowering_preserves_expansion_context_and_factory_borrows() 
     let default_consumer = DerivedConsumer::default();
     accepts_optional_token(&default_consumer.database);
     assert!(default_consumer.database.is_none());
-    let derived = get_required_service!(provider, DerivedConsumer)
+    let derived = provider
+        .get_required_service::<DerivedConsumer>()
         .await
         .unwrap();
     accepts_optional_token(&derived.database);
@@ -103,26 +106,29 @@ async fn declaration_lowering_preserves_expansion_context_and_factory_borrows() 
     ));
 
     assert_eq!(
-        get_required_service!(provider, EnabledByCfgAttr)
+        provider
+            .get_required_service::<EnabledByCfgAttr>()
             .await
             .unwrap()
             .number,
         31
     );
 
-    let consumer = get_required_service!(provider, AliasConsumer)
+    let consumer = provider
+        .get_required_service::<AliasConsumer>()
         .await
         .unwrap();
-    let repository = get_required_service!(provider, RepositoryAlias)
+    let repository = provider
+        .get_required_service::<RepositoryAlias>()
         .await
         .unwrap();
     assert!(std::ptr::eq(&*consumer.repository, repository));
     assert!(std::ptr::eq(&*repository.dependency, database));
 
     let (sync, asynchronous, future) = tokio::join!(
-        get_required_service!(provider, external::SyncSummary),
-        get_required_service!(provider, external::AsyncSummary),
-        get_required_service!(provider, external::FutureSummary),
+        provider.get_required_service::<external::SyncSummary>(),
+        provider.get_required_service::<external::AsyncSummary>(),
+        provider.get_required_service::<external::FutureSummary>(),
     );
     assert_eq!(sync.unwrap().text, "orders-primary:sync");
     assert_eq!(asynchronous.unwrap().text, "orders-primary:async");

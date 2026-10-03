@@ -203,11 +203,15 @@ impl Toolchain {
             // An empty override also disables wrappers from .cargo/config.toml.
             .env("RUSTC_WORKSPACE_WRAPPER", "")
             .env_remove("RUSTC_BOOTSTRAP")
+            // 编辑器模型只能选择 RA 的展示分支；真实编译必须重新执行语义关联，
+            // 不能继承宿主环境中的旧模型而提前裁剪 constructor 候选。
+            .env_remove(crate::ide::constructor::MODEL_ENV)
             .env_remove("NESTRS_GRAPH_TARGET")
             .env_remove("NESTRS_GRAPH_BINARY")
             .env_remove("NESTRS_GRAPH_MANIFEST")
             .env_remove("NESTRS_GRAPH_PROOF")
             .env_remove("NESTRS_GRAPH_SOURCE")
+            .env_remove("NESTRS_GRAPH_PLAN")
             .env(library_path_variable(), self.library_path()?)
             .env("CARGO_INCREMENTAL", "0")
             .env("NESTRS_TOOLCHAIN_ID", self.identity.cache_key());
@@ -667,6 +671,30 @@ mod tests {
                 .join("nestrs")
                 .join(toolchain.identity.cache_key())
                 .join(&toolchain.fingerprint),
+        );
+    }
+
+    #[test]
+    fn real_compilation_drops_the_editor_only_constructor_model() {
+        let toolchain = Toolchain {
+            identity: CompilerIdentity::pinned().unwrap(),
+            rustc: "rustc".into(),
+            sysroot: "sysroot".into(),
+            driver: "nestrs-driver".into(),
+            bridge: "bridge".into(),
+            fingerprint: String::new(),
+        };
+        let mut command = Command::new("cargo");
+        command.env(crate::ide::constructor::MODEL_ENV, "stale-editor-model");
+        toolchain.configure(&mut command).unwrap();
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(name, _)| *name == crate::ide::constructor::MODEL_ENV),
+            Some((
+                std::ffi::OsStr::new(crate::ide::constructor::MODEL_ENV),
+                None
+            )),
         );
     }
 }

@@ -5,7 +5,7 @@
 //! 展开和失败传播都使用显式工作队列，深层服务图不会变成 Rust 调用栈。
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
 };
 
@@ -22,9 +22,8 @@ use crate::{
 };
 
 use super::{
-    CloseWaiter, OwnerId, Resolution, TaskId,
+    CloseWaiter, OwnerId, QueryId, Resolution, TaskId,
     handle::{Command, coordinator_stopped},
-    lazy::LazySlot,
     owner::{CacheEntry, OwnerData, OwnerPhase, OwnerState, ROOT},
     task::{Activation, ResolutionWaiter, TaskRequest, TaskState},
     worker::{activate, cleanup},
@@ -47,10 +46,10 @@ pub(super) struct Coordinator {
     domain: Arc<ReleaseDomain>,
     commands: mpsc::UnboundedReceiver<Command>,
     commands_open: bool,
-    // 弱通道不延长 root 的逻辑存活；只供已冻结的延迟槽位提交请求。
-    lazy_commands: mpsc::WeakUnboundedSender<Command>,
     owners: HashMap<OwnerId, OwnerState>,
     tasks: HashMap<TaskId, Activation>,
+    // 只定位尚未完成的普通查询。退订直接找到所属任务，不扫描其他等待者或任务。
+    query_tasks: HashMap<QueryId, TaskId>,
     next_task: TaskId,
     ready: VecDeque<TaskId>,
     jobs: JoinSet<JobCompletion>,
@@ -65,7 +64,6 @@ impl Coordinator {
         graph: Arc<ValidatedGraph>,
         root: Arc<OwnerData>,
         commands: mpsc::UnboundedReceiver<Command>,
-        lazy_commands: mpsc::WeakUnboundedSender<Command>,
         max_activations: usize,
     ) -> Self {
         Self {
@@ -73,9 +71,9 @@ impl Coordinator {
             domain: ReleaseDomain::new(),
             commands,
             commands_open: true,
-            lazy_commands,
             owners: HashMap::from([(ROOT, OwnerState::new(root))]),
             tasks: HashMap::new(),
+            query_tasks: HashMap::new(),
             next_task: 0,
             ready: VecDeque::new(),
             jobs: JoinSet::new(),
@@ -124,12 +122,14 @@ impl Coordinator {
                 self.owners.insert(state.data.id, state);
             }
             Command::Resolve {
+                query,
                 owner,
                 provider,
                 waiter,
             } => {
-                self.accept_resolution(owner, provider, waiter);
+                self.accept_resolution(owner, provider, (query, waiter));
             }
+            Command::CancelQuery(query) => self.cancel_query(query),
             Command::ResolveLazy {
                 owner,
                 provider,
@@ -175,9 +175,33 @@ impl Coordinator {
             TaskRequest::Cached(result) => {
                 waiter.send(result);
             }
-            TaskRequest::Pending(task) => self.tasks.get_mut(&task).unwrap().waiters.push(waiter),
+            TaskRequest::Pending(task) => {
+                let activation = self.tasks.get_mut(&task).unwrap();
+                match waiter {
+                    ResolutionWaiter::Query(query, waiter) => {
+                        // 即使接收端已经取消，也保留本次已接受的初始化；只是无需安装
+                        // 无人等待的订阅。已安装的订阅随后由 CancelQuery 定位移除。
+                        if !waiter.is_closed() {
+                            activation.query_waiters.insert(query, waiter);
+                            self.query_tasks.insert(query, task);
+                        }
+                    }
+                    ResolutionWaiter::Lazy(waiter) => activation.lazy_waiters.push(waiter),
+                }
+            }
         }
         self.expand(&mut expansion);
+    }
+
+    fn cancel_query(&mut self, query: QueryId) {
+        if let Some(task) = self.query_tasks.remove(&query) {
+            // 完成路径会同时删除索引；因此存在索引时任务和等待者都必须仍然存在。
+            self.tasks
+                .get_mut(&task)
+                .unwrap()
+                .query_waiters
+                .remove(&query);
+        }
     }
 
     /// 先按生命周期确定真实 owner，再查共享缓存。Transient 永远创建新 occurrence。
@@ -210,8 +234,9 @@ impl Coordinator {
                 owner,
                 provider,
                 state: TaskState::Unexpanded,
-                parents: Vec::new(),
-                waiters: Vec::new(),
+                parents: HashSet::new(),
+                query_waiters: HashMap::new(),
+                lazy_waiters: Vec::new(),
             },
         );
         let state = self.owners.get_mut(&owner).unwrap();
@@ -237,6 +262,7 @@ impl Coordinator {
             let (owner, provider) = (activation.owner, activation.provider);
             activation.state = TaskState::Waiting {
                 inputs: vec![None; self.graph.nodes[provider].dependencies.len()],
+                children: vec![None; self.graph.nodes[provider].dependencies.len()],
                 remaining: 0,
             };
             let targets: Vec<_> = self.graph.nodes[provider]
@@ -260,7 +286,12 @@ impl Coordinator {
                 );
                 let request = self.ensure_task(owner, target, expansion);
                 let activation = self.tasks.get_mut(&task).unwrap();
-                let TaskState::Waiting { inputs, remaining } = &mut activation.state else {
+                let TaskState::Waiting {
+                    inputs,
+                    children,
+                    remaining,
+                } = &mut activation.state
+                else {
                     unreachable!("正在展开的任务必须处于等待输入阶段");
                 };
                 match request {
@@ -270,11 +301,12 @@ impl Coordinator {
                     }
                     TaskRequest::Pending(child) => {
                         *remaining += 1;
+                        children[index] = Some(child);
                         self.tasks
                             .get_mut(&child)
                             .unwrap()
                             .parents
-                            .push((task, index));
+                            .insert((task, index));
                     }
                 }
             }
@@ -299,6 +331,7 @@ impl Coordinator {
         if let TaskState::Waiting {
             remaining: 0,
             inputs,
+            ..
         } = &mut activation.state
         {
             let inputs = std::mem::take(inputs);
@@ -318,6 +351,15 @@ impl Coordinator {
                 // 多条失败边可以到达同一个消费者，但它只完成一次。
                 continue;
             };
+            // 提前失败只结束当前消费者，已接受的孩子仍独立排空。按仍未就绪的槽位
+            // 移除子任务的反向订阅，避免长时间 Pending 的共享孩子保存历史失败父节点。
+            if let TaskState::Waiting { children, .. } = &activation.state {
+                for (input, child) in children.iter().enumerate() {
+                    if let Some(child) = child.and_then(|child| self.tasks.get_mut(&child)) {
+                        child.parents.remove(&(task, input));
+                    }
+                }
+            }
             let owner = self.owners.get_mut(&activation.owner).unwrap();
             let removed = owner.active_tasks.remove(&task);
             debug_assert!(removed, "活跃任务表与 owner 活跃集合必须一致");
@@ -329,19 +371,29 @@ impl Coordinator {
                     .cache
                     .insert(activation.provider, CacheEntry::completed(&result));
             }
-            for waiter in activation.waiters {
-                waiter.send(result.clone());
+            for (query, waiter) in activation.query_waiters {
+                self.query_tasks.remove(&query);
+                let _ = waiter.send(result.clone());
+            }
+            for waiter in activation.lazy_waiters {
+                let _ = waiter.send(Some(result.clone()));
             }
             for (parent, input) in activation.parents {
                 let Some(parent_state) = self.tasks.get_mut(&parent) else {
                     continue;
                 };
+                let TaskState::Waiting {
+                    inputs,
+                    children,
+                    remaining,
+                } = &mut parent_state.state
+                else {
+                    unreachable!("仍在等待依赖的消费者必须处于 Waiting 阶段");
+                };
+                let child = children[input].take();
+                debug_assert_eq!(child, Some(task), "输入槽位必须仍订阅当前子任务");
                 match &result {
                     Ok(lease) => {
-                        let TaskState::Waiting { inputs, remaining } = &mut parent_state.state
-                        else {
-                            unreachable!("仍在等待依赖的消费者必须处于 Waiting 阶段");
-                        };
                         inputs[input] = Some(lease.clone());
                         *remaining -= 1;
                         self.queue_if_ready(parent);
@@ -379,25 +431,20 @@ impl Coordinator {
             let graph = self.graph.clone();
             let domain = self.domain.clone();
             // 此处已使用 activation 的真实 owner：Singleton 的句柄永远绑定 root。
-            // 延迟输入不创建目标任务，只携带选定 provider、投影和可取消等待状态。
+            // 延迟输入不创建目标任务，只共享计划中的描述并关联真实 owner。
+            // 描述没有运行期状态；接收端与结果缓存在生成的每个字段中独立创建。
             let lazy_inputs = graph.nodes[provider]
                 .dependencies
                 .iter()
                 .map(|dependency| {
-                    dependency.lazy.and(dependency.target).map(|target| {
-                        LazySlot::dependency(
-                            &self.owners[&activation.owner].data,
-                            self.lazy_commands.clone(),
-                            target,
-                            &graph.nodes[provider],
-                            dependency,
-                        )
+                    dependency.lazy_plan.as_ref().map(|plan| {
+                        super::lazy::dependency(&self.owners[&activation.owner].data, plan.clone())
                     })
                 })
                 .collect();
             let handle = self.jobs.spawn(async move {
                 JobCompletion::Activation(
-                    crate::activation::lazy::IN_ACTIVATION
+                    super::lazy::IN_ACTIVATION
                         .scope((), activate(graph, provider, inputs, lazy_inputs, domain))
                         .await,
                 )

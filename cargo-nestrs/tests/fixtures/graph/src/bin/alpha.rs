@@ -11,10 +11,7 @@ fn main() {
     let provider = None::<nestrs_core::ServiceProvider>;
     // The call is never run by graph, but contributes Cache<Alpha> to the graph.
     if let Some(provider) = provider.as_ref() {
-        drop(nestrs_core::get_required_service!(
-            provider,
-            shared::Cache<Alpha>
-        ));
+        drop(provider.get_required_service::<shared::Cache<Alpha>>());
     }
     shared::forbidden("business main alpha");
 }

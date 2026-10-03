@@ -1,17 +1,17 @@
 //! 将解析好的稳定服务地址转换为构造输入。
 //!
 //! concrete 输入先检查实例的准确类型，trait 输入还要执行由 rustc 检查过的类型化
-//! 投影。两者最终都得到持有同一个真实实例 lease 的注入令牌。本模块不写槽位；只有
-//! 完整成功后才返回 [`PreparedInput`]，由准备事务决定是否提交。
+//! 投影。两者最终都得到持有同一个真实实例 lease 的注入令牌。本模块不写槽位；普通
+//! 输入完整准备后返回 [`PreparedInput`]，由准备事务决定是否提交。延迟输入先交付
+//! 句柄，首次获取目标由独立的无装箱投影交付令牌，两条路径复用同一类型检查和投影。
 
-use std::ptr::NonNull;
-
-use super::{ConstructionError, InputSlot, PreparedInput};
+use super::{
+    ConstructionError, InputSlot, PreparedInput,
+    lazy_dependency::LazyDependency,
+    projection::{bound_token, required_token},
+};
 use crate::{
-    activation::{
-        DependencyLease, Injection, LazyInjection, erased_service::ErasedServiceRef,
-        lazy::LazyDependency,
-    },
+    activation::{LazyInjection, erased_service::ErasedServiceRef},
     service::Injectable,
 };
 
@@ -65,12 +65,7 @@ where
     T: Injectable + ?Sized,
 {
     let input = input.ok_or(ConstructionError::RequiredDependencyAbsent { slot })?;
-    let (pointer, lease) = cast_input::<T>(slot, input)?;
-
-    // SAFETY: cast_input 已按准确 T 检查指针类型，返回的 lease 持有同一稳定实例。
-    Ok(PreparedInput::required(unsafe {
-        Injection::from_service_ptr(pointer, lease)
-    }))
+    Ok(PreparedInput::required(required_token::<T>(slot, input)?))
 }
 
 /// 将可选 concrete 输入准备为不可变载荷。
@@ -83,12 +78,8 @@ where
     T: Injectable + ?Sized,
 {
     let token = input
-        .map(|input| cast_input::<T>(slot, input))
-        .transpose()?
-        .map(|(pointer, lease)| {
-            // SAFETY: cast_input 已按准确 T 检查指针类型，lease 持有同一稳定实例。
-            unsafe { Injection::from_service_ptr(pointer, lease) }
-        });
+        .map(|input| required_token::<T>(slot, input))
+        .transpose()?;
     Ok(PreparedInput::optional(token))
 }
 
@@ -123,14 +114,9 @@ where
     Trait: Injectable + ?Sized,
 {
     let input = input.ok_or(ConstructionError::RequiredDependencyAbsent { slot })?;
-    let (concrete, lease) = cast_input::<Concrete>(slot, input)?;
-    let trait_pointer = project_bound_pointer(concrete, project);
-
-    // SAFETY: 类型化投影的返回借用不长于 concrete 借用；lease 保活同一具体实例，
-    // 指针包含真实投影产生的完整 trait 元数据，没有手工拼装 vtable。
-    Ok(PreparedInput::required(unsafe {
-        Injection::from_service_ptr(trait_pointer, lease)
-    }))
+    Ok(PreparedInput::required(bound_token::<Concrete, Trait>(
+        slot, input, project,
+    )?))
 }
 
 /// 用编译器生成并检查过的类型化投影准备可选 trait 输入。
@@ -145,45 +131,9 @@ where
     Trait: Injectable + ?Sized,
 {
     let token = input
-        .map(|input| cast_input::<Concrete>(slot, input))
-        .transpose()?
-        .map(|(concrete, lease)| {
-            let pointer = project_bound_pointer(concrete, project);
-            // SAFETY: 类型化投影保留借用存活期，lease 保活同一 concrete 实例；
-            // 仅包装真实投影产生的地址，不伪造 trait 元数据。
-            unsafe { Injection::from_service_ptr(pointer, lease) }
-        });
+        .map(|input| bound_token::<Concrete, Trait>(slot, input, project))
+        .transpose()?;
     Ok(PreparedInput::optional(token))
-}
-
-fn cast_input<T>(
-    slot: InputSlot,
-    input: ErasedServiceRef,
-) -> Result<(NonNull<T>, DependencyLease), ConstructionError>
-where
-    T: Injectable + ?Sized,
-{
-    input
-        .cast::<T>()
-        .map_err(|actual| ConstructionError::InputTypeMismatch {
-            slot,
-            expected: std::any::type_name::<T>(),
-            actual: actual.name,
-        })
-}
-
-fn project_bound_pointer<Concrete, Trait>(
-    concrete: NonNull<Concrete>,
-    project: for<'a> fn(&'a Concrete) -> &'a Trait,
-) -> NonNull<Trait>
-where
-    Concrete: Injectable,
-    Trait: Injectable + ?Sized,
-{
-    // SAFETY: 所有调用点都先通过 cast_input 检查准确 concrete 类型，并在调用期间
-    // 持有对应 lease。project 的高阶借用签名保证结果不会比输入借用活得更久。
-    let concrete = unsafe { concrete.as_ref() };
-    NonNull::from(project(concrete))
 }
 
 #[cfg(test)]

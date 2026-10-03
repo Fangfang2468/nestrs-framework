@@ -1,5 +1,6 @@
 use nestrs::{factory, injectable};
 
+#[injectable]
 struct Service;
 struct Made;
 

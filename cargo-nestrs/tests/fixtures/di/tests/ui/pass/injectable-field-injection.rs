@@ -7,10 +7,17 @@ trait Database: Send + Sync {
     fn query(&self);
 }
 
+#[injectable]
+struct MemoryDatabase;
+impl Database for MemoryDatabase {
+    fn query(&self) {}
+}
+
 trait Audit: Send + Sync {
     fn record(&self);
 }
 
+#[injectable(key = 7)]
 struct Indexed;
 
 impl Indexed {

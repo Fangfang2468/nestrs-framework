@@ -1,7 +1,6 @@
-use crate::registration::provider::Provider;
-use crate::service::{ServiceKey, ServiceType};
+use crate::service::{ServiceIdentifier, ServiceKey, ServiceType};
 use nestrs::{factory, injectable};
-use nestrs_core::{ServiceProvider, get_required_service, get_service};
+use nestrs_core::ServiceProvider;
 
 use std::marker::PhantomData;
 
@@ -31,58 +30,58 @@ fn factory_only() -> FactoryOnly<User> {
 // A compiled query site contributes a static root independently of function execution.
 #[allow(dead_code)]
 fn never_executed_queries(provider: &ServiceProvider) {
-    drop(get_service!(provider, UserRepository));
-    drop(get_required_service!(provider, Repository<Order>));
+    drop(provider.get_service::<UserRepository>());
+    drop(provider.get_required_service::<Repository<Order>>());
     if false {
-        drop(get_service!(provider, Repository<User>));
+        drop(provider.get_service::<Repository<User>>());
     }
-    drop(get_service!(provider, FactoryOnly<User>));
-    drop(get_service!(provider, PortAlias));
-    drop(get_service!(provider, Missing));
+    drop(provider.get_service::<FactoryOnly<User>>());
+    drop(provider.get_service::<PortAlias>());
+    drop(provider.get_service::<Missing>());
     #[cfg(any())]
-    drop(get_service!(provider, ThisTypeDoesNotExist));
+    drop(provider.get_service::<ThisTypeDoesNotExist>());
 }
 
 #[test]
-fn query_macros_collect_closed_types_aliases_and_fallback_roots_before_execution() {
-    // Only the ordinary factory is in this snapshot; open generic declarations stay lazy.
-    assert_eq!(crate::registration::catalog::collect().providers.len(), 1);
-    let roots: Vec<_> = crate::registration::catalog::collect().roots;
-    assert_eq!(roots.len(), 6);
-    assert_eq!(
-        roots
-            .iter()
-            .filter(|root| root.service_type == ServiceType::create::<Repository<User>>())
-            .count(),
-        2
-    );
-    assert_eq!(
-        roots
-            .iter()
-            .filter(|root| root.materialize.is_some())
-            .count(),
-        3
-    );
-    for root in roots {
-        if let Some(materialize) = root.materialize {
-            let Provider::Class(provider) = materialize() else {
-                panic!("generic class root")
-            };
-            assert_eq!(provider.provide.service_type, root.service_type);
-            assert_eq!(
-                provider.provide.service_key,
-                Some(ServiceKey::Named("root".into()))
-            );
-        } else {
-            assert!(
-                [
-                    ServiceType::create::<FactoryOnly<User>>(),
-                    ServiceType::create::<dyn Port>(),
-                    ServiceType::create::<Missing>(),
-                ]
-                .contains(&root.service_type)
-            );
-        }
-        assert!(root.source.file.ends_with("registered_roots.rs"));
+fn reflect_plan_closes_compiled_queries_without_registering_absent_fallbacks() {
+    // 未执行分支和同一真实类型的别名仍贡献闭合根。最终计划无需保存根声明清单，
+    // 直接以节点唯一性、冻结 key 和缺席路由验证编译收集的结果。
+    let graph = &crate::graph::plan::load().graph;
+    assert_eq!(graph.nodes.len(), 3);
+    for service_type in [
+        ServiceType::create::<Repository<User>>(),
+        ServiceType::create::<Repository<Order>>(),
+    ] {
+        let keyed = ServiceIdentifier::new(Some(ServiceKey::Named("root".into())), service_type);
+        assert!(graph.routes.contains_key(&keyed));
+        assert_eq!(
+            graph
+                .nodes
+                .iter()
+                .filter(|node| node.identifier.service_type == service_type)
+                .count(),
+            1
+        );
+        assert!(
+            !graph
+                .routes
+                .contains_key(&ServiceIdentifier::from(service_type))
+        );
     }
+    for service_type in [
+        ServiceType::create::<dyn Port>(),
+        ServiceType::create::<Missing>(),
+    ] {
+        assert!(
+            !graph
+                .routes
+                .contains_key(&ServiceIdentifier::from(service_type))
+        );
+    }
+    let factory =
+        &graph.routes[&ServiceIdentifier::from(ServiceType::create::<FactoryOnly<User>>())];
+    assert!(matches!(
+        graph.nodes[factory.provider].constructor,
+        crate::graph::Constructor::Factory(_)
+    ));
 }

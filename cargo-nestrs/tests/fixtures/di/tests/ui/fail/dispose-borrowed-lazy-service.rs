@@ -14,9 +14,7 @@ struct Consumer {
 }
 
 async fn close_while_lazy_target_is_borrowed(provider: ServiceProvider) {
-    let consumer = nestrs_core::get_required_service!(provider, Consumer)
-        .await
-        .unwrap();
+    let consumer = provider.get_required_service::<Consumer>().await.unwrap();
     let report = consumer.report.get().await.unwrap();
     provider.dispose_async().await.unwrap();
     println!("{}", report.value);

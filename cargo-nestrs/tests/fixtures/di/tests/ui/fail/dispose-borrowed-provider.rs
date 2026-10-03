@@ -1,7 +1,7 @@
 use nestrs_core::ServiceProvider;
 
 async fn close_while_borrowed(provider: ServiceProvider) {
-    let service = nestrs_core::get_required_service!(provider, String)
+    let service = provider.get_required_service::<String>()
         .await
         .unwrap();
     provider.dispose_async().await.unwrap();

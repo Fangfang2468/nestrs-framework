@@ -6,8 +6,7 @@
 //! adapter 始终是不可从模块外命名的实现细节。
 
 use crate::codegen::injection::render::{
-    EmitCompilerKey, EmitDependencyRequest, RenderCleanupHook, RenderServiceKey,
-    RenderServiceLifetime,
+    EmitCompilerKey, EmitDependencyRequest, EmitPlanProvider, RenderCleanupHook,
 };
 
 use super::{
@@ -39,48 +38,48 @@ pub(crate) fn emit_factory_provider(
     analysis: FactoryAnalysis,
     config: FactoryConfig,
     primary: bool,
+    lazy: Option<bool>,
 ) -> zyn::TokenStream {
     let factory = analysis.item.sig.ident.clone();
+    let success_type = &analysis.output.success_type;
+    let service_type = quote!(#success_type);
+    let async_factory = matches!(analysis.output.invocation, FactoryInvocation::Async);
+    let reflection = crate::codegen::reflection::support(false);
     let provider_const = zyn::format_ident!("__nestrs_factory_provider_for_{factory}");
 
     zyn! {
         #[doc(hidden)]
         #[allow(clippy::unused_unit)]
         const {{ provider_const }}: () = {
+            {{ reflection }}
             @GenerateFactoryAdapter(
                 analysis = analysis.clone(),
             )
         #[allow(dead_code)]
-            fn __nestrs_reflected_factory() -> ::nestrs_core::registration::provider::Provider {
-                ::nestrs_core::registration::compiler::compiler_provider::<{{ analysis.output.success_type.clone() }}>(
+            fn __nestrs_reflected_factory() -> ::nestrs_core::activation::adapter::ActivationAdapter {
+                __nestrs_reflect::compiler_plan_factory::<{{ async_factory }}>();
+                __nestrs_reflect::compiler_provider::<{{ analysis.output.success_type.clone() }}>(
                     @EmitCompilerKey(key = config.key.clone())
                 );
-                ::nestrs_core::registration::provider::Provider::Factory(
-                    ::nestrs_core::registration::provider::FactoryProvider {
-                        provide: ::nestrs_core::service::ServiceIdentifier::new(
-                            @RenderServiceKey(key = config.key.clone()),
-                            ::nestrs_core::service::ServiceType::create::<{{ analysis.output.success_type.clone() }}>(),
-                        ),
-                        common: ::nestrs_core::registration::provider::ProviderCommon {
-                            lifetime: @RenderServiceLifetime(lifetime = config.lifetime),
-                            primary: {{ primary }},
-                            source: ::nestrs_core::service::ServiceSource::new(
-                                file!(),
-                                line!(),
-                                column!(),
-                            ),
-                            cleanup: @RenderCleanupHook(cleanup = config.cleanup.clone()),
-                        },
-                        dependencies: ::std::vec![
+                @EmitPlanProvider(
+                    service_type = service_type.clone(),
+                    key = config.key.clone(),
+                    lifetime = config.lifetime,
+                    primary = *primary,
+                    lazy = *lazy,
+                )
+                ::nestrs_core::activation::adapter::ActivationAdapter {
+                        service_type: ::nestrs_core::service::ServiceType::create::<{{ analysis.output.success_type.clone() }}>(),
+                        cleanup: @RenderCleanupHook(cleanup = config.cleanup.clone()),
+                        inputs: ::std::vec![
                             @for (parameter in analysis.parameters.iter()) {
                                 @EmitDependencyRequest(request = parameter.dependency_request()),
                             }
                         ],
-                        invoker: @RenderFactoryInvoker(
+                        constructor: ::nestrs_core::activation::adapter::Constructor::Factory(@RenderFactoryInvoker(
                             invocation = analysis.output.invocation,
-                        ),
-                    }
-                )
+                        )),
+                }
             }
 
             ()
@@ -272,7 +271,8 @@ fn invoke_async_factory(
 ///
 /// 适配器先把所有输入写入只属于 adapter 的按槽位命名局部变量，确认没有 metadata
 /// 遗留槽位后才调用用户 factory。返回的 `&'frame T` 会沿着 adapter future 保持到
-/// factory 完成，从而不能逃逸至输出服务或后台任务。
+/// factory 完成，从而不能逃逸至输出服务或后台任务。延迟输入则从槽位按值移出；其
+/// 生命周期由句柄的 owner 访问协议和成功实例 lease 管理，可以安全保存到返回服务。
 #[zyn::element]
 fn take_factory_parameter(
     parameter: FactoryParameterSpec,
@@ -281,16 +281,29 @@ fn take_factory_parameter(
     let service_type = parameter.service_type.clone();
     let slot = parameter.input_slot;
     let optional = parameter.optional;
+    let lazy = parameter.lazy;
 
     zyn! {
-        @if (optional) {
-            {{ context }}.take_optional::<{{ service_type }}>(
-                ::nestrs_core::activation::InputSlot::new({{ slot }})
-            )?
+        @if (lazy) {
+            @if (optional) {
+                {{ context }}.take_optional_lazy::<{{ service_type }}>(
+                    ::nestrs_core::activation::InputSlot::new({{ slot }})
+                )?
+            } @else {
+                {{ context }}.take_lazy::<{{ service_type }}>(
+                    ::nestrs_core::activation::InputSlot::new({{ slot }})
+                )?
+            }
         } @else {
-            {{ context }}.take::<{{ service_type }}>(
-                ::nestrs_core::activation::InputSlot::new({{ slot }})
-            )?
+            @if (optional) {
+                {{ context }}.take_optional::<{{ service_type }}>(
+                    ::nestrs_core::activation::InputSlot::new({{ slot }})
+                )?
+            } @else {
+                {{ context }}.take::<{{ service_type }}>(
+                    ::nestrs_core::activation::InputSlot::new({{ slot }})
+                )?
+            }
         }
     }
 }
@@ -320,9 +333,9 @@ fn render_factory_invoker(invocation: FactoryInvocation) -> zyn::TokenStream {
 
     zyn! {
         @if (is_async) {
-            ::nestrs_core::registration::provider::FactoryInvoker::Async(__nestrs_factory_construct)
+            ::nestrs_core::activation::adapter::FactoryInvoker::Async(__nestrs_factory_construct)
         } @else {
-            ::nestrs_core::registration::provider::FactoryInvoker::Sync(__nestrs_factory_construct)
+            ::nestrs_core::activation::adapter::FactoryInvoker::Sync(__nestrs_factory_construct)
         }
     }
 }
@@ -347,6 +360,7 @@ mod tests {
                 cleanup: None,
             },
             primary: true,
+            lazy: None,
         }
         .render(&zyn::Input::default())
         .tokens()
@@ -367,7 +381,7 @@ mod tests {
 
         assert!(output.contains("const __nestrs_factory_provider_for_make : ()"));
         assert!(output.contains("compiler_provider"));
-        assert!(output.contains("Provider :: Factory"));
+        assert!(output.contains("Constructor :: Factory"));
         assert!(output.contains("FactoryInvoker :: Sync"));
         assert!(output.contains("FactoryInputs < 'frame >"));
         assert!(output.contains("take :: < Database >"));
@@ -388,11 +402,11 @@ mod tests {
             .find("self :: make")
             .expect("the user factory should only be invoked after input validation");
         assert!(first_input < second_input && second_input < ensure && ensure < invoke);
-        assert!(output.contains("ServiceKey :: Named"));
-        assert!(output.contains("String :: from"));
+        assert!(output.contains("CompilerKey :: Named"));
+        assert!(!output.contains("ServiceIdentifier"));
         assert!(output.contains("\"audit\""));
-        assert!(output.contains("declaration_position : 1usize"));
-        assert!(output.contains("primary : true"));
+        assert!(output.contains("compiler_plan_input :: < dyn Audit , 1usize , true , false >"));
+        assert!(output.contains("compiler_plan_provider :: < Service , 1u8 , true , 0u8 >"));
         assert!(output.contains("FactoryFailed"));
     }
 
@@ -411,5 +425,26 @@ mod tests {
         assert!(future_output.contains("FactoryInvoker :: Async"));
         assert!(future_output.contains("make"));
         assert!(future_output.contains(". await"));
+    }
+
+    #[test]
+    fn lazy_parameter_ownership_is_preserved_for_every_factory_invocation_shape() {
+        for source in [
+            "fn make(#[lazy] dependency: Dependency) -> Service { todo!() }",
+            "async fn make(#[lazy] dependency: Dependency) -> Result<Service, Error> { todo!() }",
+            "fn make(#[lazy] dependency: Dependency) -> impl ::core::future::Future<Output = Service> { todo!() }",
+        ] {
+            let output = render(source);
+            assert!(output.contains("take_lazy :: < Dependency >"), "{output}");
+            assert!(!output.contains("take :: < Dependency >"), "{output}");
+            assert!(
+                output.contains("prepare_lazy_required :: < Dependency >"),
+                "{output}"
+            );
+            let bind = output.find("let __nestrs_factory_input_0").unwrap();
+            let verify = output.find("ensure_all_consumed ()").unwrap();
+            let invoke = output.find("self :: make").unwrap();
+            assert!(bind < verify && verify < invoke, "{output}");
+        }
     }
 }

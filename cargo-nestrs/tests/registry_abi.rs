@@ -1,5 +1,5 @@
-//! The executable registry is compiler-owned, including its private upstream
-//! callbacks. Exercise the production driver rather than a MIR-only mock.
+//! 目标端反射入口与私有 adapter 由编译器认证。直接调用生产 driver，验证源码无法
+//! 伪造声明、取得私有执行能力，且上游真实 adapter 在优化后仍然可达。
 #![cfg(feature = "compiler-driver")]
 
 use std::{
@@ -49,7 +49,7 @@ fn run(directory: &Path, arguments: &[&str], log_name: &str) -> Output {
 }
 
 #[test]
-fn source_cannot_call_registry_entry_or_forge_declaration_callbacks() {
+fn source_cannot_call_reflection_entry_or_forge_declaration_callbacks() {
     let directory = artifacts("source-audit");
     fs::create_dir_all(directory.join("src")).unwrap();
     fs::write(
@@ -65,23 +65,23 @@ fn source_cannot_call_registry_entry_or_forge_declaration_callbacks() {
     let cases = [
         (
             "direct",
-            "fn main() { __nestrs_registry_v1(std::ptr::null_mut()); }",
+            "fn main() { __nestrs_reflect_v1(std::ptr::null_mut()); }",
         ),
         (
             "address",
-            "fn main() { let _entry: fn(*mut ()) = __nestrs_registry_v1; }",
+            "fn main() { let _entry: fn(*mut ()) = __nestrs_reflect_v1; }",
         ),
         (
             "constant",
-            "const ENTRY: fn(*mut ()) = __nestrs_registry_v1; fn main() {}",
+            "const ENTRY: fn(*mut ()) = __nestrs_reflect_v1; fn main() {}",
         ),
         (
             "alias",
-            "use crate::__nestrs_registry_v1 as hidden; fn main() {}",
+            "use crate::__nestrs_reflect_v1 as hidden; fn main() {}",
         ),
         (
             "glob-dormant",
-            "mod hidden { use super::*; fn dormant() { __nestrs_registry_v1(std::ptr::null_mut()); } } fn main() {}",
+            "mod hidden { use super::*; fn dormant() { __nestrs_reflect_v1(std::ptr::null_mut()); } } fn main() {}",
         ),
     ];
     for (case, source) in cases {
@@ -90,7 +90,7 @@ fn source_cannot_call_registry_entry_or_forge_declaration_callbacks() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(!output.status.success(), "{case}: source access compiled");
         assert!(
-            stderr.contains("compiler-owned Nestrs registry entry cannot be referenced"),
+            stderr.contains("compiler-owned Nestrs reflection entry cannot be referenced"),
             "{case}: unexpected diagnostic: {stderr}",
         );
     }
@@ -119,6 +119,65 @@ fn source_cannot_call_registry_entry_or_forge_declaration_callbacks() {
             "{callback}: unexpected diagnostic: {stderr}",
         );
     }
+}
+
+#[test]
+fn source_spelling_does_not_create_a_reflection_declaration() {
+    let directory = artifacts("spoofed-local-reflection");
+    fs::create_dir_all(directory.join("src")).unwrap();
+    fs::write(
+        directory.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"reflection-marker-source-audit\"\nversion = \"0.0.0\"\n\
+             edition = \"2024\"\n[workspace]\n[dependencies]\n\
+             nestrs-core = {{ path = {} }}\n\
+             tokio = {{ version = \"1.53.1\", features = [\"rt\", \"macros\"] }}\n",
+            quoted(&workspace().join("nestrs-core")),
+        ),
+    )
+    .unwrap();
+    // 精确模仿工具声明的模块、marker 名称及签名，仍然不能获得 bridge 宏来源。
+    // 若收集器只匹配拼写，它会错误地把 Pretend 注册，或尝试从伪造蓝图读取 adapter。
+    fs::write(
+        directory.join("src/main.rs"),
+        r#"#![forbid(unsafe_code)]
+#![allow(dead_code)]
+struct Pretend;
+mod __nestrs_reflect {
+    pub enum CompilerKey { Default, Named(&'static str), Indexed(usize) }
+    pub const fn compiler_provider<T: ?Sized>(_: CompilerKey) {}
+    pub const fn compiler_plan_provider<T: ?Sized, const L: u8, const P: bool, const I: u8>(_: CompilerKey) {}
+    pub const fn compiler_query_root<T: ?Sized>() {}
+    pub trait ProviderDefinition { fn provider(); }
+    pub fn provider_definition<T: ProviderDefinition>() { T::provider() }
+}
+impl __nestrs_reflect::ProviderDefinition for Pretend { fn provider() {} }
+fn ordinary_user_function() {
+    __nestrs_reflect::compiler_provider::<Pretend>(__nestrs_reflect::CompilerKey::Default);
+    __nestrs_reflect::compiler_plan_provider::<Pretend, 0, false, 0>(__nestrs_reflect::CompilerKey::Default);
+    __nestrs_reflect::provider_definition::<Pretend>();
+}
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    ordinary_user_function();
+    let provider = nestrs_core::ServiceProvider::build().await.unwrap();
+    assert!(provider.get_service::<Pretend>().await.unwrap().is_none());
+    provider.dispose_async().await.unwrap();
+    println!("user marker spelling did not register a service");
+}
+"#,
+    )
+    .unwrap();
+    let output = run(&directory, &["run", "--offline"], "source-markers");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("user marker spelling did not register a service"),
+    );
 }
 
 #[test]
@@ -264,7 +323,7 @@ impl Answer for PrivateAnswer { fn value(&self) -> u32 { 73 } }
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let provider = nestrs_core::ServiceProvider::build().await.unwrap();
-    let answer = nestrs_core::get_required_service!(provider, dyn upstream::Answer).await.unwrap();
+    let answer = provider.get_required_service::<dyn upstream::Answer>().await.unwrap();
     assert_eq!(answer.value(), 73);
     provider.dispose_async().await.unwrap();
     println!("private upstream registry survived LTO");
@@ -322,13 +381,13 @@ pub fn keep(_: TokenStream, item: TokenStream) -> TokenStream { item }
 
 #[proc_macro]
 pub fn collect(_: TokenStream) -> TokenStream {
-    "let _ = ::nestrs_core::registration::catalog::collect();".parse().unwrap()
+    "let _ = ::nestrs_core::graph::plan::load();".parse().unwrap()
 }
 
 #[proc_macro_attribute]
 pub fn injectable(_: TokenStream, item: TokenStream) -> TokenStream {
     let mut output = item;
-    output.extend("fn private_access() { let _ = ::nestrs_core::registration::catalog::collect(); }".parse::<TokenStream>().unwrap());
+    output.extend("fn private_access() { let _ = ::nestrs_core::graph::plan::load(); }".parse::<TokenStream>().unwrap());
     output
 }
 "#,
@@ -344,7 +403,7 @@ struct Service { #[value(37)] value: usize }
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let provider = nestrs_core::ServiceProvider::build().await.unwrap();
-    assert_eq!(nestrs_core::get_required_service!(provider, Service).await.unwrap().value, 37);
+    assert_eq!(provider.get_required_service::<Service>().await.unwrap().value, 37);
     provider.dispose_async().await.unwrap();
     println!("CLI bridge retains its identity beside a same-named dependency");
 }

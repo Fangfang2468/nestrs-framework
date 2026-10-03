@@ -32,6 +32,9 @@ pub(crate) fn generate_injectable_constructor(analysis: AnalyzedFields) -> zyn::
             ::nestrs_core::activation::ErasedService,
             ::nestrs_core::activation::ConstructionError,
         > {
+            if false {
+                {{ service.clone() }}::__nestrs_constructor_activate({{ context.clone() }})
+            } else {
             let __nestrs_injectable_instance = @ConstructInjectableInstance(
                 analysis = analysis.clone(),
                 service = service.clone(),
@@ -43,6 +46,7 @@ pub(crate) fn generate_injectable_constructor(analysis: AnalyzedFields) -> zyn::
                     __nestrs_injectable_instance
                 )
             )
+            }
         }
     }
 }
@@ -65,6 +69,9 @@ pub(crate) fn generate_generic_injectable_constructor(
             ::nestrs_core::activation::ErasedService,
             ::nestrs_core::activation::ConstructionError,
         > {
+            if false {
+                Self::__nestrs_constructor_activate({{ context.clone() }})
+            } else {
             let __nestrs_injectable_instance = @ConstructInjectableInstance(
                 analysis = analysis.clone(),
                 service = service.clone(),
@@ -76,6 +83,7 @@ pub(crate) fn generate_generic_injectable_constructor(
                     __nestrs_injectable_instance
                 )
             )
+            }
         }
     }
 }

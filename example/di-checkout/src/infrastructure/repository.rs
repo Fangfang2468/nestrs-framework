@@ -7,7 +7,7 @@ use super::database::Database;
 
 /// 单例泛型仓储：不同闭合类型各有一张内存表，但共享同一个 Database。
 ///
-/// 编译器从 OrderStore 的普通 impl 确认 `Repository<Order>`；其它类型可由查询宏发现。
+/// 编译器从 OrderStore 的普通 impl 确认 `Repository<Order>`；其它闭合类型可由查询方法的编译期分析发现。
 #[injectable]
 pub(crate) struct Repository<T: Send + Sync + 'static> {
     #[inject]

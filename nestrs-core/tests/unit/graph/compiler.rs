@@ -34,6 +34,7 @@ fn common(lifetime: ServiceLifetime) -> ProviderCommon {
     ProviderCommon {
         lifetime,
         primary: false,
+        lazy: None,
         source: source(),
         cleanup: None,
     }
@@ -67,6 +68,7 @@ fn dependency<T: Send + Sync + 'static>(slot: usize, key: Option<ServiceKey>) ->
         token: token::<T>(key),
         optional: false,
         lazy: None,
+        project: None,
         label: Some("dependency"),
         delivery: Delivery::Direct(prepare_required::<T>),
         provider_source: ProviderSource::Registered,
@@ -84,6 +86,9 @@ fn binding<T: Audit + 'static>() -> TraitBinding {
         prepare_optional: |slot, value| {
             prepare_bound_optional::<T, dyn Audit>(slot, value, |value| value)
         },
+        project: |slot, value, output| {
+            crate::activation::project_bound::<T, dyn Audit>(slot, value, output, |value| value)
+        },
         source: source(),
     }
 }
@@ -95,6 +100,7 @@ fn trait_dependency(optional: bool, key: Option<ServiceKey>) -> DependencyReques
         token: token::<dyn Audit>(key),
         optional,
         lazy: None,
+        project: None,
         label: Some("audit"),
         delivery: if optional {
             Delivery::RequiresBindingOrAbsent(prepare_optional_absent::<dyn Audit>)
@@ -227,6 +233,9 @@ fn automatic_materialization_closes_new_concrete_and_interface_dependencies() {
         },
         prepare_optional: |slot, value| {
             prepare_bound_optional::<Gamma, dyn Store>(slot, value, |value| value)
+        },
+        project: |slot, value, output| {
+            crate::activation::project_bound::<Gamma, dyn Store>(slot, value, output, |value| value)
         },
         source: source(),
     };
@@ -1111,6 +1120,7 @@ fn lazy_dependencies_preserve_all_graph_validation_rules() {
     let lazy_alpha = || {
         let mut request = dependency::<Alpha>(0, None);
         request.lazy = Some(crate::activation::prepare_lazy_required::<Alpha>);
+        request.project = Some(crate::activation::project_required::<Alpha>);
         request
     };
     let missing = compile(vec![provider::<Consumer>(
@@ -1163,6 +1173,14 @@ fn lazy_dependencies_preserve_all_graph_validation_rules() {
     let alpha = graph.routes[&token::<Alpha>(None)].provider;
     assert_eq!(graph.nodes[consumer].dependencies[0].target, Some(alpha));
     assert!(graph.nodes[consumer].dependencies[0].lazy.is_some());
+    assert_eq!(
+        graph.nodes[consumer].dependencies[0]
+            .lazy_plan
+            .as_ref()
+            .unwrap()
+            .provider,
+        alpha
+    );
     assert!(graph.dependents[alpha].contains(&consumer));
     assert!(
         graph
@@ -1190,6 +1208,7 @@ fn lazy_optional_traits_freeze_absence_but_do_not_hide_ambiguity() {
     let graph = compile(vec![consumer()]).unwrap();
     assert!(graph.nodes[0].dependencies[0].target.is_none());
     assert!(graph.nodes[0].dependencies[0].lazy.is_some());
+    assert!(graph.nodes[0].dependencies[0].lazy_plan.is_none());
 
     let error = GraphCompiler::compile_snapshot(crate::registration::catalog::RegistrySnapshot {
         providers: vec![
@@ -1210,25 +1229,47 @@ fn lazy_optional_traits_freeze_absence_but_do_not_hide_ambiguity() {
 }
 
 #[test]
-fn lazy_factory_inputs_are_rejected_before_invoking_any_factory() {
+fn lazy_factory_inputs_are_planned_without_invoking_any_factory() {
     let mut request = dependency::<Alpha>(0, None);
     request.lazy = Some(crate::activation::prepare_lazy_required::<Alpha>);
+    request.project = Some(crate::activation::project_required::<Alpha>);
     let factory = Provider::Factory(FactoryProvider {
         provide: token::<Consumer>(None),
         common: common(ServiceLifetime::Singleton),
         dependencies: vec![request],
-        invoker: FactoryInvoker::Sync(|_| panic!("invalid metadata must never invoke factory")),
+        invoker: FactoryInvoker::Sync(|_| panic!("graph analysis must never invoke factory")),
     });
-    let error = compile(vec![
+    let graph = compile(vec![
         factory,
         provider::<Alpha>(None, ServiceLifetime::Singleton, vec![]),
     ])
-    .unwrap_err();
-    assert!(
-        error
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.kind == GraphDiagnosticKind::InvalidMetadata)
+    .unwrap();
+    let factory = graph
+        .nodes
+        .iter()
+        .find(|node| node.identifier == token::<Consumer>(None))
+        .unwrap();
+    let input = &factory.dependencies[0];
+    assert!(input.lazy.is_some());
+    assert!(input.lazy_plan.is_some());
+    assert_eq!(
+        graph.nodes[input.target.unwrap()].identifier,
+        token::<Alpha>(None)
     );
-    assert!(error.to_string().contains("factory 参数不支持延迟注入"));
+}
+
+#[test]
+fn lazy_concrete_without_a_direct_projector_is_invalid_metadata() {
+    let mut request = dependency::<Alpha>(0, None);
+    request.lazy = Some(crate::activation::prepare_lazy_required::<Alpha>);
+    request.project = None;
+    let error = compile(vec![
+        provider::<Consumer>(None, ServiceLifetime::Singleton, vec![request]),
+        provider::<Alpha>(None, ServiceLifetime::Singleton, vec![]),
+    ])
+    .unwrap_err();
+    assert!(error.diagnostics.iter().any(|diagnostic| {
+        diagnostic.kind == GraphDiagnosticKind::InvalidMetadata
+            && diagnostic.message.contains("延迟输入缺少直接类型化投影")
+    }));
 }

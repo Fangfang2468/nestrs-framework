@@ -1,11 +1,10 @@
 //! rustc 条件编译后的同一字段集合驱动类型、构造与依赖槽位。
 use crate::activation::InputSlot;
-use crate::registration::provider::{Provider, ProviderDefinition};
 use crate::service::ServiceType;
 use std::marker::PhantomData;
 
 use nestrs::{injectable, primary};
-use nestrs_core::{ServiceProvider, get_required_service};
+use nestrs_core::ServiceProvider;
 
 trait Port: Send + Sync {
     fn value(&self) -> u32;
@@ -110,24 +109,28 @@ mod generated {
 #[tokio::test]
 async fn configured_fields_construct_named_tuple_generic_and_empty_services() {
     let provider = ServiceProvider::build().await.unwrap();
-    let named = get_required_service!(provider, Named).await.unwrap();
+    let named = provider.get_required_service::<Named>().await.unwrap();
     assert_eq!(named.first.value, 37);
     assert_eq!(named.value, 12);
     assert_eq!(named.default, 0);
     assert_eq!(named.port.value(), 37);
     assert!(named.optional.is_none());
 
-    let tuple = get_required_service!(provider, Tuple).await.unwrap();
+    let tuple = provider.get_required_service::<Tuple>().await.unwrap();
     assert_eq!(tuple.0.value, 37);
     assert_eq!(tuple.1, 19);
     assert_eq!(tuple.2, 0);
     assert_eq!(tuple.3.value, 37);
 
-    let generic = get_required_service!(provider, Generic<u32>).await.unwrap();
+    let generic = provider
+        .get_required_service::<Generic<u32>>()
+        .await
+        .unwrap();
     assert_eq!(generic.dependency.value, 37);
-    get_required_service!(provider, EmptyNamed).await.unwrap();
-    get_required_service!(provider, EmptyTuple).await.unwrap();
-    let generated = get_required_service!(provider, generated::MacroService)
+    provider.get_required_service::<EmptyNamed>().await.unwrap();
+    provider.get_required_service::<EmptyTuple>().await.unwrap();
+    let generated = provider
+        .get_required_service::<generated::MacroService>()
         .await
         .unwrap();
     assert_eq!(
@@ -143,29 +146,40 @@ async fn configured_fields_construct_named_tuple_generic_and_empty_services() {
 }
 
 #[test]
-fn configured_dependency_slots_are_contiguous_and_match_actual_field_positions() {
-    for (service_type, positions) in [
-        (ServiceType::create::<Named>(), vec![0, 3, 4]),
-        (ServiceType::create::<Tuple>(), vec![0, 3]),
+fn configured_dependency_slots_are_contiguous_and_preserve_requested_fields() {
+    let graph = &crate::graph::plan::load().graph;
+    for (service_type, labels) in [
+        (
+            ServiceType::create::<Named>(),
+            vec![Some("first"), Some("port"), Some("optional")],
+        ),
+        (ServiceType::create::<Tuple>(), vec![None, None]),
+        (
+            ServiceType::create::<Generic<u32>>(),
+            vec![Some("dependency")],
+        ),
     ] {
-        let provider = crate::registration::catalog::collect().providers.into_iter()
-            .find(|provider| matches!(provider, Provider::Class(provider) if provider.provide.service_type == service_type))
+        let node = graph
+            .nodes
+            .iter()
+            .find(|node| node.identifier.service_type == service_type)
             .unwrap();
-        let Provider::Class(provider) = provider else {
-            panic!("injectable produces a class provider");
-        };
-        assert_eq!(provider.dependencies.len(), positions.len());
-        for (slot, (dependency, position)) in
-            provider.dependencies.iter().zip(positions).enumerate()
-        {
-            assert_eq!(dependency.input_slot, InputSlot::new(slot));
-            assert_eq!(dependency.declaration_position, position);
+        assert!(matches!(
+            node.constructor,
+            crate::graph::Constructor::Class(_)
+        ));
+        assert_eq!(node.dependencies.len(), labels.len());
+        for (slot, (dependency, label)) in node.dependencies.iter().zip(labels).enumerate() {
+            assert_eq!(dependency.slot, InputSlot::new(slot));
+            assert_eq!(dependency.label, label);
         }
     }
-    let Provider::Class(generic) = <Generic<u32> as ProviderDefinition>::provider() else {
-        panic!("generic injectable produces a class provider");
-    };
-    assert_eq!(generic.dependencies.len(), 1);
-    assert_eq!(generic.dependencies[0].input_slot, InputSlot::new(0));
-    assert_eq!(generic.dependencies[0].declaration_position, 1);
+    let named = graph
+        .nodes
+        .iter()
+        .find(|node| node.identifier.service_type == ServiceType::create::<Named>())
+        .unwrap();
+    assert!(named.dependencies[0].target.is_some());
+    assert!(named.dependencies[1].target.is_some());
+    assert!(named.dependencies[2].target.is_none());
 }

@@ -1,7 +1,7 @@
-//! 宏期依赖事实到 core 注册 ABI 的唯一渲染入口。
+//! 声明事实与类型化输入适配器的唯一渲染入口。
 //!
 //! `#[injectable]` 与 `#[factory]` 生成的 provider 载荷不同，但依赖描述、服务 key、
-//! 生命周期与 cleanup hook 的表达式完全相同。这里集中渲染，两个入口只负责提供
+//! 生命周期标记与 cleanup hook 的表达式完全相同。这里集中渲染，两个入口只负责提供
 //! 各自的宏期事实，避免同一份 ABI 出现两套实现。
 
 use crate::codegen::injection::{
@@ -10,11 +10,7 @@ use crate::codegen::injection::{
 };
 use zyn::{syn, zyn};
 
-/// 渲染一条依赖请求的注册描述。
-///
-/// 请求的两个正交事实在这里一次性分流：值怎么进槽位（`delivery`）与 provider 从哪来
-/// （`provider_source`）。concrete 与闭合泛型的交付方式相同，差别只在 provider 需要
-/// 显式注册还是按需物化；trait object 的 projector 则必须由匹配到的 `#[bind]` 提供。
+/// 一条输入仅保留类型化执行能力；key、槽位策略和标签供编译器读 MIR 后消解。
 #[zyn::element]
 pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenStream {
     let service_type = request.service_type.clone();
@@ -22,36 +18,40 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
     let key = request.key.clone();
     let optional = request.optional;
     let lazy = request.lazy;
-    let declaration_position = request.declaration_position;
     let input_slot = request.input_slot;
     let label = request.label.clone();
-
     zyn! {
-        ::nestrs_core::registration::dependency::DependencyRequest {
-            declaration_position: {{ declaration_position }},
-            input_slot: ::nestrs_core::activation::InputSlot::new({{ input_slot }}),
-            token: ::nestrs_core::service::ServiceIdentifier::new(
-                @RenderServiceKey(key = key.clone()),
-                {
-                    ::nestrs_core::registration::compiler::compiler_dependency::<{{ service_type.clone() }}, {{ input_slot }}>();
-                    ::nestrs_core::service::ServiceType::create::<{{ service_type.clone() }}>()
-                },
-            ),
-            optional: {{ optional }},
-            lazy: @RenderLazyInput(
-                service_type = service_type.clone(),
-                optional = optional,
-                lazy = lazy,
-            ),
-            label: @RenderFieldLabel(label = label.clone()),
-            delivery: @RenderDelivery(
-                service_type = service_type.clone(),
-                optional = optional,
-                is_trait_object = is_trait_object,
-            ),
-            provider_source: @RenderProviderSource(
-                service_type = service_type.clone(),
-            ),
+        ::nestrs_core::activation::adapter::InputAdapter {
+            service_type: {
+                __nestrs_reflect::compiler_dependency::<{{ service_type.clone() }}, {{ input_slot }}>();
+                __nestrs_reflect::compiler_plan_input::<
+                    {{ service_type.clone() }}, {{ input_slot }}, {{ optional }}, {{ lazy }}
+                >(@EmitCompilerKey(key = key.clone()), {{ label.as_ref().map(ToString::to_string).unwrap_or_default() }});
+                ::nestrs_core::service::ServiceType::create::<{{ service_type.clone() }}>()
+            },
+            lazy: @RenderLazyInput(service_type = service_type.clone(), optional = optional, lazy = lazy),
+            project: @RenderLazyProjection(service_type = service_type.clone(), lazy = lazy, is_trait_object = is_trait_object),
+            prepare: @RenderDelivery(service_type = service_type.clone(), optional = optional, is_trait_object = is_trait_object),
+        }
+    }
+}
+
+/// 延迟 concrete 输入直接交付 token；显式 dyn 等待 binding 提供真实 coercion。
+/// 类型别名先携带直接投影，计划选择 trait 路由时覆盖它，不能按源码拼写猜类型身份。
+#[zyn::element]
+fn render_lazy_projection(
+    service_type: syn::Type,
+    lazy: bool,
+    is_trait_object: bool,
+) -> zyn::TokenStream {
+    zyn! {
+        @if (*lazy && !*is_trait_object) {
+            ::core::option::Option::Some(
+                ::nestrs_core::activation::project_required::<{{ service_type }}>
+                    as ::nestrs_core::activation::ServiceProjector
+            )
+        } @else {
+            ::core::option::Option::None
         }
     }
 }
@@ -90,15 +90,15 @@ fn render_delivery(
     zyn! {
         @if (*is_trait_object) {
             @if (*optional) {
-                ::nestrs_core::registration::dependency::Delivery::RequiresBindingOrAbsent(
+                ::core::option::Option::Some(
                     ::nestrs_core::activation::prepare_optional_absent::<{{ service_type }}>
                         as ::nestrs_core::activation::InputPreparer
                 )
             } @else {
-                ::nestrs_core::registration::dependency::Delivery::RequiresBinding
+                ::core::option::Option::None
             }
         } @else {
-            ::nestrs_core::registration::dependency::Delivery::Selected(
+            ::core::option::Option::Some(
                 @if (*optional) {
                     ::nestrs_core::activation::prepare_optional::<{{ service_type }}>
                 } @else {
@@ -110,62 +110,30 @@ fn render_delivery(
     }
 }
 
-/// 渲染解析期寻找 provider 的方式。
-///
-/// 具体类型处探测可选蓝图，factory-only 服务无需 ProviderDefinition 约束。
-/// 泛型体中的探测不重新特化；driver 补充真实闭合类型和类型安全依赖路径的被动
-/// 蓝图目录，graph 在显式注册缺席时读取它，冻结后不再访问目录。
+/// 在真实类型化描述旁输出编译器所需的生命周期与选择策略。
 #[zyn::element]
-fn render_provider_source(service_type: syn::Type) -> zyn::TokenStream {
+pub(crate) fn emit_plan_provider(
+    service_type: zyn::TokenStream,
+    key: Option<ServiceKeySpec>,
+    lifetime: ServiceLifetime,
+    primary: bool,
+    lazy: Option<bool>,
+) -> zyn::TokenStream {
+    let lifetime_id: u8 = match lifetime {
+        ServiceLifetime::Singleton => 0,
+        ServiceLifetime::Scoped => 1,
+        ServiceLifetime::Transient => 2,
+    };
+    // 与工具内的初始化策略同源编码，driver 不从源码属性重新猜测策略。
+    let initialization: u8 = match lazy {
+        None => 0,
+        Some(true) => 1,
+        Some(false) => 2,
+    };
     zyn! {
-        {
-            use ::nestrs_core::registration::root::ProbeProvider as _;
-            let probe = ::nestrs_core::registration::root::Probe::<{{ service_type }}>::new();
-            #[allow(clippy::needless_borrow)]
-            match (&&probe).provider_callback() {
-                Some(callback) => ::nestrs_core::registration::dependency::ProviderSource::Materialize(callback),
-                None => ::nestrs_core::registration::dependency::ProviderSource::Registered,
-            }
-        }
-    }
-}
-
-/// 将可选字段名渲染为 provider 依赖描述所需的静态标签。
-#[zyn::element]
-fn render_field_label(label: Option<syn::Ident>) -> zyn::TokenStream {
-    zyn! {
-        @match (label.as_ref()) {
-            Some(label) => {
-                ::core::option::Option::Some(stringify!({{ label }}))
-            }
-            None => {
-                ::core::option::Option::None
-            }
-        }
-    }
-}
-
-/// 将宏期 `ServiceKeySpec` 渲染为 core 的唯一运行时 key 表达式。
-#[zyn::element]
-pub(crate) fn render_service_key(key: Option<ServiceKeySpec>) -> zyn::TokenStream {
-    zyn! {
-        @match (key.as_ref()) {
-            Some(ServiceKeySpec::Named(name)) => {
-                ::core::option::Option::Some(
-                    ::nestrs_core::ServiceKey::Named(
-                        ::std::string::String::from({{ name }})
-                    )
-                )
-            }
-            Some(ServiceKeySpec::Indexed(index)) => {
-                ::core::option::Option::Some(
-                    ::nestrs_core::ServiceKey::Indexed({{ index }})
-                )
-            }
-            None => {
-                ::core::option::Option::None
-            }
-        }
+        __nestrs_reflect::compiler_plan_provider::<
+            {{ service_type }}, {{ lifetime_id }}, {{ primary }}, {{ initialization }}
+        >(@EmitCompilerKey(key = key.clone()));
     }
 }
 
@@ -175,37 +143,19 @@ pub(crate) fn emit_compiler_key(key: Option<ServiceKeySpec>) -> zyn::TokenStream
     zyn! {
         @match (key.as_ref()) {
             Some(ServiceKeySpec::Named(name)) => {
-                ::nestrs_core::registration::compiler::CompilerKey::Named({{ name }})
+                __nestrs_reflect::CompilerKey::Named({{ name }})
             }
             Some(ServiceKeySpec::Indexed(index)) => {
-                ::nestrs_core::registration::compiler::CompilerKey::Indexed({{ index }})
+                __nestrs_reflect::CompilerKey::Indexed({{ index }})
             }
             None => {
-                ::nestrs_core::registration::compiler::CompilerKey::Default
+                __nestrs_reflect::CompilerKey::Default
             }
         }
     }
 }
 
-/// 将宏期 lifetime 渲染为 core 的运行时 lifetime 表达式。
-#[zyn::element]
-pub(crate) fn render_service_lifetime(lifetime: ServiceLifetime) -> zyn::TokenStream {
-    zyn! {
-        @match (lifetime) {
-            ServiceLifetime::Singleton => {
-                ::nestrs_core::ServiceLifetime::Singleton
-            }
-            ServiceLifetime::Scoped => {
-                ::nestrs_core::ServiceLifetime::Scoped
-            }
-            ServiceLifetime::Transient => {
-                ::nestrs_core::ServiceLifetime::Transient
-            }
-        }
-    }
-}
-
-/// 生成 `ProviderCommon::cleanup` 所需的零参数 async hook adapter。
+/// 生成 `ActivationAdapter::cleanup` 所需的零参数 async hook adapter。
 ///
 /// Rust 的 `async fn` 返回匿名 future，不能直接作为 `CleanupHook`。非捕获 closure
 /// 在宏展开处把它装箱为统一的 `CleanupFuture`；函数路径不是零参数 async hook 时，
@@ -221,9 +171,9 @@ pub(crate) fn render_cleanup_hook(cleanup: Option<CleanupPath>) -> zyn::TokenStr
 
     zyn! {
         ::core::option::Option::Some(
-            (|| -> ::nestrs_core::registration::provider::CleanupFuture {
+            (|| -> ::nestrs_core::activation::adapter::CleanupFuture {
                 ::std::boxed::Box::pin({{ cleanup_path }}())
-            }) as ::nestrs_core::registration::provider::CleanupHook
+            }) as ::nestrs_core::activation::adapter::CleanupHook
         )
     }
 }

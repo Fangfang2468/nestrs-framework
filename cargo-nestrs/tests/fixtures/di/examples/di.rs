@@ -48,8 +48,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     let scope = provider.create_scope();
     scope.warm_up().await?;
-    let handler =
-        nestrs_core::get_required_service!(scope.service_provider(), RequestHandler).await?;
+    let handler = scope
+        .service_provider()
+        .get_required_service::<RequestHandler>()
+        .await?;
     println!("request uses {}", handler.repository.name());
     scope.dispose_async().await?;
     provider.dispose_async().await?;

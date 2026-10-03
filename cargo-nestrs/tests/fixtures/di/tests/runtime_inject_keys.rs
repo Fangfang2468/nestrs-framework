@@ -1,6 +1,6 @@
 //! Literal injection keys resolve through real declarations, automatic bindings and activation.
 use nestrs::{factory, injectable};
-use nestrs_core::{ServiceProvider, get_required_service};
+use nestrs_core::ServiceProvider;
 
 trait PaymentGateway: Send + Sync {
     fn charge(&self, subtotal: u64) -> u64;
@@ -90,9 +90,9 @@ async fn async_quote(
 async fn literal_keys_preserve_payment_routes_in_fields_and_factory_parameters() {
     let provider = ServiceProvider::build().await.unwrap();
     let (checkout, sync, asynchronous) = tokio::join!(
-        get_required_service!(provider, Checkout),
-        get_required_service!(provider, SyncQuote),
-        get_required_service!(provider, AsyncQuote),
+        provider.get_required_service::<Checkout>(),
+        provider.get_required_service::<SyncQuote>(),
+        provider.get_required_service::<AsyncQuote>(),
     );
     let checkout = checkout.unwrap();
     assert_eq!(checkout.card.charge(100), 103);

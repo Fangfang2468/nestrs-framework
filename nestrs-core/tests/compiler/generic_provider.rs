@@ -1,8 +1,7 @@
-use crate::activation::{ConstructionInputs, InputSlot};
+use crate::activation::ConstructionInputs;
+use crate::graph::Constructor;
 use crate::lifetime::ServiceLifetime;
-use crate::registration::dependency::ProviderSource;
-use crate::registration::provider::{ClassProvider, Provider, ProviderDefinition};
-use crate::service::{ServiceIdentifier, ServiceType};
+use crate::service::ServiceType;
 use nestrs::injectable;
 use std::marker::PhantomData;
 
@@ -11,7 +10,7 @@ struct Entity;
 
 // 这三个类型对应嵌套闭合泛型链：C -> B<u32> -> A<u32>。
 // 它们刻意都使用本 crate 的类型，以便 #[injectable] 可以为开放泛型生成
-// ProviderDefinition；本文件隔离验证闭合 provider metadata，实际运行由
+// 类型化执行能力；本文件隔离验证最终闭合计划，实际运行由
 // runtime_lifecycle 等端到端测试覆盖。
 #[injectable]
 struct A<T> {
@@ -33,7 +32,7 @@ struct C {
 async fn cleanup_repository() {}
 
 /// 泛型 injectable 本身不应向编译器清单写入一个开放类型的 provider；具体类型的
-/// provider 由 `ProviderDefinition` 在依赖使用处按需物化。
+/// provider 由工具链沿查询和依赖闭包确定。
 #[injectable(lifetime = Transient, cleanup = "cleanup_repository")]
 struct Repository<T> {
     #[value("generic-repository")]
@@ -47,196 +46,84 @@ struct UserService {
     repository: Repository<User>,
 }
 
-#[test]
-fn generic_injectable_materializes_concrete_provider_definitions() {
-    let direct = <Repository<Entity> as ProviderDefinition>::provider();
-    let Provider::Class(ClassProvider {
-        provide,
-        common,
-        dependencies,
-        constructor,
-        ..
-    }) = direct
-    else {
-        panic!("generic provider definition should produce Provider::Class");
-    };
+// 声明一个真实查询，使该闭合实例进入最终计划；不再调用运行期蓝图 API。
+#[allow(dead_code)]
+async fn query_entity(provider: &crate::ServiceProvider) {
+    let _ = provider.get_service::<Repository<Entity>>().await;
+}
 
-    assert_eq!(
-        provide,
-        ServiceIdentifier::from(ServiceType::create::<Repository<Entity>>())
-    );
-    assert_eq!(common.lifetime, ServiceLifetime::Transient);
-    assert!(dependencies.is_empty());
-    let cleanup = common
-        .cleanup
-        .expect("generic provider should retain its cleanup hook");
-    drop(cleanup());
-
-    let erased_direct_repository = constructor(ConstructionInputs::empty())
-        .expect("generic Repository<Entity> constructor should not need dependencies");
-    let direct_repository = match erased_direct_repository.downcast::<Repository<Entity>>() {
-        Ok(repository) => repository,
-        Err(_) => panic!("generic provider definition should retain its concrete type"),
-    };
-    assert_eq!(direct_repository.label, "generic-repository");
+fn node<T: Send + Sync + 'static>() -> &'static crate::graph::CompiledNode {
+    crate::graph::plan::load()
+        .graph
+        .nodes
+        .iter()
+        .find(|node| node.identifier.service_type == ServiceType::create::<T>())
+        .unwrap()
 }
 
 #[test]
-fn injected_generic_repository_exposes_a_closed_provider_callback() {
-    let providers: Vec<_> = crate::registration::catalog::collect().providers;
-    let user_service = providers
-        .iter()
-        .find(|provider| {
-            matches!(
-                provider,
-                Provider::Class(ClassProvider { provide, .. })
-                    if provide.service_type == ServiceType::create::<UserService>()
-            )
-        })
-        .expect("non-generic UserService should be collected by the compiler");
-
-    // `Repository<T>` is an open generic definition, so it must not register an arbitrary
-    // `Repository<Entity>` or `Repository<User>` provider eagerly.
-    assert!(!providers.iter().any(|provider| {
-        matches!(
-            provider,
-            Provider::Class(ClassProvider { provide, .. })
-                if provide.service_type == ServiceType::create::<Repository<Entity>>()
-                    || provide.service_type == ServiceType::create::<Repository<User>>()
-        )
-    }));
-
-    let Provider::Class(ClassProvider { dependencies, .. }) = user_service else {
-        panic!("UserService should be a class provider");
+fn generic_query_freezes_exact_execution_type_lifetime_and_cleanup() {
+    let direct = node::<Repository<Entity>>();
+    assert_eq!(direct.common.lifetime, ServiceLifetime::Transient);
+    assert!(direct.dependencies.is_empty());
+    drop(direct.common.cleanup.expect("generic cleanup")());
+    let Constructor::Class(constructor) = direct.constructor else {
+        panic!("generic class")
     };
-    let dependency = dependencies
-        .first()
-        .expect("UserService should describe its Repository<User> dependency");
-    assert_eq!(dependency.declaration_position, 0);
-    assert_eq!(dependency.input_slot, InputSlot::new(0));
-    assert_eq!(
-        dependency.token,
-        ServiceIdentifier::from(ServiceType::create::<Repository<User>>())
-    );
-
-    let repository_provider = match dependency.provider_source {
-        ProviderSource::Materialize(definition) => definition(),
-        ProviderSource::Registered => {
-            panic!("generic injection should carry its closed provider callback")
-        }
-    };
-    let Provider::Class(ClassProvider {
-        provide,
-        constructor,
-        ..
-    }) = repository_provider
-    else {
-        panic!("generic callback should produce Provider::Class");
-    };
-    assert_eq!(
-        provide,
-        ServiceIdentifier::from(ServiceType::create::<Repository<User>>())
-    );
-
-    let erased_repository = constructor(ConstructionInputs::empty())
-        .expect("Repository<User> callback should construct the concrete service");
-    let repository = match erased_repository.downcast::<Repository<User>>() {
-        Ok(repository) => repository,
-        Err(_) => panic!("generic dependency callback should retain Repository<User>"),
+    let erased = constructor(ConstructionInputs::empty()).unwrap();
+    let repository = match erased.downcast::<Repository<Entity>>() {
+        Ok(value) => value,
+        Err(_) => panic!("closed Entity instance"),
     };
     assert_eq!(repository.label, "generic-repository");
 }
 
 #[test]
-fn nested_closed_generics_materialize_a_complete_descriptor_chain() {
-    let providers: Vec<_> = crate::registration::catalog::collect().providers;
-
-    println!(
-        "--------------------------------   nested_closed_generics_materialize_a_complete_descriptor_chain   --------------------------------"
-    );
-    println!("{providers:#?}");
-
-    let c_provider = providers
-        .iter()
-        .find(|provider| {
-            matches!(
-                provider,
-                Provider::Class(ClassProvider { provide, .. })
-                    if provide.service_type == ServiceType::create::<C>()
-            )
-        })
-        .expect("C should be registered by the compiler");
-
-    assert!(!providers.iter().any(|provider| {
-        matches!(
-            provider,
-            Provider::Class(ClassProvider { provide, .. })
-                if provide.service_type == ServiceType::create::<B<u32>>()
-                    || provide.service_type == ServiceType::create::<A<u32>>()
-        )
-    }));
-
-    let Provider::Class(ClassProvider { dependencies, .. }) = c_provider else {
-        panic!("C should be described by a class provider")
-    };
-    assert_eq!(dependencies.len(), 1);
-    let b_dependency = dependencies
-        .first()
-        .expect("C should declare its B<u32> dependency");
+fn injected_generic_repository_uses_a_closed_target_without_runtime_materialization() {
+    let graph = &crate::graph::plan::load().graph;
+    let service = node::<UserService>();
+    assert_eq!(service.dependencies.len(), 1);
+    let input = &service.dependencies[0];
+    assert_eq!(input.slot.index(), 0);
     assert_eq!(
-        b_dependency.token,
-        ServiceIdentifier::from(ServiceType::create::<B<u32>>())
+        input.requested.service_type,
+        ServiceType::create::<Repository<User>>()
     );
-    let b_provider = match b_dependency.provider_source {
-        ProviderSource::Materialize(definition) => definition(),
-        ProviderSource::Registered => {
-            panic!("B<u32> should carry a closed generic provider callback")
-        }
-    };
-
-    let Provider::Class(ClassProvider {
-        provide,
-        dependencies,
-        ..
-    }) = &b_provider
-    else {
-        panic!("B<u32> callback should produce a class provider")
-    };
+    let repository = &graph.nodes[input.target.unwrap()];
     assert_eq!(
-        *provide,
-        ServiceIdentifier::from(ServiceType::create::<B<u32>>())
+        repository.identifier.service_type,
+        ServiceType::create::<Repository<User>>()
     );
-    assert_eq!(dependencies.len(), 1);
-    let a_dependency = dependencies
-        .first()
-        .expect("B<u32> should declare its A<u32> dependency");
-    assert_eq!(
-        a_dependency.token,
-        ServiceIdentifier::from(ServiceType::create::<A<u32>>())
-    );
-    let a_provider = match a_dependency.provider_source {
-        ProviderSource::Materialize(definition) => definition(),
-        ProviderSource::Registered => {
-            panic!("A<u32> should carry a closed generic provider callback")
-        }
+    let Constructor::Class(constructor) = repository.constructor else {
+        panic!("generic class")
     };
-
-    let Provider::Class(ClassProvider {
-        provide,
-        dependencies,
-        constructor,
-        ..
-    }) = a_provider
-    else {
-        panic!("A<u32> callback should produce a class provider")
+    let erased = constructor(ConstructionInputs::empty()).unwrap();
+    let repository = match erased.downcast::<Repository<User>>() {
+        Ok(value) => value,
+        Err(_) => panic!("closed User instance"),
     };
-    assert_eq!(
-        provide,
-        ServiceIdentifier::from(ServiceType::create::<A<u32>>())
-    );
-    assert!(dependencies.is_empty());
+    assert_eq!(repository.label, "generic-repository");
+    assert_eq!(graph.nodes.iter().filter(|node| node.identifier.service_type == ServiceType::create::<Repository<User>>()).count(), 1);
+}
 
-    let erased_a = constructor(ConstructionInputs::empty())
-        .expect("the leaf closed generic should construct without dependencies");
-    assert!(erased_a.downcast::<A<u32>>().is_ok());
+#[test]
+fn nested_closed_generics_freeze_a_complete_execution_chain() {
+    let graph = &crate::graph::plan::load().graph;
+    let c = node::<C>();
+    assert_eq!(c.dependencies.len(), 1);
+    let b = &graph.nodes[c.dependencies[0].target.unwrap()];
+    assert_eq!(b.identifier.service_type, ServiceType::create::<B<u32>>());
+    assert_eq!(b.dependencies.len(), 1);
+    let a = &graph.nodes[b.dependencies[0].target.unwrap()];
+    assert_eq!(a.identifier.service_type, ServiceType::create::<A<u32>>());
+    assert!(a.dependencies.is_empty());
+    let Constructor::Class(constructor) = a.constructor else {
+        panic!("leaf class")
+    };
+    assert!(
+        constructor(ConstructionInputs::empty())
+            .unwrap()
+            .downcast::<A<u32>>()
+            .is_ok()
+    );
 }

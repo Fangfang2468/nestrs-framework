@@ -1,14 +1,16 @@
 //! Factory 构造适配器的借用协议。
 //!
-//! class 直接把 `Injection<T>` 移入服务字段；factory 的参数通常写成 `&T`，因此需要
-//! 独立调用帧保留全部 lease。worker 先拥有帧，再借出输入并等待 future，最后把帧的
-//! 依赖转交给成功实例。借用完全来自真实帧，不把局部输入延长成 `'static`。
+//! class 直接把 `Injection<T>` 移入服务字段；factory 的普通参数改写成 `&T`，因此
+//! 需要独立调用帧保留全部 lease。worker 先拥有帧，再借出输入并等待 future，最后把
+//! 帧的依赖转交给成功实例。借用完全来自真实帧，不把局部输入延长成 `'static`。
+//! 延迟参数则按值移交 `LazyInjection<T>`：此时目标尚未构造，不能向帧借出 `&T`；
+//! 句柄自带独立槽位和弱 owner 请求能力，可以跨 await 并保存到最终返回的服务中。
 
 use std::{future::Future, pin::Pin};
 
 use super::{ConstructionError, ConstructionInputs, InputSlot};
 use crate::{
-    activation::{DependencyLease, erased_service::ErasedService},
+    activation::{DependencyLease, LazyInjection, erased_service::ErasedService},
     service::Injectable,
 };
 
@@ -85,6 +87,29 @@ impl<'frame> FactoryInputs<'frame> {
             // SAFETY: 与 take 相同，帧为 'frame 保留准确实例；缺席输入不包含地址。
             unsafe { token.into_ptr().as_ref() }
         }))
+    }
+
+    /// 移交一个必选延迟参数；消费输入不会立即解析或构造目标。
+    ///
+    /// 句柄拥有自己的槽位，并不借用 factory frame，因此可以安全地移入返回服务。
+    /// 目标首次交付后由句柄持有真实 lease；此处不伪造实例引用，也不延长帧的借用期。
+    pub fn take_lazy<T>(&mut self, slot: InputSlot) -> Result<LazyInjection<T>, ConstructionError>
+    where
+        T: Injectable + ?Sized,
+    {
+        self.inputs.take_lazy(slot)
+    }
+
+    /// 移交一个可选延迟参数；None 表示冻结图没有候选，不表示目标构造失败。
+    /// 与必选参数一样，所有权随句柄移交；剩余输入和普通依赖仍由原调用帧管理。
+    pub fn take_optional_lazy<T>(
+        &mut self,
+        slot: InputSlot,
+    ) -> Result<Option<LazyInjection<T>>, ConstructionError>
+    where
+        T: Injectable + ?Sized,
+    {
+        self.inputs.take_optional_lazy(slot)
     }
 
     /// 拒绝 factory adapter 未消费的 descriptor 槽位。

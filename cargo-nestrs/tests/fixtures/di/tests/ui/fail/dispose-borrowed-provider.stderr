@@ -3,8 +3,8 @@ error[E0505]: cannot move out of `provider` because it is borrowed
   |
 3 | async fn close_while_borrowed(provider: ServiceProvider) {
   |                               -------- binding `provider` declared here
-4 |     let service = nestrs_core::get_required_service!(provider, String)
-  |                   ---------------------------------------------------- borrow of `provider` occurs here
+4 |     let service = provider.get_required_service::<String>()
+  |                   -------- borrow of `provider` occurs here
 ...
 7 |     provider.dispose_async().await.unwrap();
   |     ^^^^^^^^ move out of `provider` occurs here

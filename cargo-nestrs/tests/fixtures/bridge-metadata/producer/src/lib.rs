@@ -16,7 +16,8 @@ pub fn resolve_number() -> u32 {
         .unwrap()
         .block_on(async {
             let provider = nestrs_core::ServiceProvider::build().await.unwrap();
-            let number = nestrs_core::get_required_service!(provider, Exported)
+            let number = provider
+                .get_required_service::<Exported>()
                 .await
                 .unwrap()
                 .number;

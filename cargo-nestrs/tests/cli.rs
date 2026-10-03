@@ -99,27 +99,39 @@ impl Fixture {
                 "manifest_path": self.0.join("Cargo.toml"), "targets": [target],
             }],
         });
+        let metadata_file = self
+            .0
+            .join(format!("lib{}-unit.rmeta", binary.replace('-', "_")));
+        fs::write(&metadata_file, b"fake metadata").unwrap();
         let artifact = serde_json::json!({
             "reason": "compiler-artifact", "package_id": package,
-            "target": target, "executable": self.0.join("graph-program"),
+            "target": target, "executable": null, "filenames": [metadata_file],
         });
-        let proof = serde_json::json!({
-            "binary": binary, "crate": binary.replace('-', "_"),
-            "manifest": self.0, "source": source,
-        });
+        let plan = serde_json::from_str::<serde_json::Value>(data)
+            .map(|graph| {
+                serde_json::json!({
+                    "version": 1, "binary": binary, "crate": binary.replace('-', "_"),
+                    "manifest": self.0, "source": source, "graph": graph,
+                    "metadata": metadata_file,
+                })
+                .to_string()
+            })
+            .unwrap_or_else(|_| data.to_owned());
         script(
             &self.0.join("cargo"),
             &format!(
-                "if [ \"$1\" = metadata ]; then\n  printf '%s\\n' '{}'\nelse\n  printf '%s\\n' \"$@\" > \"$RECORD_ARGS\"\n  mkdir -p \"${{NESTRS_GRAPH_PROOF%/*}}\"\n  printf '%s\\n' '{}' > \"$NESTRS_GRAPH_PROOF\"\n  printf '%s\\n' '{}'\nfi\n",
-                metadata, proof, artifact,
+                "if [ \"$1\" = metadata ]; then\n  printf '%s\\n' '{}'\nelse\n  printf '%s\\n' \"$@\" > \"$RECORD_ARGS\"\n  printf '%s\\n' \"$GRAPH_RESPONSE\" > \"$GRAPH_SIDECAR\"\n  printf '%s\\n' '{}'\nfi\n",
+                metadata, artifact,
             ),
         );
-        script(
-            &self.0.join("graph-program"),
-            "printf '%s\\n' \"$GRAPH_RESPONSE\"\n",
-        );
         let mut command = self.command();
-        command.env("GRAPH_RESPONSE", data).arg("graph");
+        command
+            .env("GRAPH_RESPONSE", plan)
+            .env(
+                "GRAPH_SIDECAR",
+                metadata_file.with_extension("nestrs-plan.json"),
+            )
+            .arg("graph");
         command
     }
 }
@@ -643,7 +655,7 @@ fn discovery_only_lists_installed_toolchains_without_installing() {
 }
 
 #[test]
-fn graph_builds_a_selected_binary_and_writes_offline_html() {
+fn graph_checks_a_selected_binary_and_writes_offline_html_without_an_executable() {
     let fixture = Fixture::new();
     let destination = fixture.0.join("graph.html");
     let output = fixture
@@ -661,7 +673,7 @@ fn graph_builds_a_selected_binary_and_writes_offline_html() {
     assert!(html.to_lowercase().starts_with("<!doctype html>"));
     assert!(html.contains("graph-data"));
     let args = fs::read_to_string(fixture.0.join("args")).unwrap();
-    assert!(args.starts_with("build\n"));
+    assert!(args.starts_with("check\n"));
     assert!(args.contains("--message-format=json"));
     assert!(!args.contains("--output"));
 }
@@ -749,8 +761,37 @@ fn invalid_graph_data_preserves_the_previous_output() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid graph response"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("编译器 DI 计划不是有效 JSON"));
     assert_eq!(fs::read_to_string(destination).unwrap(), "existing graph");
+}
+
+#[test]
+fn graph_rejects_a_sidecar_from_another_entry_and_preserves_previous_output() {
+    let fixture = Fixture::new();
+    let destination = fixture.0.join("graph.html");
+    fs::write(&destination, "existing graph").unwrap();
+    for field in ["binary", "crate", "manifest", "source", "metadata"] {
+        let mut command = fixture.graph_command(r#"{"version":1,"nodes":[]}"#);
+        let mut sidecar = serde_json::json!({
+            "version": 1,
+            "binary": "service",
+            "crate": "service",
+            "manifest": fixture.0,
+            "source": fixture.0.join("main.rs"),
+            "metadata": fixture.0.join("libservice-unit.rmeta"),
+            "graph": {"version": 1, "nodes": []},
+        });
+        sidecar[field] = "another-entry".into();
+        let output = command
+            .env("GRAPH_RESPONSE", sidecar.to_string())
+            .args(["--bin", "service", "--output"])
+            .arg(&destination)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "接受了不匹配的 {field}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("身份"));
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "existing graph");
+    }
 }
 
 #[test]
@@ -777,19 +818,21 @@ fn graph_export_file_errors_are_reported_and_temporary_files_removed() {
 }
 
 #[test]
-fn graph_rejects_foreign_target_before_building() {
+fn graph_forwards_foreign_target_without_executing_target_code() {
     let fixture = Fixture::new();
     let output = fixture
         .graph_command(r#"{"version":1,"nodes":[]}"#)
         .args(["--target", "aarch64-unknown-linux-gnu"])
         .output()
         .unwrap();
-    assert!(!output.status.success());
     assert!(
+        output.status.success(),
+        "{}",
         String::from_utf8_lossy(&output.stderr)
-            .contains("cross-target graph execution is not supported")
     );
-    assert!(!fixture.0.join("args").exists());
+    let forwarded = fs::read_to_string(fixture.0.join("args")).unwrap();
+    assert!(forwarded.starts_with("check\n"));
+    assert!(forwarded.contains("--target\naarch64-unknown-linux-gnu\n"));
 }
 
 #[test]
@@ -847,4 +890,70 @@ fn graph_targets_have_separate_cargo_cache_namespaces() {
         namespaces.push(target.to_owned());
     }
     assert_ne!(namespaces[0], namespaces[1]);
+}
+
+#[test]
+fn graph_feature_variants_cannot_reuse_each_others_static_sidecars() {
+    let fixture = Fixture::new();
+    let mut namespaces = Vec::new();
+    for feature in ["billing", "reports", "billing"] {
+        let output = fixture
+            .graph_command(r#"{"version":1,"nodes":[]}"#)
+            .args(["--bin", "service", "--features", feature])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let arguments = fs::read_to_string(fixture.0.join("args")).unwrap();
+        let arguments: Vec<_> = arguments.lines().collect();
+        namespaces.push(
+            arguments
+                .windows(2)
+                .find(|pair| pair[0] == "--target-dir")
+                .unwrap()[1]
+                .to_owned(),
+        );
+    }
+    assert_ne!(namespaces[0], namespaces[1]);
+    assert_eq!(namespaces[0], namespaces[2]);
+}
+
+#[test]
+fn graph_reads_the_sidecar_next_to_the_selected_cargo_metadata() {
+    let fixture = Fixture::new();
+    let destination = fixture.0.join("graph.html");
+    let first = fixture
+        .graph_command(r#"{"version":1,"nodes":[],"configuration":"first"}"#)
+        .args(["--bin", "service", "--output"])
+        .arg(&destination)
+        .output()
+        .unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_html = fs::read_to_string(&destination).unwrap();
+
+    // Cargo 再次选中 first 工件，但其他配置留下了更新的独立 sidecar。
+    // CLI 必须使用工件邻接文件，而不是最近写入的全局计划文件。
+    let second = fixture
+        .graph_command(r#"{"version":1,"nodes":[],"configuration":"second"}"#)
+        .env(
+            "GRAPH_SIDECAR",
+            fixture.0.join("another-unit.nestrs-plan.json"),
+        )
+        .args(["--bin", "service", "--output"])
+        .arg(&destination)
+        .output()
+        .unwrap();
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert_eq!(fs::read_to_string(destination).unwrap(), first_html);
 }

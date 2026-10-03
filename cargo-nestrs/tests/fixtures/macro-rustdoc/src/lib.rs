@@ -4,13 +4,13 @@
 //! Library declarations remain available to a documentation test:
 //!
 //! ```
-//! use nestrs_core::{ServiceProvider, get_required_service};
+//! use nestrs_core::ServiceProvider;
 //! use nestrs_macro_rustdoc::{Configuration, Connection};
 //! fn main() {
 //!     tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
 //!         let provider = ServiceProvider::build().await.unwrap();
-//!         assert_eq!(get_required_service!(provider, Configuration).await.unwrap().port, 5432);
-//!         assert_eq!(get_required_service!(provider, Connection).await.unwrap().0, 5432);
+//!         assert_eq!(provider.get_required_service::<Configuration>().await.unwrap().port, 5432);
+//!         assert_eq!(provider.get_required_service::<Connection>().await.unwrap().0, 5432);
 //!         provider.dispose_async().await.unwrap();
 //!         println!("library class and async factory example completed");
 //!         # if let Ok(path) = std::env::var("NESTRS_DOCTEST_RECORD") { std::fs::write(std::path::Path::new(&path).join("library"), "passed").unwrap(); }
@@ -21,7 +21,7 @@
 //! Declarations written directly in a snippet also expand and execute:
 //!
 //! ```
-//! use nestrs_core::{ServiceProvider, get_required_service};
+//! use nestrs_core::ServiceProvider;
 //! use nestrs::{factory, injectable, primary};
 //! #[primary]
 //! #[injectable]
@@ -37,8 +37,8 @@
 //! fn main() {
 //!     tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
 //!         let provider = ServiceProvider::build().await.unwrap();
-//!         assert_eq!(get_required_service!(provider, Server).await.unwrap().0, 81);
-//!         assert_eq!(get_required_service!(provider, dyn Endpoint).await.unwrap().port(), 81);
+//!         assert_eq!(provider.get_required_service::<Server>().await.unwrap().0, 81);
+//!         assert_eq!(provider.get_required_service::<dyn Endpoint>().await.unwrap().port(), 81);
 //!         provider.dispose_async().await.unwrap();
 //!         println!("snippet declaration and borrowed factory example completed");
 //!         # if let Ok(path) = std::env::var("NESTRS_DOCTEST_RECORD") { std::fs::write(std::path::Path::new(&path).join("declarations"), "passed").unwrap(); }
@@ -46,10 +46,10 @@
 //! }
 //! ```
 //!
-//! Query macros collect closed generic roots inside documentation tests:
+//! The compiler collects closed generic roots from ordinary queries in documentation tests:
 //!
 //! ```
-//! use nestrs_core::{ServiceProvider, get_required_service};
+//! use nestrs_core::ServiceProvider;
 //! use nestrs::{injectable, primary};
 //! #[injectable]
 //! #[primary]
@@ -58,7 +58,7 @@
 //! fn main() {
 //!     tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
 //!         let provider = ServiceProvider::build().await.unwrap();
-//!         assert_eq!(get_required_service!(provider, Repository<User>).await.unwrap().count, 7);
+//!         assert_eq!(provider.get_required_service::<Repository<User>>().await.unwrap().count, 7);
 //!         provider.dispose_async().await.unwrap();
 //!         println!("snippet closed generic example completed");
 //!         # if let Ok(path) = std::env::var("NESTRS_DOCTEST_RECORD") { std::fs::write(std::path::Path::new(&path).join("generics"), "passed").unwrap(); }

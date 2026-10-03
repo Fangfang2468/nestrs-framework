@@ -1,0 +1,13 @@
+[package]
+name = "nestrs-provider-lazy-app"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+members = ["services"]
+
+[dependencies]
+nestrs-core = { path = "../../../../nestrs-core" }
+provider-services = { path = "services" }
+tokio = { version = "1.53.1", features = ["macros", "rt"] }

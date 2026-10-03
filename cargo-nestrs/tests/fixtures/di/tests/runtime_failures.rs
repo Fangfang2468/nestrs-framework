@@ -54,15 +54,15 @@ struct Good;
 #[tokio::test]
 async fn initialization_errors_are_cached_and_do_not_close_other_services() {
     let provider = ServiceProvider::build().await.unwrap();
-    nestrs_core::get_required_service!(provider, Good)
-        .await
-        .unwrap();
-    let first = nestrs_core::get_service!(provider, Failed)
+    provider.get_required_service::<Good>().await.unwrap();
+    let first = provider
+        .get_service::<Failed>()
         .await
         .err()
         .unwrap()
         .to_string();
-    let second = nestrs_core::get_required_service!(provider, Failed)
+    let second = provider
+        .get_required_service::<Failed>()
         .await
         .err()
         .unwrap()
@@ -70,21 +70,19 @@ async fn initialization_errors_are_cached_and_do_not_close_other_services() {
     assert_eq!(first, second);
     assert!(first.contains("database unavailable") && first.contains("runtime_failures.rs"));
     assert_eq!(SHARED_ATTEMPTS.load(Ordering::SeqCst), 1);
-    assert!(
-        nestrs_core::get_required_service!(provider, Consumer)
-            .await
-            .is_err()
-    );
+    assert!(provider.get_required_service::<Consumer>().await.is_err());
     assert_eq!(CONSUMERS.load(Ordering::SeqCst), 0);
     for _ in 0..2 {
         assert!(
-            nestrs_core::get_required_service!(provider, TransientFailed)
+            provider
+                .get_required_service::<TransientFailed>()
                 .await
                 .is_err()
         );
     }
     assert_eq!(TRANSIENT_ATTEMPTS.load(Ordering::SeqCst), 2);
-    let panic = nestrs_core::get_required_service!(provider, Panicked)
+    let panic = provider
+        .get_required_service::<Panicked>()
         .await
         .err()
         .unwrap()
@@ -94,7 +92,9 @@ async fn initialization_errors_are_cached_and_do_not_close_other_services() {
         let scope = provider.create_scope();
         for _ in 0..2 {
             assert!(
-                nestrs_core::get_required_service!(scope.service_provider(), ScopedFailed)
+                scope
+                    .service_provider()
+                    .get_required_service::<ScopedFailed>()
                     .await
                     .is_err()
             );
@@ -103,9 +103,7 @@ async fn initialization_errors_are_cached_and_do_not_close_other_services() {
     }
     assert_eq!(SCOPED_ATTEMPTS.load(Ordering::SeqCst), 2);
     assert_eq!(GOOD_CLEANUPS.load(Ordering::SeqCst), 0);
-    nestrs_core::get_required_service!(provider, Good)
-        .await
-        .unwrap();
+    provider.get_required_service::<Good>().await.unwrap();
     provider.dispose_async().await.unwrap();
     assert_eq!(GOOD_CLEANUPS.load(Ordering::SeqCst), 1);
 

@@ -40,7 +40,7 @@ async fn resource() -> Result<Resource, &'static str> {
 #[test]
 fn graph_snapshot_is_independent_of_runtime_and_external_initialization() {
     // Static diagnostics work before any Tokio runtime or container is created.
-    let graph = crate::registration::catalog::dependency_graph_json().unwrap();
+    let graph = crate::graph::snapshot(&crate::graph::plan::load().graph).to_string();
     assert!(graph.contains("Resource"));
     assert_eq!(ATTEMPTS.load(Ordering::SeqCst), 0);
     assert_eq!(CONSTRUCTIONS.load(Ordering::SeqCst), 0);
@@ -72,7 +72,7 @@ fn graph_snapshot_is_independent_of_runtime_and_external_initialization() {
         SHOULD_FAIL.store(true, Ordering::SeqCst);
         assert_eq!(
             graph,
-            crate::registration::catalog::dependency_graph_json().unwrap()
+            crate::graph::snapshot(&crate::graph::plan::load().graph).to_string()
         );
         assert_eq!(ATTEMPTS.load(Ordering::SeqCst), 1);
         match ServiceProvider::build_with_options(ServiceProviderOptions {
@@ -101,7 +101,7 @@ fn graph_snapshot_is_independent_of_runtime_and_external_initialization() {
         assert_eq!(DROPS.load(Ordering::SeqCst), 1);
         assert_eq!(
             graph,
-            crate::registration::catalog::dependency_graph_json().unwrap()
+            crate::graph::snapshot(&crate::graph::plan::load().graph).to_string()
         );
     });
 }

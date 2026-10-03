@@ -1,5 +1,5 @@
 use nestrs::{factory, injectable, primary};
-use nestrs_core::{ServiceProvider, get_required_service};
+use nestrs_core::ServiceProvider;
 trait Port: Send + Sync {
     fn number(&self) -> u32;
 }
@@ -48,17 +48,19 @@ async fn make(#[inject] port: dyn Port) -> FactoryPort {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let provider = ServiceProvider::build().await.unwrap();
-    let consumer = get_required_service!(provider, Consumer).await.unwrap();
+    let consumer = provider.get_required_service::<Consumer>().await.unwrap();
     assert_eq!(consumer.port.number(), 7);
     assert_eq!(
-        get_required_service!(provider, FactoryPort)
+        provider
+            .get_required_service::<FactoryPort>()
             .await
             .unwrap()
             .0,
         7
     );
     assert_eq!(
-        get_required_service!(provider, external::External)
+        provider
+            .get_required_service::<external::External>()
             .await
             .unwrap()
             .number(),

@@ -55,10 +55,14 @@ async fn concurrent_scope_disposal_waits_for_its_own_destructors_and_preserves_d
     let root = ServiceProvider::build().await.unwrap();
     let first = root.create_scope();
     let second = root.create_scope();
-    nestrs_core::get_required_service!(first.service_provider(), Slow)
+    first
+        .service_provider()
+        .get_required_service::<Slow>()
         .await
         .unwrap();
-    nestrs_core::get_required_service!(second.service_provider(), Fast)
+    second
+        .service_provider()
+        .get_required_service::<Fast>()
         .await
         .unwrap();
     let mut first_close = Box::pin(first.dispose_async());

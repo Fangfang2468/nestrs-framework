@@ -3,8 +3,8 @@ error[E0505]: cannot move out of `scope` because it is borrowed
   |
 3 | async fn close_while_borrowed(scope: ServiceScope<'_>) {
   |                               ----- binding `scope` declared here
-4 |     let service = nestrs_core::get_required_service!(scope.service_provider(), String)
-  |                                                      ----- borrow of `scope` occurs here
+4 |     let service = scope.service_provider().get_required_service::<String>()
+  |                   ----- borrow of `scope` occurs here
 ...
 7 |     scope.dispose_async().await.unwrap();
   |     ^^^^^ move out of `scope` occurs here

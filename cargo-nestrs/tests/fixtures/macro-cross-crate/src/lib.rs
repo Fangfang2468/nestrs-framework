@@ -84,10 +84,12 @@ mod implementation {
     /// This compiled but never executed query causes an upstream automatic
     /// binding, which a downstream query must reuse rather than emit again.
     pub async fn known_request(provider: &nestrs_core::ServiceProvider) -> usize {
-        let _ = nestrs_core::get_required_service!(provider, InternalRepository<KnownUser>)
+        let _ = provider
+            .get_required_service::<InternalRepository<KnownUser>>()
             .await
             .unwrap();
-        nestrs_core::get_required_service!(provider, dyn KnownPort)
+        provider
+            .get_required_service::<dyn KnownPort>()
             .await
             .unwrap()
             .value()

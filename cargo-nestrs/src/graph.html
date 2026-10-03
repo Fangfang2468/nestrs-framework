@@ -62,7 +62,7 @@
   <div class="workspace-body">
     <section class="graph-panel" aria-label="依赖关系画布">
       <div id="graph-notice" class="graph-notice" role="status" hidden></div>
-      <div class="graph-topline"><span class="graph-topline-label">消费者 → 请求接口 → 选中实现</span><div class="legend" aria-label="节点与连线图例"><span class="legend-item"><span class="legend-interface"></span>接口请求</span><span class="legend-item"><span class="legend-projection"></span>选中实现</span><span class="legend-item"><span class="legend-absent"></span>可选缺席</span><span class="legend-item"><span class="legend-lazy"></span>延迟注入</span><span class="legend-item"><span class="legend-dot" style="background:var(--singleton)"></span>Singleton</span><span class="legend-item"><span class="legend-dot" style="background:var(--scoped)"></span>Scoped</span><span class="legend-item"><span class="legend-dot" style="background:var(--transient)"></span>Transient</span></div></div>
+      <div class="graph-topline"><span class="graph-topline-label">消费者 → 请求接口 → 选中实现</span><div class="legend" aria-label="节点与连线图例"><span class="legend-item"><span class="legend-interface"></span>接口请求</span><span class="legend-item"><span class="legend-projection"></span>选中实现</span><span class="legend-item"><span class="legend-absent"></span>可选缺席</span><span class="legend-item"><span class="legend-lazy"></span>字段延迟注入</span><span class="legend-item"><span class="legend-dot" style="background:var(--singleton)"></span>Singleton</span><span class="legend-item"><span class="legend-dot" style="background:var(--scoped)"></span>Scoped</span><span class="legend-item"><span class="legend-dot" style="background:var(--transient)"></span>Transient</span></div></div>
       <div id="graph-viewport" class="viewport" tabindex="0" role="region" aria-label="交互式依赖图。方向键平移，加减号缩放，0 适配。点击服务或按 Tab 选择服务。">
         <svg id="graph-svg" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="服务与依赖连线">
           <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#7690ae" stroke-width="1.5"/></marker><marker id="arrow-active" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#66e2d1" stroke-width="1.5"/></marker></defs>
@@ -91,11 +91,23 @@
   const MAX_EDGES = 1200;
   const PAGE_SIZE = 40;
   const NODE_WIDTH = 224;
-  const NODE_HEIGHT = 88;
+  const NODE_HEIGHT = 108;
   const COLUMN_GAP = 174;
   const ROW_GAP = 18;
   const COLORS = { Singleton: "#92b8ff", Scoped: "#c5a2ff", Transient: "#f3c87e" };
   const KINDS = { class: "Class", "sync factory": "同步 Factory", "async factory": "异步 Factory" };
+  const INITIALIZATIONS = { inherit: "继承配置", lazy: "延迟初始化", eager: "提前初始化" };
+  // 节点策略决定预热根，依赖上的 lazy 决定是否延迟取得字段，二者分别展示。
+  const initializationPolicy = (node) => node.initialization ?? "inherit";
+  const initializationLabel = (node) => INITIALIZATIONS[initializationPolicy(node)];
+  function initializationDetail(node) {
+    const policy = initializationPolicy(node);
+    if (node.lifetime === "Transient") return "Transient 按每次消费独立构造，初始化标记不增加独立预热实例。";
+    if (policy === "lazy") return "不作为" + (node.lifetime === "Scoped" ? "scope.warm_up()" : "启动") + "的预热根；普通依赖需要它时仍会构造。要延后某个字段的依赖获取，需要在该字段上声明延迟注入。";
+    if (node.lifetime === "Scoped") return "在 scope.warm_up() 时作为预热根；create_scope() 本身不构造服务。";
+    if (policy === "eager") return "在容器构建时主动初始化，覆盖全局 Lazy 设置；所需普通依赖同时按计划构造。";
+    return "由当前容器的初始化配置决定是否作为启动预热根；普通依赖需要它时仍会构造。";
+  }
   let data;
   try {
     data = JSON.parse($("graph-data").textContent);
@@ -116,7 +128,7 @@
     for (const entry of entries) {
       if (entry.status !== "ok") continue;
       for (const original of entry.graph.nodes) {
-        const identity = JSON.stringify([original.name, original.key === null ? null : [original.key.kind, original.key.value], original.kind, original.lifetime, original.source.file, original.source.line, original.source.column]);
+        const identity = JSON.stringify([original.name, original.key === null ? null : [original.key.kind, original.key.value], original.kind, original.lifetime, initializationPolicy(original), original.source.file, original.source.line, original.source.column]);
         if (!declarations.has(identity)) declarations.set(identity, new Set());
         declarations.get(identity).add(entry.id);
         allNodes.push({ ...original, id: nodeIdentity(entry, original.id), localId: original.id, entryId: entry.id, declarationIdentity: identity,
@@ -184,7 +196,7 @@
         for (const input of node.inputs) text.push(input.dependency.label, "slot " + input.dependency.slot);
       } else if (node.missing) text.push("optional 缺席 未注册", node.input.label, "slot " + node.slot);
       else {
-        text.push(node.lifetime, node.kind, "#" + providerId(node));
+        text.push(node.lifetime, node.kind, initializationPolicy(node), initializationLabel(node), "#" + providerId(node));
         for (const dep of node.dependencies) text.push(dep.label, dep.requested, keyLabel(dep.key));
       }
       searchText.set(node.id, text.join(" ").toLocaleLowerCase());
@@ -524,9 +536,10 @@
     for (const node of state.rendered) {
       const position = state.positions.get(node.id);
       const category = nodeKind(node);
-      const description = node.projection ? "接口请求，不创建实例，选中实现 " + byId.get(node.targetId).name : node.missing ? "可选依赖未注册，输入缺席" : node.lifetime + "，" + KINDS[node.kind];
+      const description = node.projection ? "接口请求，不创建实例，选中实现 " + byId.get(node.targetId).name : node.missing ? "可选依赖未注册，输入缺席" : node.lifetime + "，" + KINDS[node.kind] + "，服务初始化：" + initializationLabel(node);
       const attributes = { class: "node" + (node.missing ? " is-missing" : node.projection ? " is-projection" : ""), transform: "translate(" + position.x + " " + position.y + ")", tabindex: "0", role: "button", "aria-label": node.name + "，" + description + "，key=" + keyLabel(node.key) + (project ? "，入口 " + entryLabel(entryById.get(node.entryId)) : ""), "data-node-id": node.id, "data-node-kind": category, "data-entry-id": node.entryId ?? "", "data-key-kind": node.key === null ? "none" : node.key.kind, "data-key-value": node.key === null ? "" : node.key.value };
       if (node.projection) Object.assign(attributes, { "data-projection-target": node.targetId, "data-requested": node.name, "data-consumer-id": node.consumerId, "data-slot": node.slot, "data-input-label": node.input.label });
+      if (!node.projection && !node.missing) attributes["data-initialization"] = initializationPolicy(node);
       const group = svg("g", attributes);
       group.append(svg("title", {}, node.name + "\n" + description + (project ? "\n入口: " + entryLabel(entryById.get(node.entryId)) : "") + "\nkey: " + keyLabel(node.key)));
       if (node.projection) group.append(svg("path", { class: "node-frame", d: "M 14 0 H " + (NODE_WIDTH - 14) + " L " + NODE_WIDTH + " 14 V " + (NODE_HEIGHT - 14) + " L " + (NODE_WIDTH - 14) + " " + NODE_HEIGHT + " H 14 L 0 " + (NODE_HEIGHT - 14) + " V 14 Z" }));
@@ -549,6 +562,7 @@
       const footer = node.projection ? "key=" + keyLabel(node.key) : node.missing ? "slot " + node.slot + " · 输入缺席" : KINDS[node.kind] + (node.requiresScope && node.lifetime === "Transient" ? " · 需 Scope" : "");
       group.append(svg("text", { x: 15, y: 77, class: node.projection ? "node-key" : "node-kind" }, truncate(footer, node.projection ? 28 : 30)));
       if (!node.projection && node.key !== null) group.append(svg("text", { x: NODE_WIDTH - 14, y: 77, class: "node-key", "text-anchor": "end" }, truncate(keyLabel(node.key), 13)));
+      if (!node.projection && !node.missing) group.append(svg("text", { x: 15, y: 97, class: "node-kind node-initialization" }, "服务初始化 · " + initializationLabel(node)));
       const activate = () => selectNode(node.id, true);
       group.addEventListener("click", activate);
       group.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); activate(); } });
@@ -631,7 +645,7 @@
     content.append(html("p", "mapping-note", "此节点来自当前依赖输入的接口请求，仅展示已选中的类型投影；不创建实例，也没有自己的生命周期。实例由选中实现提供。"));
     const implementation = byId.get(node.targetId);
     const selected = section("选中实现");
-    selected.append(jumpButton(implementation.label + "  #" + providerId(implementation), implementation.id, "panel-button mono projection-card"), html("p", "mapping-note", "实现生命周期：" + implementation.lifetime + " · key=" + keyLabel(implementation.key)));
+    selected.append(jumpButton(implementation.label + "  #" + providerId(implementation), implementation.id, "panel-button mono projection-card"), html("p", "mapping-note", "实现生命周期：" + implementation.lifetime + " · 服务初始化：" + initializationLabel(implementation) + " · key=" + keyLabel(implementation.key)));
     content.append(selected);
     const inputs = section("消费槽位", node.inputs.length);
     for (const input of node.inputs.slice(0, state.dependencyLimit)) {
@@ -683,6 +697,7 @@
     const badges = html("div", "badges");
     addBadge(badges, node.lifetime, lifetimeClass(node.lifetime));
     addBadge(badges, KINDS[node.kind]);
+    addBadge(badges, "服务初始化：" + initializationLabel(node));
     if (node.primary) addBadge(badges, "Primary");
     const owners = project ? declarations.get(node.declarationIdentity) : null;
     if (owners && owners.size > 1) addBadge(badges, "相同声明 · " + owners.size + " 个入口", "shared");
@@ -690,7 +705,7 @@
     content.append(badges, html("p", "detail-fullname", node.name));
     if (owners && owners.size > 1) {
       const shared = section("声明复用", owners.size);
-      shared.append(html("p", "inspector-empty", "以下入口含有相同类型、key、构造类型、生命周期及源码位置的声明；各入口仍独立构造实例。"));
+      shared.append(html("p", "inspector-empty", "以下入口含有相同类型、key、构造类型、生命周期、初始化策略及源码位置的声明；各入口仍独立构造实例。"));
       for (const owner of owners) {
         const button = html("button", "panel-button mono", entryLabel(entryById.get(owner)));
         button.type = "button";
@@ -706,7 +721,8 @@
     const registration = section("注册信息");
     const grid = html("dl", "detail-grid");
     grid.append(html("dt", "", "Key"), html("dd", "mono", keyLabel(node.key)), html("dt", "", "消费者"), html("dd", "", dependents.get(node.id).length + " 个服务声明"));
-    registration.append(grid);
+    grid.append(html("dt", "", "初始化"), html("dd", "", initializationLabel(node)));
+    registration.append(grid, html("p", "mapping-note", initializationDetail(node)));
     content.append(registration);
     const dependencies = section("依赖输入", node.dependencies.length);
     const list = html("div", "dependency-list");
@@ -725,7 +741,7 @@
       card.append(heading, html("p", "dependency-type", dep.requestedLabel));
       if (target) {
         card.append(html("p", "dependency-target", (route.projection ? "接口请求 → " : "→ ") + target.label + "  #" + providerId(target)));
-        card.append(html("p", "dependency-meta", target.lifetime + (dep.optional ? " · optional" : "") + (dep.lazy ? " · 延迟注入（首次 get().await 获取）" : "") + (dep.key !== null ? " · key=" + keyLabel(dep.key) : "")));
+        card.append(html("p", "dependency-meta", target.lifetime + " · 服务初始化：" + initializationLabel(target) + (dep.optional ? " · optional" : "") + (dep.lazy ? " · 延迟注入（首次 get().await 获取）" : "") + (dep.key !== null ? " · key=" + keyLabel(dep.key) : "")));
       } else {
         card.append(html("p", "dependency-absent", "optional · 未注册，输入为空"));
         if (dep.key !== null) card.append(html("p", "dependency-meta", "key=" + keyLabel(dep.key)));
@@ -815,7 +831,7 @@
       const dot = html("span", "search-dot " + nodeKind(node));
       dot.style.background = COLORS[node.lifetime] || "#a2b0c3";
       const text = html("span", "search-result-text");
-      text.append(html("span", "search-result-name", node.label), html("span", "search-result-sub", (node.projection ? "接口请求 · 选中 " + byId.get(node.targetId).label : node.missing ? "optional · 缺席" : "#" + providerId(node) + " · " + node.lifetime) + (project ? " · " + entryById.get(node.entryId).binary : "") + (node.key !== null ? " · key=" + keyLabel(node.key) : "")));
+      text.append(html("span", "search-result-name", node.label), html("span", "search-result-sub", (node.projection ? "接口请求 · 选中 " + byId.get(node.targetId).label : node.missing ? "optional · 缺席" : "#" + providerId(node) + " · " + node.lifetime + " · " + initializationLabel(node)) + (project ? " · " + entryById.get(node.entryId).binary : "") + (node.key !== null ? " · key=" + keyLabel(node.key) : "")));
       button.append(dot, text);
       button.title = node.name;
       button.addEventListener("click", () => { $("service-search").value = ""; selectNode(node.id); });

@@ -1,9 +1,8 @@
 //! 开放泛型 `#[injectable]` 的 provider definition 生成。
 //!
-//! 编译器入口注册清单只收集已经闭合的 provider。`Repository<T>` 这类
-//! provider 因而不直接进入清单；当另一个闭合 provider 请求
-//! `Repository<UserEntity>` 时，字段依赖中的 callback 才会单态化并调用这里生成的
-//! [`::nestrs_core::registration::provider::ProviderDefinition`] 实现。
+//! 最终执行计划只包含已经闭合的服务。`Repository<T>` 在自己的匿名作用域中
+//! 生成局部 ProviderDefinition；driver 从查询或依赖取得真实闭合 Ty 后求解这个
+//! 实现，再分析其 MIR。运行时输入不携带用于寻找或物化泛型的回调。
 
 use super::{
     config::InjectableConfig,
@@ -11,94 +10,61 @@ use super::{
     field_analyze::{AnalyzedFields, FieldStrategy},
     provider::EmitClassProviderFields,
 };
-use crate::codegen::injection::render::EmitCompilerKey;
+use crate::codegen::injection::render::{EmitCompilerKey, EmitPlanProvider};
 use zyn::{quote::quote, syn, zyn};
 
 /// 为一个开放泛型 provider 输出其按需具体化的 provider definition。
 ///
 /// 构造 adapter 是 trait 方法内的无捕获 closure，而不是可见的 inherent helper 或
-/// 编译器注册函数。`Self` 在这里已经代表例如 `Repository<UserEntity>` 的闭合类型，
-/// 因此 provider token、构造结果和未来缓存 key 都继续使用精确的具体服务 ABI。
+/// 公开注册函数。实例化后的 `Self` 代表例如 `Repository<UserEntity>` 的闭合类型，
+/// 类型身份和构造结果都继续由标准 Rust 保证；策略标记只供编译器读取。
 #[zyn::element]
 pub(crate) fn define_generic_injectable_provider(
     analysis: AnalyzedFields,
     config: InjectableConfig,
     primary: bool,
+    lazy: Option<bool>,
 ) -> zyn::TokenStream {
     let service = analysis.item.ident.clone();
     let provider_definition_generics = provider_definition_generics(analysis);
     let (impl_generics, type_generics, where_clause) =
         provider_definition_generics.split_for_impl();
     let service_type = quote!(Self);
-    let dependency_paths = dependency_paths(analysis);
+    let reflection = crate::codegen::reflection::support(true);
 
     zyn! {
-        {{ dependency_paths }}
-        impl {{ impl_generics }} ::nestrs_core::registration::provider::ProviderDefinition
-            for {{ service }} {{ type_generics }} {{ where_clause }}
-        {
-            fn provider() -> ::nestrs_core::registration::provider::Provider {
-                ::nestrs_core::registration::compiler::compiler_provider::<Self>(
-                    @EmitCompilerKey(key = config.key.clone())
-                );
-                ::nestrs_core::registration::provider::Provider::Class(
-                    ::nestrs_core::registration::provider::ClassProvider {
+        #[allow(clippy::unused_unit)]
+        const _: () = {
+            {{ reflection }}
+            impl {{ impl_generics }} __nestrs_reflect::ProviderDefinition
+                for {{ service }} {{ type_generics }} {{ where_clause }}
+            {
+                fn provider() -> ::nestrs_core::activation::adapter::ActivationAdapter {
+                    __nestrs_reflect::compiler_provider::<Self>(
+                        @EmitCompilerKey(key = config.key.clone())
+                    );
+                    @EmitPlanProvider(
+                        service_type = service_type.clone(),
+                        key = config.key.clone(),
+                        lifetime = config.lifetime,
+                        primary = *primary,
+                        lazy = *lazy,
+                    )
+                    ::nestrs_core::activation::adapter::ActivationAdapter {
                         @EmitClassProviderFields(
                             analysis = analysis.clone(),
                             config = config.clone(),
-                            primary = *primary,
                             service_type = service_type.clone(),
                         )
-                        constructor: @GenerateGenericInjectableConstructor(
+                        constructor: ::nestrs_core::activation::adapter::Constructor::Class(@GenerateGenericInjectableConstructor(
                             analysis = analysis.clone(),
-                        ),
+                        )),
                     }
-                )
+                }
             }
-        }
-    }
-}
-
-/// Hidden type paths let downstream compiler output reach private nested
-/// services using a public outer blueprint without exposing associated types.
-fn dependency_paths(analysis: &AnalyzedFields) -> zyn::TokenStream {
-    let service = &analysis.item.ident;
-    let (_, type_generics, _) = analysis.item.generics.split_for_impl();
-    let mut output = zyn::TokenStream::new();
-    for spec in &analysis.specs {
-        let FieldStrategy::Inject { service_type, .. } = &spec.strategy else {
-            continue;
+            ()
         };
-        let slot = spec.input_slot.expect("injected field slot");
-        let mut generics = provider_definition_generics(analysis);
-        // This parameter is local to a generated impl, never to the user's item.
-        let mut path_name = String::from("__NestrsDependencyPath");
-        while generics.params.iter().any(|parameter| match parameter {
-            syn::GenericParam::Type(parameter) => parameter.ident == path_name,
-            syn::GenericParam::Const(parameter) => parameter.ident == path_name,
-            syn::GenericParam::Lifetime(_) => false,
-        }) {
-            path_name.push('_');
-        }
-        let path = syn::Ident::new(&path_name, service.span());
-        generics.params.push(syn::parse_quote!(#path));
-        generics
-            .make_where_clause()
-            .predicates
-            .push(syn::parse_quote!(
-                #service_type: ::nestrs_core::registration::root::DependencyPath<#path>
-            ));
-        let (impl_generics, _, where_clause) = generics.split_for_impl();
-        output.extend(quote! {
-            impl #impl_generics ::nestrs_core::registration::root::DependencyPath<(
-                ::nestrs_core::registration::root::DependencySlot<#slot>, #path,
-            )> for #service #type_generics #where_clause {
-                const BLUEPRINT: fn() -> ::nestrs_core::registration::root::RootDeclaration =
-                    <#service_type as ::nestrs_core::registration::root::DependencyPath<#path>>::BLUEPRINT;
-            }
-        });
     }
-    output
 }
 
 /// 保留原有泛型声明并额外约束闭合 `Self` 必须满足 injectable ABI。
@@ -148,6 +114,7 @@ mod tests {
                 cleanup: None,
             },
             primary: false,
+            lazy: None,
         }
         .render(&zyn::Input::default())
         .tokens()
@@ -166,12 +133,12 @@ mod tests {
         .expect("test input should parse");
         let output = render_definition(item);
 
-        assert!(output.contains(
-            "impl < Entity > :: nestrs_core :: registration :: provider :: ProviderDefinition"
-        ));
+        assert!(output.contains("impl < Entity > __nestrs_reflect :: ProviderDefinition"));
         assert!(output.contains("for Repository < Entity > where Repository < Entity > : :: nestrs_core :: service :: Injectable"));
         assert!(output.contains("ServiceType :: create :: < Self >"));
-        assert!(output.contains("constructor : | __nestrs_injectable_context_for_Repository"));
+        assert!(
+            output.contains("Constructor :: Class (| __nestrs_injectable_context_for_Repository")
+        );
         assert!(output.contains("let __nestrs_injectable_instance = Self"));
         assert!(output.contains("ensure_all_consumed ()"));
         assert!(!output.contains("REFLECTED_PROVIDERS"));

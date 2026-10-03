@@ -40,12 +40,12 @@ impl Example {
     /// Method bodies keep real query expansions during the documentation type check.
     ///
     /// ```
-    /// use nestrs_core::{ServiceProvider, get_required_service};
+    /// use nestrs_core::ServiceProvider;
     /// use nestrs_macro_rustdoc::semantics::Example;
     /// fn main() {
     ///     tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
     ///         let provider = ServiceProvider::build().await.unwrap();
-    ///         let example = get_required_service!(provider, Example).await.unwrap();
+    ///         let example = provider.get_required_service::<Example>().await.unwrap();
     ///         assert_eq!(example.configured(&provider).await.unwrap(), 5432);
     ///         provider.dispose_async().await.unwrap();
     ///         # if let Ok(path) = std::env::var("NESTRS_DOCTEST_RECORD") { std::fs::write(std::path::Path::new(&path).join("method"), "passed").unwrap(); }
@@ -53,9 +53,7 @@ impl Example {
     /// }
     /// ```
     pub async fn configured(&self, provider: &ServiceProvider) -> Result<u16, ResolveError> {
-        Ok(nestrs_core::get_required_service!(provider, Configuration)
-            .await?
-            .port)
+        Ok(provider.get_required_service::<Configuration>().await?.port)
     }
 }
 
@@ -67,12 +65,12 @@ impl Inspect for Example {
     /// Trait implementation documentation can declare a new downstream trait query.
     ///
     /// ```
-    /// use nestrs_core::{ServiceProvider, get_required_service};
+    /// use nestrs_core::ServiceProvider;
     /// use nestrs_macro_rustdoc::semantics::Inspect;
     /// fn main() {
     ///     tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
     ///         let provider = ServiceProvider::build().await.unwrap();
-    ///         let example = get_required_service!(provider, dyn Inspect).await.unwrap();
+    ///         let example = provider.get_required_service::<dyn Inspect>().await.unwrap();
     ///         assert_eq!(example.inspect(), 5432);
     ///         provider.dispose_async().await.unwrap();
     ///         # if let Ok(path) = std::env::var("NESTRS_DOCTEST_RECORD") { std::fs::write(std::path::Path::new(&path).join("trait-method"), "passed").unwrap(); }

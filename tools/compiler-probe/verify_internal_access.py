@@ -67,9 +67,17 @@ mod activation {
     impl Hidden { pub fn number(&self) -> usize { self.0 } }
     pub fn make() -> Hidden { Hidden(17) }
 }
-mod facade { pub struct Public; impl Public { pub fn value() -> usize { 2 } } }
+mod facade {
+    // 诊断路径可能选用此别名；认证必须按定义身份找到 graph::plan。
+    #[allow(unused_imports)] use crate::graph::plan;
+    pub struct Public;
+    impl Public { pub fn value() -> usize { 2 } }
+}
 pub use facade::Public;
-mod registration { pub mod compiler { pub fn compiler_automatic_binding<C: ?Sized, I: ?Sized>() {} } }
+// 来源认证锚定真实执行协议，不再要求 core 提供编译器专用的空 marker。
+mod graph { pub(crate) mod plan {
+    pub unsafe fn plan_set_options(_output: *mut (), _eager: bool, _concurrency: usize) {}
+} }
 #[macro_export] macro_rules! __nestrs_query {
     () => { $crate::activation::make().number() };
     ($input:expr) => { $input };

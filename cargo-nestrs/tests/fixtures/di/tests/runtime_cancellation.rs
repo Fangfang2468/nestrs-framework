@@ -66,7 +66,7 @@ struct BadCleanup;
 #[tokio::test]
 async fn cancellation_keeps_accepted_work_and_close_running() {
     let provider = ServiceProvider::build().await.unwrap();
-    let mut query = Box::pin(nestrs_core::get_required_service!(provider, Consumer));
+    let mut query = Box::pin(provider.get_required_service::<Consumer>());
     tokio::select! {
         _ = STARTED.acquire() => {},
         _ = &mut query => panic!("factory should be waiting"),
@@ -74,15 +74,14 @@ async fn cancellation_keeps_accepted_work_and_close_running() {
     drop(query);
     RELEASE.add_permits(1);
     assert_eq!(
-        nestrs_core::get_required_service!(provider, FactoryConsumer)
+        provider
+            .get_required_service::<FactoryConsumer>()
             .await
             .unwrap()
             .0,
         42
     );
-    nestrs_core::get_required_service!(provider, Consumer)
-        .await
-        .unwrap();
+    provider.get_required_service::<Consumer>().await.unwrap();
     assert_eq!(CONSTRUCTIONS.load(Ordering::SeqCst), 1);
     let mut disposal = Box::pin(provider.dispose_async());
     tokio::select! {
@@ -110,20 +109,14 @@ async fn cancellation_keeps_accepted_work_and_close_running() {
     // Ordinary Drop only sends Close, yet an active runtime completes cleanup.
     RELEASE.add_permits(1);
     let implicit = ServiceProvider::build().await.unwrap();
-    nestrs_core::get_required_service!(implicit, Dependency)
-        .await
-        .unwrap();
+    implicit.get_required_service::<Dependency>().await.unwrap();
     drop(implicit);
     DEPENDENCY_CLOSED.acquire().await.unwrap().forget();
 
     RELEASE.add_permits(1);
     let panics = ServiceProvider::build().await.unwrap();
-    nestrs_core::get_required_service!(panics, Dependency)
-        .await
-        .unwrap();
-    nestrs_core::get_required_service!(panics, BadCleanup)
-        .await
-        .unwrap();
+    panics.get_required_service::<Dependency>().await.unwrap();
+    panics.get_required_service::<BadCleanup>().await.unwrap();
     let error = panics.dispose_async().await.unwrap_err();
     assert!(error.to_string().contains("cleanup panic sentinel"));
     assert_eq!(error.failures().len(), 1);

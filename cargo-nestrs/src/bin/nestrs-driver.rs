@@ -8,6 +8,7 @@
 
 extern crate rustc_ast;
 extern crate rustc_const_eval;
+extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_hir;
 extern crate rustc_interface;
@@ -20,12 +21,20 @@ extern crate rustc_span;
 mod autobind_codegen;
 #[path = "../compiler/autobind_semantic.rs"]
 mod autobind_semantic;
+#[path = "../compiler/constructor.rs"]
+mod constructor;
+#[path = "../compiler/di_plan/mod.rs"]
+mod di_plan;
 #[path = "../compiler/documentation.rs"]
 mod documentation;
 #[path = "../compiler/graph_entry.rs"]
 mod graph_entry;
 #[path = "../compiler/internal_access.rs"]
 mod internal_access;
+#[path = "../compiler/query_roots.rs"]
+mod query_roots;
+#[path = "../compiler/reflection.rs"]
+mod reflection;
 #[path = "../compiler/registration_codegen.rs"]
 mod registration_codegen;
 #[path = "../compiler/registration_reachability.rs"]
@@ -92,6 +101,8 @@ struct Discover {
 
 impl Callbacks for Discover {
     fn config(&mut self, config: &mut interface::Config) {
+        di_plan::enable(false);
+        constructor::capture_ide(true);
         configure_compiler(config);
         // Generated bindings can make previously unused declarations live.
         // The final compiler invocation remains the authority for all lints.
@@ -107,8 +118,8 @@ impl Callbacks for Discover {
         compiler: &interface::Compiler,
         krate: &mut rustc_ast::Crate,
     ) -> Compilation {
-        graph_entry::prepare(compiler, krate);
-        registration_codegen::prepare(compiler, krate);
+        reflection::prepare(compiler, krate);
+        di_plan::prepare(compiler, krate);
         Compilation::Continue
     }
 
@@ -117,8 +128,7 @@ impl Callbacks for Discover {
         _compiler: &interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
-        graph_entry::validate(tcx);
-        if !internal_access::validate(tcx) {
+        if !internal_access::validate(tcx) || !constructor::validate(tcx) {
             return Compilation::Stop;
         }
         registration_codegen::validate(tcx);
@@ -136,6 +146,8 @@ struct Generate {
 
 impl Callbacks for Generate {
     fn config(&mut self, config: &mut interface::Config) {
+        di_plan::enable(true);
+        constructor::capture_ide(false);
         configure_compiler(config);
         // Downstream `cargo check` targets also need closed blueprint MIR;
         // rustc otherwise omits it from metadata-only compilations.
@@ -153,8 +165,8 @@ impl Callbacks for Generate {
         compiler: &interface::Compiler,
         krate: &mut rustc_ast::Crate,
     ) -> Compilation {
-        graph_entry::prepare(compiler, krate);
-        registration_codegen::prepare(compiler, krate);
+        reflection::prepare(compiler, krate);
+        di_plan::prepare(compiler, krate);
         Compilation::Continue
     }
 
@@ -163,8 +175,7 @@ impl Callbacks for Generate {
         _compiler: &interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
-        graph_entry::validate(tcx);
-        if !internal_access::validate(tcx) {
+        if !internal_access::validate(tcx) || !constructor::validate(tcx) {
             return Compilation::Stop;
         }
         registration_codegen::validate(tcx);
@@ -172,12 +183,11 @@ impl Callbacks for Generate {
             let observed = (analysis.providers, analysis.requests, analysis.explicit_bindings, analysis.automatic_bindings, analysis.blueprints);
             if analysis.generated_bindings != 0 || analysis.generated_blueprints != 0 || observed != self.expected {
                 Err(format!(
-                    "DI semantic inputs changed between compiler passes: expected {:?}, observed {:?}, still missing {} bindings and {} blueprints: {:?}",
+                    "DI semantic inputs changed between compiler passes: expected {:?}, observed {:?}, still missing {} bindings and {} blueprints",
                     self.expected, observed, analysis.generated_bindings, analysis.generated_blueprints,
-                    analysis.insertions.iter().flat_map(|insertion| &insertion.blueprints).map(|blueprint| (&blueprint.service, &blueprint.path)).collect::<Vec<_>>(),
                 ))
             } else {
-                documentation::capture(tcx)
+                di_plan::validate(tcx).and_then(|()| documentation::capture(tcx))
             }
         }));
         if self.validation.as_ref().is_some_and(Result::is_ok) {
@@ -192,15 +202,61 @@ fn configure_compiler(config: &mut interface::Config) {
     config.opts.unstable_opts.always_encode_mir = true;
     config.override_queries = Some(|_, providers| {
         internal_access::install_queries(providers);
+        constructor::provide(providers);
         registration_codegen::provide(providers);
         registration_reachability::provide(providers);
+        di_plan::provide(providers);
     });
+}
+
+/// 普通依赖保持一次标准 rustc 编译。只在真实解析结果中发现传递依赖的 core
+/// 时才中止本次早期探测并进入 Nestrs 两阶段管线，避免按 Cargo 的直接 extern
+/// 名称漏掉使用上游重导出 ServiceProvider 的业务库。识别结果来自实际 DefId 与
+/// crate source，不信任额外 sidecar 文件，也不依赖上一次构建留下的缓存标记。
+#[derive(Default)]
+struct TransitiveCoreProbe {
+    runtime: Option<PathBuf>,
+}
+impl Callbacks for TransitiveCoreProbe {
+    fn after_expansion<'tcx>(
+        &mut self,
+        _compiler: &interface::Compiler,
+        tcx: TyCtxt<'tcx>,
+    ) -> Compilation {
+        let runtimes: Vec<_> = tcx
+            .crates(())
+            .iter()
+            .copied()
+            .filter(|&krate| tcx.crate_name(krate).as_str() == "nestrs_core")
+            .collect();
+        if runtimes.len() > 1 {
+            tcx.dcx()
+                .fatal("Nestrs requires one compatible nestrs-core identity");
+        }
+        let Some(&runtime) = runtimes.first() else {
+            return Compilation::Continue;
+        };
+        let source = tcx.used_crate_source(runtime);
+        self.runtime = source
+            .rlib
+            .as_ref()
+            .or(source.rmeta.as_ref())
+            .or(source.dylib.as_ref())
+            .cloned();
+        if self.runtime.is_none() {
+            tcx.dcx()
+                .fatal("cannot locate the resolved transitive nestrs-core artifact");
+        }
+        Compilation::Stop
+    }
 }
 
 struct RuntimeCompiler;
 
 impl Callbacks for RuntimeCompiler {
     fn config(&mut self, config: &mut interface::Config) {
+        di_plan::enable(true);
+        constructor::capture_ide(false);
         configure_compiler(config);
     }
 
@@ -209,7 +265,8 @@ impl Callbacks for RuntimeCompiler {
         compiler: &interface::Compiler,
         krate: &mut rustc_ast::Crate,
     ) -> Compilation {
-        registration_codegen::prepare(compiler, krate);
+        reflection::prepare(compiler, krate);
+        di_plan::prepare(compiler, krate);
         Compilation::Continue
     }
 
@@ -218,11 +275,11 @@ impl Callbacks for RuntimeCompiler {
         _compiler: &interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
-        if !internal_access::validate(tcx) {
+        if !internal_access::validate(tcx) || !constructor::validate(tcx) {
             return Compilation::Stop;
         }
         registration_codegen::validate(tcx);
-        if let Err(error) = documentation::capture(tcx) {
+        if let Err(error) = di_plan::validate(tcx).and_then(|()| documentation::capture(tcx)) {
             tcx.dcx().err(error);
             return Compilation::Stop;
         }
@@ -313,7 +370,7 @@ fn run() -> Result<ExitCode, String> {
     cargo_nestrs::ide::capture_rustc(&args)?;
     let rustc = args[0].clone();
     let crate_name = flag_value(&args, "--crate-name").map(str::to_owned);
-    let uses_core = has_extern(&args, "nestrs_core");
+    let mut uses_core = has_extern(&args, "nestrs_core");
     let executable = flag_value(&args, "--crate-type")
         .is_some_and(|kinds| kinds.split(',').any(|kind| kind == "bin"));
     let graph_binary = if executable {
@@ -325,9 +382,6 @@ fn run() -> Result<ExitCode, String> {
     } else {
         false
     };
-    if graph_binary {
-        graph_entry::invalidate_proof()?;
-    }
     if graph_binary && !uses_core {
         return Err("cargo nestrs graph requires the selected binary to depend directly on nestrs-core; refusing to execute an unmodified application entry".into());
     }
@@ -357,12 +411,7 @@ fn run() -> Result<ExitCode, String> {
             }));
         }
     }
-    if (!uses_core
-        && !executable
-        && !args.iter().any(|arg| arg == "--test")
-        && !documentation::requires_pipeline())
-        || is_probe
-    {
+    if is_probe {
         // Cargo's version/sysroot/capability probes must retain rustc behavior.
         let status = Command::new(&rustc)
             .args(&args[1..])
@@ -372,6 +421,7 @@ fn run() -> Result<ExitCode, String> {
             .env_remove("NESTRS_GRAPH_MANIFEST")
             .env_remove("NESTRS_GRAPH_SOURCE")
             .env_remove("NESTRS_GRAPH_PROOF")
+            .env_remove("NESTRS_GRAPH_PLAN")
             .status()
             .map_err(|error| error.to_string())?;
         return Ok(if status.success() {
@@ -379,6 +429,25 @@ fn run() -> Result<ExitCode, String> {
         } else {
             ExitCode::FAILURE
         });
+    }
+    if !uses_core && !local_core && !documentation::requires_pipeline() && !graph_binary {
+        check_toolchain(&rustc)?;
+        let mut probe = TransitiveCoreProbe::default();
+        let result = rustc_driver::catch_with_exit_code(|| {
+            rustc_driver::run_compiler(&args, &mut probe);
+        });
+        if result != ExitCode::SUCCESS {
+            return Ok(result);
+        }
+        let Some(runtime) = probe.runtime else {
+            // 不含 DI 的普通第三方库已经在同一次调用内正常完成 metadata/codegen。
+            return Ok(result);
+        };
+        // 生成 adapter 使用 core 的固定内部路径。将本次 rustc 已解析的同一 artifact
+        // 作为规范 extern 别名传给重编译阶段，不重新按名称搜索另一个 core 版本。
+        args.push("--extern".into());
+        args.push(format!("nestrs_core={}", runtime.display()));
+        uses_core = true;
     }
     let crate_name = crate_name.expect("checked compiler crate name");
     check_toolchain(&rustc)?;
@@ -495,9 +564,7 @@ fn run() -> Result<ExitCode, String> {
     .map_err(|error| error.to_string())?;
     if second == ExitCode::SUCCESS {
         validated?;
-        if graph_binary {
-            graph_entry::write_proof()?;
-        }
+        if graph_binary {}
     }
     Ok(second)
 }

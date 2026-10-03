@@ -9,13 +9,17 @@
 //! 阅读顺序：[`preparer`] 定义类型检查和 trait 投影，[`preparation`] 定义事务式填充，
 //! [`inputs`] 定义单次消费，最后由 [`class`] 或 [`factory`] 交付相应所有权。每个阶段
 //! 只暴露下一阶段需要的能力，避免适配器边构造边修改注册或依赖选择。
+//! 延迟字段只在普通构造阶段交付句柄；其首次访问通过 [`projection`] 直接写入栈上
+//! 类型化令牌接收槽，不再经过通用 [`PreparedInput`] 的堆载荷。
 
 mod class;
 mod error;
 mod factory;
 mod inputs;
+mod lazy_dependency;
 mod preparation;
 mod preparer;
+mod projection;
 mod slot;
 
 pub use class::ClassConstructor;
@@ -23,10 +27,14 @@ pub use error::ConstructionError;
 pub(crate) use factory::FactoryLeaseFrame;
 pub use factory::{AsyncConstructor, FactoryConstructor, FactoryFuture, FactoryInputs};
 pub use inputs::{ConstructionInputs, PreparedInput};
+pub use lazy_dependency::LazyDependency;
+pub(crate) use lazy_dependency::LazyInputPlan;
 pub(crate) use preparation::ActivationPreparation;
 pub use preparer::{
     InputPreparer, LazyInputPreparer, prepare_bound_optional, prepare_bound_required,
     prepare_lazy_optional, prepare_lazy_required, prepare_optional, prepare_optional_absent,
     prepare_required,
 };
+pub(crate) use projection::project_token;
+pub use projection::{ProjectionTarget, ServiceProjector, project_bound, project_required};
 pub use slot::InputSlot;

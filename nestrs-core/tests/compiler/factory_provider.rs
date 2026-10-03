@@ -1,10 +1,12 @@
-use crate::activation::InputSlot;
+use crate::activation::{
+    InputSlot,
+    adapter::{CleanupFuture, FactoryInvoker},
+};
+use crate::graph::Constructor;
 use crate::lifetime::ServiceLifetime;
-use crate::registration::dependency::{Delivery, ProviderSource};
-use crate::registration::provider::{CleanupFuture, FactoryInvoker, FactoryProvider, Provider};
 use crate::service::{ServiceIdentifier, ServiceKey, ServiceType};
 use nestrs as declarations;
-use nestrs::{factory, primary};
+use nestrs::{factory, injectable, primary};
 use std::{
     future::Future,
     pin::Pin,
@@ -30,6 +32,18 @@ struct AliasedCrateFactoryBeforePrimaryService;
 struct Database;
 struct Cache;
 struct Audit;
+
+// factory 参数既是生成签名的一部分，也是完整编译计划中的必选边。
+// 保持 factory-only 类型，验证不依赖 injectable 定义也能完成计划编译。
+#[factory]
+fn database() -> Database {
+    Database
+}
+
+#[factory]
+fn cache() -> Cache {
+    Cache
+}
 
 #[derive(Debug)]
 struct FactoryError;
@@ -133,206 +147,236 @@ fn aliased_crate_factory_before_primary() -> AliasedCrateFactoryBeforePrimarySer
     AliasedCrateFactoryBeforePrimaryService
 }
 
-/// 当前 factory 适配器只包裹无 await 的测试函数，故它们首次 poll 就应完成。这里不用
-/// runtime，以免把 activation runtime 的实现误作为本次 provider ABI 的前提。
-fn complete_immediately<T>(mut future: Pin<Box<dyn Future<Output = T> + Send + 'static>>) -> T {
-    let waker = Waker::noop();
-    let mut context = Context::from_waker(waker);
+#[injectable]
+struct Secondary;
+trait PrimaryBefore: Send + Sync {}
+impl PrimaryBefore for PrimaryBeforeFactoryService {}
+impl PrimaryBefore for Secondary {}
 
+trait FactoryBefore: Send + Sync {}
+impl FactoryBefore for FactoryBeforePrimaryService {}
+impl FactoryBefore for Secondary {}
+
+trait QualifiedPrimaryBefore: Send + Sync {}
+impl QualifiedPrimaryBefore for QualifiedPrimaryBeforeFactoryService {}
+impl QualifiedPrimaryBefore for Secondary {}
+
+trait AliasedPrimaryBefore: Send + Sync {}
+impl AliasedPrimaryBefore for AliasedCratePrimaryBeforeFactoryService {}
+impl AliasedPrimaryBefore for Secondary {}
+
+trait QualifiedFactoryBefore: Send + Sync {}
+impl QualifiedFactoryBefore for QualifiedFactoryBeforePrimaryService {}
+impl QualifiedFactoryBefore for Secondary {}
+
+trait AliasedFactoryBefore: Send + Sync {}
+impl AliasedFactoryBefore for AliasedCrateFactoryBeforePrimaryService {}
+impl AliasedFactoryBefore for Secondary {}
+
+#[allow(dead_code)]
+async fn primary_queries(provider: &crate::ServiceProvider) {
+    let _ = provider.get_service::<dyn PrimaryBefore>().await;
+    let _ = provider.get_service::<dyn FactoryBefore>().await;
+    let _ = provider.get_service::<dyn QualifiedPrimaryBefore>().await;
+    let _ = provider.get_service::<dyn AliasedPrimaryBefore>().await;
+    let _ = provider.get_service::<dyn QualifiedFactoryBefore>().await;
+    let _ = provider.get_service::<dyn AliasedFactoryBefore>().await;
+}
+
+fn complete_immediately<T>(mut future: Pin<Box<dyn Future<Output = T> + Send + 'static>>) -> T {
+    let mut context = Context::from_waker(Waker::noop());
     match future.as_mut().poll(&mut context) {
         Poll::Ready(output) => output,
-        Poll::Pending => panic!("test factory future should complete without an executor"),
+        Poll::Pending => panic!("测试 cleanup 没有挂起点"),
     }
 }
 
-fn providers() -> Vec<Provider> {
-    crate::registration::catalog::collect().providers
-}
-
-fn factory_provider_for<T>() -> Provider
-where
-    T: Send + Sync + 'static,
-{
-    providers()
-        .into_iter()
-        .find(|provider| {
-            matches!(
-                provider,
-                Provider::Factory(FactoryProvider { provide, .. })
-                    if provide.service_type == ServiceType::create::<T>()
-            )
-        })
-        .unwrap_or_else(|| {
-            panic!(
-                "factory provider should be registered for {}",
-                std::any::type_name::<T>()
-            )
-        })
+fn node<T: Send + Sync + 'static>() -> &'static crate::graph::CompiledNode {
+    crate::graph::plan::load()
+        .graph
+        .nodes
+        .iter()
+        .find(|node| node.identifier.service_type == ServiceType::create::<T>())
+        .unwrap()
 }
 
 #[test]
-fn factory_collects_common_configuration_and_parameter_injections() {
-    let configured = factory_provider_for::<ConfiguredService>();
-    let Provider::Factory(FactoryProvider {
-        provide,
-        common,
-        dependencies,
-        invoker,
-    }) = configured
-    else {
-        panic!("configured factory should register Provider::Factory");
-    };
-
+fn factory_compiles_configuration_and_parameter_inputs() {
+    let graph = &crate::graph::plan::load().graph;
+    let configured = node::<ConfiguredService>();
     assert_eq!(
-        provide,
+        configured.identifier,
         ServiceIdentifier::new(
-            Some(ServiceKey::Named("configured".to_owned())),
-            ServiceType::create::<ConfiguredService>(),
+            Some(ServiceKey::Named("configured".into())),
+            ServiceType::create::<ConfiguredService>()
         )
     );
-    assert_eq!(common.lifetime, ServiceLifetime::Scoped);
-    assert!(!common.primary);
-    assert!(common.source.file.ends_with("factory_provider.rs"));
-    assert!(matches!(invoker, FactoryInvoker::Sync(_)));
-
-    let cleanup = common
-        .cleanup
-        .expect("configured factory should retain cleanup hook");
-    let cleanup_future: CleanupFuture = cleanup();
-    complete_immediately(cleanup_future);
-    assert!(dependencies.is_empty());
-
-    let transient = factory_provider_for::<TransientFactoryService>();
-    let Provider::Factory(FactoryProvider {
-        common,
-        dependencies,
-        invoker,
-        ..
-    }) = transient
-    else {
-        panic!("transient factory should register Provider::Factory");
-    };
-    assert_eq!(common.lifetime, ServiceLifetime::Transient);
-    assert!(dependencies.is_empty());
-    assert!(matches!(invoker, FactoryInvoker::Sync(_)));
-
-    let parameterized = factory_provider_for::<ParameterizedService>();
-    let Provider::Factory(FactoryProvider { dependencies, .. }) = parameterized else {
-        panic!("parameterized factory should register Provider::Factory");
-    };
-    assert_eq!(dependencies.len(), 3);
-
-    let database = &dependencies[0];
-    assert_eq!(database.declaration_position, 0);
-    assert_eq!(database.input_slot, InputSlot::new(0));
-    assert_eq!(database.label, Some("database"));
-    assert_eq!(
-        database.token,
-        ServiceIdentifier::from(ServiceType::create::<Database>())
+    assert_eq!(configured.common.lifetime, ServiceLifetime::Scoped);
+    assert!(
+        configured
+            .common
+            .source
+            .file
+            .ends_with("factory_provider.rs")
     );
-    assert!(!database.optional);
-    assert!(matches!(database.delivery, Delivery::Selected(_)));
     assert!(matches!(
-        database.provider_source,
-        ProviderSource::Registered
+        configured.constructor,
+        Constructor::Factory(FactoryInvoker::Sync(_))
+    ));
+    let cleanup: CleanupFuture = configured.common.cleanup.expect("cleanup")();
+    complete_immediately(cleanup);
+    assert!(configured.dependencies.is_empty());
+
+    let transient = node::<TransientFactoryService>();
+    assert_eq!(transient.common.lifetime, ServiceLifetime::Transient);
+    assert!(transient.dependencies.is_empty());
+    assert!(matches!(
+        transient.constructor,
+        Constructor::Factory(FactoryInvoker::Sync(_))
     ));
 
-    let cache = &dependencies[1];
-    assert_eq!(cache.declaration_position, 1);
-    assert_eq!(cache.input_slot, InputSlot::new(1));
-    assert_eq!(cache.label, Some("cache"));
-    assert_eq!(
-        cache.token,
-        ServiceIdentifier::from(ServiceType::create::<Cache>())
-    );
-    assert!(!cache.optional);
-    assert!(matches!(cache.delivery, Delivery::Selected(_)));
-
-    let audit = &dependencies[2];
-    assert_eq!(audit.declaration_position, 2);
-    assert_eq!(audit.input_slot, InputSlot::new(2));
+    let parameterized = node::<ParameterizedService>();
+    assert_eq!(parameterized.dependencies.len(), 3);
+    for (slot, (service_type, label)) in [
+        (ServiceType::create::<Database>(), "database"),
+        (ServiceType::create::<Cache>(), "cache"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let input = &parameterized.dependencies[slot];
+        assert_eq!(input.slot, InputSlot::new(slot));
+        assert_eq!(input.label, Some(label));
+        assert_eq!(input.requested, ServiceIdentifier::from(service_type));
+        assert!(!input.optional);
+        assert_eq!(
+            graph.nodes[input.target.unwrap()].identifier,
+            input.requested
+        );
+    }
+    let audit = &parameterized.dependencies[2];
+    assert_eq!(audit.slot, InputSlot::new(2));
     assert_eq!(audit.label, Some("audit"));
     assert_eq!(
-        audit.token,
+        audit.requested,
         ServiceIdentifier::new(
-            Some(ServiceKey::Named("audit".to_owned())),
-            ServiceType::create::<Audit>(),
+            Some(ServiceKey::Named("audit".into())),
+            ServiceType::create::<Audit>()
         )
     );
     assert!(audit.optional);
-    assert!(matches!(audit.delivery, Delivery::Selected(_)));
-    assert!(matches!(audit.provider_source, ProviderSource::Registered));
+    assert!(audit.target.is_none());
+    assert!(
+        (audit.prepare)(audit.slot, None)
+            .unwrap()
+            .into_optional::<Audit>(audit.slot)
+            .unwrap()
+            .is_none()
+    );
 }
 
-#[test]
-fn factory_invokers_describe_all_supported_return_shapes() {
-    let direct = factory_provider_for::<DirectService>();
-    let Provider::Factory(FactoryProvider { invoker, .. }) = direct else {
-        panic!("direct factory should register Provider::Factory");
-    };
-    assert!(matches!(invoker, FactoryInvoker::Sync(_)));
-
-    let result = factory_provider_for::<ResultService>();
-    let Provider::Factory(FactoryProvider { invoker, .. }) = result else {
-        panic!("result factory should register Provider::Factory");
-    };
-    assert!(matches!(invoker, FactoryInvoker::Sync(_)));
-
-    let failed = factory_provider_for::<FailedService>();
-    let Provider::Factory(FactoryProvider { invoker, .. }) = failed else {
-        panic!("failing result factory should register Provider::Factory");
-    };
-    assert!(matches!(invoker, FactoryInvoker::Sync(_)));
-
-    let asynchronous = factory_provider_for::<AsyncService>();
-    let Provider::Factory(FactoryProvider { invoker, .. }) = asynchronous else {
-        panic!("async factory should register Provider::Factory");
-    };
-    assert!(matches!(invoker, FactoryInvoker::Async(_)));
-
-    let explicit_future = factory_provider_for::<ExplicitFutureService>();
-    let Provider::Factory(FactoryProvider { invoker, .. }) = explicit_future else {
-        panic!("explicit Future factory should register Provider::Factory");
-    };
-    assert!(matches!(invoker, FactoryInvoker::Async(_)));
-
-    let explicit_result_future = factory_provider_for::<ExplicitFutureResultService>();
-    let Provider::Factory(FactoryProvider { invoker, .. }) = explicit_result_future else {
-        panic!("explicit Result Future factory should register Provider::Factory");
-    };
-    assert!(matches!(invoker, FactoryInvoker::Async(_)));
-}
-
-#[test]
-fn factory_consumes_primary_in_either_attribute_order_once() {
-    let providers = providers();
-
-    for service_type in [
-        ServiceType::create::<PrimaryBeforeFactoryService>(),
-        ServiceType::create::<FactoryBeforePrimaryService>(),
-        ServiceType::create::<QualifiedPrimaryBeforeFactoryService>(),
-        ServiceType::create::<AliasedCratePrimaryBeforeFactoryService>(),
-        ServiceType::create::<QualifiedFactoryBeforePrimaryService>(),
-        ServiceType::create::<AliasedCrateFactoryBeforePrimaryService>(),
+#[tokio::test]
+async fn factory_invokers_construct_all_supported_return_shapes_and_report_failure() {
+    for node in [
+        node::<DirectService>(),
+        node::<ResultService>(),
+        node::<FailedService>(),
     ] {
-        let matching: Vec<_> = providers
-            .iter()
-            .filter(|provider| {
-                matches!(
-                    provider,
-                    Provider::Factory(FactoryProvider { provide, .. }) if provide.service_type == service_type
-                )
-            })
-            .collect();
-        assert_eq!(
-            matching.len(),
-            1,
-            "each primary factory should emit exactly one Provider::Factory"
-        );
+        assert!(matches!(
+            node.constructor,
+            Constructor::Factory(FactoryInvoker::Sync(_))
+        ));
+    }
+    for node in [
+        node::<AsyncService>(),
+        node::<ExplicitFutureService>(),
+        node::<ExplicitFutureResultService>(),
+    ] {
+        assert!(matches!(
+            node.constructor,
+            Constructor::Factory(FactoryInvoker::Async(_))
+        ));
+    }
+    let provider = crate::ServiceProvider::build().await.unwrap();
+    provider
+        .get_required_service::<DirectService>()
+        .await
+        .unwrap();
+    provider
+        .get_required_service::<ResultService>()
+        .await
+        .unwrap();
+    provider
+        .get_required_service::<AsyncService>()
+        .await
+        .unwrap();
+    provider
+        .get_required_service::<ExplicitFutureService>()
+        .await
+        .unwrap();
+    provider
+        .get_required_service::<ExplicitFutureResultService>()
+        .await
+        .unwrap();
+    provider
+        .get_required_service::<ParameterizedService>()
+        .await
+        .unwrap();
+    let error = provider
+        .get_required_service::<FailedService>()
+        .await
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("FactoryError"));
+    provider.dispose_async().await.unwrap();
+}
 
-        let Provider::Factory(FactoryProvider { common, .. }) = matching[0] else {
-            unreachable!("the filter only retains factory providers");
-        };
-        assert!(common.primary, "factory for {service_type:?} lost primary");
+#[test]
+fn factory_primary_order_and_aliases_select_one_real_execution_target() {
+    let graph = &crate::graph::plan::load().graph;
+    for (port, service_type) in [
+        (
+            ServiceType::create::<dyn PrimaryBefore>(),
+            ServiceType::create::<PrimaryBeforeFactoryService>(),
+        ),
+        (
+            ServiceType::create::<dyn FactoryBefore>(),
+            ServiceType::create::<FactoryBeforePrimaryService>(),
+        ),
+        (
+            ServiceType::create::<dyn QualifiedPrimaryBefore>(),
+            ServiceType::create::<QualifiedPrimaryBeforeFactoryService>(),
+        ),
+        (
+            ServiceType::create::<dyn AliasedPrimaryBefore>(),
+            ServiceType::create::<AliasedCratePrimaryBeforeFactoryService>(),
+        ),
+        (
+            ServiceType::create::<dyn QualifiedFactoryBefore>(),
+            ServiceType::create::<QualifiedFactoryBeforePrimaryService>(),
+        ),
+        (
+            ServiceType::create::<dyn AliasedFactoryBefore>(),
+            ServiceType::create::<AliasedCrateFactoryBeforePrimaryService>(),
+        ),
+    ] {
+        assert_eq!(
+            graph
+                .nodes
+                .iter()
+                .filter(|node| node.identifier.service_type == service_type)
+                .count(),
+            1
+        );
+        let route = &graph.routes[&ServiceIdentifier::from(port)];
+        assert!(route.projection.is_some());
+        assert_eq!(
+            graph.nodes[route.provider].identifier.service_type,
+            service_type
+        );
+        assert!(matches!(
+            graph.nodes[route.provider].constructor,
+            Constructor::Factory(_)
+        ));
     }
 }

@@ -1,6 +1,6 @@
 use nestrs_core::activation::*;
 use nestrs_core::lifetime::ServiceLifetime;
-use nestrs_core::registration::*;
+use nestrs_core::graph::*;
 use nestrs_core::service::*;
 
 fn main() {

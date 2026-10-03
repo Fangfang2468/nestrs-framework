@@ -1,0 +1,17 @@
+[package]
+name = "nestrs-query-methods"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+members = ["library", "indirect", "indirect-app"]
+
+[dependencies]
+nestrs-core = { path = "../../../../nestrs-core" }
+query-library = { path = "library" }
+indirect-library = { path = "indirect" }
+tokio = { version = "1.53.1", features = ["rt", "macros"] }
+
+[features]
+extra-root = ["query-library/extra-root"]

@@ -21,7 +21,7 @@ fn service_reference_outlives_the_tokio_runtime_until_its_owner_is_dropped() {
         .unwrap();
     let provider = runtime.block_on(ServiceProvider::build()).unwrap();
     let value = runtime
-        .block_on(nestrs_core::get_required_service!(provider, Value))
+        .block_on(provider.get_required_service::<Value>())
         .unwrap();
     drop(runtime);
     assert_eq!(DROPS.load(Ordering::SeqCst), 0);

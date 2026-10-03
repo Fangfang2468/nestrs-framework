@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use nestrs_core::{ServiceProvider, get_required_service};
+use nestrs_core::ServiceProvider;
 
 static CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
 static TRANSIENTS: AtomicUsize = AtomicUsize::new(0);
@@ -97,7 +97,7 @@ struct GraphConsumer {
 
 #[tokio::test]
 async fn graph_snapshot_observes_static_graph_without_constructing_or_merging_transient_slots() {
-    let graph = crate::registration::catalog::dependency_graph_json().unwrap();
+    let graph = crate::graph::snapshot(&crate::graph::plan::load().graph).to_string();
     assert_eq!(CONSTRUCTIONS.load(Ordering::SeqCst), 0);
     let data: serde_json::Value = serde_json::from_str(&graph).unwrap();
     assert_eq!(data["version"], 1);
@@ -174,7 +174,9 @@ async fn graph_snapshot_observes_static_graph_without_constructing_or_merging_tr
     let scope = provider.create_scope();
     assert_eq!(CONSTRUCTIONS.load(Ordering::SeqCst), 0);
 
-    let consumer = get_required_service!(scope.service_provider(), GraphConsumer)
+    let consumer = scope
+        .service_provider()
+        .get_required_service::<GraphConsumer>()
         .await
         .unwrap();
     assert_eq!(consumer.database.id, consumer.store.database_id());
@@ -191,6 +193,6 @@ async fn graph_snapshot_observes_static_graph_without_constructing_or_merging_tr
     provider.dispose_async().await.unwrap();
     assert_eq!(
         graph,
-        crate::registration::catalog::dependency_graph_json().unwrap()
+        crate::graph::snapshot(&crate::graph::plan::load().graph).to_string()
     );
 }

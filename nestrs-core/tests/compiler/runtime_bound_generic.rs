@@ -3,9 +3,7 @@ use crate::service::ServiceType;
 use nestrs::{bind, factory, injectable};
 use std::marker::PhantomData;
 
-use nestrs_core::{
-    ServiceKey, ServiceProvider, get_required_keyed_service, get_required_service, get_service,
-};
+use nestrs_core::{ServiceKey, ServiceProvider};
 
 struct User;
 struct Order;
@@ -93,39 +91,30 @@ impl KeyedPort for Keyed<Order> {
 
 #[tokio::test]
 async fn trait_only_queries_materialize_closed_bind_targets_and_preserve_factory_fallbacks() {
-    let roots: Vec<_> = crate::registration::catalog::collect().roots;
-    assert!(!roots.is_empty());
-    assert!(roots.iter().all(|root| root.materialize.is_none()));
-    assert!(roots.iter().all(|root| {
-        [
-            ServiceType::create::<dyn Port>(),
-            ServiceType::create::<dyn AliasPort>(),
-            ServiceType::create::<dyn FactoryPort>(),
-            ServiceType::create::<dyn KeyedPort>(),
-        ]
-        .contains(&root.service_type)
-    }));
-    let bindings: Vec<_> = crate::registration::catalog::collect().bindings;
-    assert!(
-        bindings
-            .iter()
-            .find(|binding| binding.concrete_type == ServiceType::create::<FactoryAlias>())
-            .unwrap()
-            .materialize
-            .is_none()
-    );
-    assert_eq!(
-        bindings
-            .iter()
-            .filter(|binding| binding.materialize.is_some())
-            .count(),
-        3
-    );
+    // 最终 reflect 计划已经完成泛型闭合，factory-only 也直接提供同一执行契约。
+    let graph = &crate::graph::plan::load().graph;
+    for service_type in [
+        ServiceType::create::<Repository<User>>(),
+        ServiceType::create::<Cache<User>>(),
+        ServiceType::create::<FactoryAlias>(),
+        ServiceType::create::<Keyed<Order>>(),
+    ] {
+        assert_eq!(
+            graph
+                .nodes
+                .iter()
+                .filter(|node| node.identifier.service_type == service_type)
+                .count(),
+            1
+        );
+    }
+    assert_eq!(graph.nodes.len(), 4);
 
     let provider = ServiceProvider::build().await.unwrap();
-    let repository = get_required_service!(provider, dyn Port).await.unwrap();
+    let repository = provider.get_required_service::<dyn Port>().await.unwrap();
     assert_eq!(repository.value(), 41);
-    let alias = get_required_service!(provider, dyn AliasPort)
+    let alias = provider
+        .get_required_service::<dyn AliasPort>()
         .await
         .unwrap();
     assert_eq!(
@@ -133,27 +122,26 @@ async fn trait_only_queries_materialize_closed_bind_targets_and_preserve_factory
         alias.identity(),
         "both bindings must share one concrete singleton"
     );
-    let factory = get_required_keyed_service!(
-        provider,
-        dyn FactoryPort,
-        ServiceKey::Named("factory".into())
-    )
-    .await
-    .unwrap();
+    let factory = provider
+        .get_required_keyed_service::<dyn FactoryPort>(ServiceKey::Named("factory".into()))
+        .await
+        .unwrap();
     assert_eq!(factory.value(), 73);
     assert!(
-        get_service!(provider, dyn FactoryPort)
+        provider
+            .get_service::<dyn FactoryPort>()
             .await
             .unwrap()
             .is_none()
     );
-    let keyed =
-        get_required_keyed_service!(provider, dyn KeyedPort, ServiceKey::Named("named".into()))
-            .await
-            .unwrap();
+    let keyed = provider
+        .get_required_keyed_service::<dyn KeyedPort>(ServiceKey::Named("named".into()))
+        .await
+        .unwrap();
     assert_eq!(keyed.value(), 91);
     assert!(
-        get_service!(provider, dyn KeyedPort)
+        provider
+            .get_service::<dyn KeyedPort>()
             .await
             .unwrap()
             .is_none()

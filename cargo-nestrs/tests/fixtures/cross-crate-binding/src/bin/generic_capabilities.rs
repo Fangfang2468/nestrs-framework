@@ -2,7 +2,7 @@
 
 use contracts::{EntityReader, IdentityPort, RepositoryPort, UserEntity};
 use fallback_provider as _;
-use nestrs_core::{ServiceProvider, get_required_service};
+use nestrs_core::ServiceProvider;
 use primary_provider as _;
 
 type Reader = dyn EntityReader<Entity = UserEntity> + Send + Sync;
@@ -13,9 +13,10 @@ async fn main() {
     // The imports above are the only references to the implementation crates.
     // This application knows only their public contracts, not concrete types.
     let provider = ServiceProvider::build().await.unwrap();
-    let repository = get_required_service!(provider, Repository).await.unwrap();
-    let reader = get_required_service!(provider, Reader).await.unwrap();
-    let identity = get_required_service!(provider, dyn IdentityPort)
+    let repository = provider.get_required_service::<Repository>().await.unwrap();
+    let reader = provider.get_required_service::<Reader>().await.unwrap();
+    let identity = provider
+        .get_required_service::<dyn IdentityPort>()
         .await
         .unwrap();
     assert_eq!(repository.count(), 23);

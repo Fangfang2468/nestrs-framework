@@ -18,23 +18,19 @@ fn provider_api(provider: &ServiceProvider) {
             max_concurrent_activations: NonZeroUsize::new(4).unwrap(),
         },
     ));
-    std::mem::drop(nestrs_core::get_required_service!(provider, Concrete));
-    std::mem::drop(nestrs_core::get_service!(provider, Concrete));
-    std::mem::drop(nestrs_core::get_required_keyed_service!(
-        provider,
-        Concrete,
-        ServiceKey::Named("primary".to_owned())
-    ));
-    std::mem::drop(nestrs_core::get_keyed_service!(
-        provider,
-        Concrete,
-        ServiceKey::Indexed(1)
-    ));
-    std::mem::drop(nestrs_core::get_required_service!(provider, dyn Port));
+    std::mem::drop(provider.get_required_service::<Concrete>());
+    std::mem::drop(provider.get_service::<Concrete>());
+    std::mem::drop(
+        provider.get_required_keyed_service::<Concrete>(ServiceKey::Named("primary".to_owned())),
+    );
+    std::mem::drop(provider.get_keyed_service::<Concrete>(ServiceKey::Indexed(1)));
+    std::mem::drop(provider.get_required_service::<dyn Port>());
     let _ = provider.create_scope();
 }
 async fn chained_scope_api(scope: &ServiceScope<'_>) {
-    let value = nestrs_core::get_required_service!(scope.service_provider(), Concrete)
+    let value = scope
+        .service_provider()
+        .get_required_service::<Concrete>()
         .await
         .unwrap();
     let _ = std::ptr::from_ref(value);
@@ -73,14 +69,10 @@ fn public_facade_types_and_signatures_are_available() {
 #[tokio::test]
 async fn empty_provider_and_scope_complete_full_lifecycle() {
     let provider = ServiceProvider::build().await.unwrap();
+    assert!(provider.get_service::<Concrete>().await.unwrap().is_none());
     assert!(
-        nestrs_core::get_service!(provider, Concrete)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        nestrs_core::get_required_service!(provider, Concrete)
+        provider
+            .get_required_service::<Concrete>()
             .await
             .unwrap_err()
             .to_string()
@@ -89,7 +81,9 @@ async fn empty_provider_and_scope_complete_full_lifecycle() {
     let scope = provider.create_scope();
     scope.warm_up().await.unwrap();
     assert!(
-        nestrs_core::get_service!(scope.service_provider(), dyn Port)
+        scope
+            .service_provider()
+            .get_service::<dyn Port>()
             .await
             .unwrap()
             .is_none()

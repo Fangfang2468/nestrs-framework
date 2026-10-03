@@ -5,10 +5,9 @@
 
 use super::{Resolution, owner::Published};
 use crate::{
-    activation::{ActivationPreparation, DependencyLease, ReleaseDomain},
+    activation::{ActivationPreparation, DependencyLease, ReleaseDomain, adapter::FactoryInvoker},
     error::ResolveError,
     graph::{Constructor, ValidatedGraph},
-    registration::provider::FactoryInvoker,
 };
 use std::{
     any::Any,
@@ -22,7 +21,7 @@ pub(super) async fn activate(
     graph: Arc<ValidatedGraph>,
     provider: usize,
     inputs: Vec<Option<DependencyLease>>,
-    lazy_inputs: Vec<Option<crate::activation::lazy::LazyDependency>>,
+    lazy_inputs: Vec<Option<crate::activation::LazyDependency>>,
     domain: Arc<ReleaseDomain>,
 ) -> Resolution {
     let node = &graph.nodes[provider];

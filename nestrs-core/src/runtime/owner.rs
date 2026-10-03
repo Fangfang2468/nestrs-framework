@@ -53,6 +53,9 @@ impl Drop for Owner {
 
 pub(super) struct OwnerData {
     pub(super) id: OwnerId,
+    // 一个 owner 的全部延迟字段复用此弱通道，不为每个字段再分配 resolver。
+    // 弱引用不会使 owner journal 中的服务反向延长整个 runtime 的逻辑存活。
+    pub(super) commands: mpsc::WeakUnboundedSender<Command>,
     // 这是跨线程可见的“是否还接受请求”，不是协调器详细关闭阶段的第二份拷贝。
     pub(super) status: AtomicU8,
     pub(super) journal: Mutex<Vec<Published>>,
@@ -60,9 +63,10 @@ pub(super) struct OwnerData {
 }
 
 impl OwnerData {
-    pub(super) fn new(id: OwnerId) -> Arc<Self> {
+    pub(super) fn new(id: OwnerId, commands: mpsc::WeakUnboundedSender<Command>) -> Arc<Self> {
         Arc::new(Self {
             id,
+            commands,
             status: AtomicU8::new(OPEN),
             journal: Mutex::new(Vec::new()),
             close_result: Mutex::new(None),

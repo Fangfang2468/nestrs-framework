@@ -6,7 +6,16 @@ use serde_json::Value;
 
 pub fn render_html(data: &Value) -> Result<String, String> {
     match data.get("version").and_then(Value::as_u64) {
-        Some(1) if data.get("nodes").is_some_and(Value::is_array) => {}
+        Some(1) if data.get("nodes").is_some_and(Value::is_array) => {
+            if data["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|node| !valid_initialization(node.get("initialization")))
+            {
+                return Err("invalid provider initialization policy".into());
+            }
+        }
         Some(2) => validate_project(data)?,
         _ => return Err("unsupported Nestrs graph data version or shape".into()),
     }
@@ -103,6 +112,11 @@ fn valid_key(value: Option<&Value>) -> bool {
     }
 }
 
+/// 缺省表示旧版图或继承声明，不把布尔值或未知字符串隐式转换为初始化策略。
+fn valid_initialization(value: Option<&Value>) -> bool {
+    value.is_none_or(|value| matches!(value.as_str(), Some("inherit" | "lazy" | "eager")))
+}
+
 fn validate_entry_graph(graph: &Value) -> Result<(), &'static str> {
     if graph.get("version").and_then(Value::as_u64) != Some(1) {
         return Err("unsupported graph version");
@@ -130,6 +144,8 @@ fn validate_entry_graph(graph: &Value) -> Result<(), &'static str> {
             || ["primary", "requiresScope"]
                 .iter()
                 .any(|key| !node.get(key).is_some_and(Value::is_boolean))
+            // 旧版图省略此字段时继承容器配置；新字段必须使用明确的策略字符串。
+            || !valid_initialization(node.get("initialization"))
         {
             return Err("invalid or duplicate provider declaration");
         }
@@ -323,6 +339,32 @@ mod tests {
             render_html(&data).is_err(),
             "lazy metadata must use a real boolean"
         );
+    }
+
+    #[test]
+    fn provider_initialization_and_lazy_input_are_independent_compatible_metadata() {
+        let mut data = project_data();
+        assert!(render_html(&data).is_ok(), "旧版节点缺省继承配置");
+        for policy in ["inherit", "lazy", "eager"] {
+            data["entries"][0]["graph"]["nodes"][0]["initialization"] = policy.into();
+            data["entries"][0]["graph"]["nodes"][0]["dependencies"] = serde_json::json!([{
+                "slot": 1, "label": "report", "requested": "app::Report",
+                "requestedLabel": "Report", "optional": true, "lazy": true,
+                "key": null, "target": null
+            }]);
+            let html = render_html(&data).unwrap();
+            assert!(html.contains("data-initialization"));
+            assert!(html.contains("服务初始化"));
+            assert!(html.contains("普通依赖需要它时仍会构造"));
+            assert!(html.contains("字段延迟注入"));
+            assert!(html.contains("data-lazy"));
+            assert!(render_html(&data["entries"][0]["graph"]).is_ok());
+        }
+        for invalid in [Value::Null, true.into(), "automatic".into(), 1.into()] {
+            data["entries"][0]["graph"]["nodes"][0]["initialization"] = invalid;
+            assert!(render_html(&data).is_err());
+            assert!(render_html(&data["entries"][0]["graph"]).is_err());
+        }
     }
 
     #[test]

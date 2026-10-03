@@ -1,4 +1,3 @@
-use crate::registration::binding::TraitBinding;
 use crate::service::{ServiceIdentifier, ServiceKey, ServiceType};
 use nestrs::{bind, injectable};
 
@@ -19,24 +18,31 @@ impl Greeter for GreeterService {}
 impl HealthCheck for HealthCheckService {}
 
 #[test]
-fn bind_collects_typed_trait_bindings() {
-    let bindings: Vec<TraitBinding> = crate::registration::catalog::collect().bindings;
-
-    assert_eq!(bindings.len(), 2);
-    assert!(bindings.iter().any(|binding| {
-        binding.concrete_type == ServiceType::create::<GreeterService>()
-            && binding.trait_type == ServiceType::create::<dyn Greeter>()
-    }));
-    assert!(bindings.iter().any(|binding| {
-        binding.concrete_type == ServiceType::create::<HealthCheckService>()
-            && binding.trait_type == ServiceType::create::<dyn HealthCheck>()
-    }));
+fn bind_freezes_typed_routes_without_additional_service_nodes() {
+    let graph = &crate::graph::plan::load().graph;
+    assert_eq!(graph.nodes.len(), 2);
+    assert_eq!(
+        graph
+            .routes
+            .values()
+            .filter(|route| route.projection.is_some())
+            .count(),
+        2
+    );
+    assert_eq!(
+        graph
+            .routes
+            .values()
+            .filter(|route| route.projection.is_none())
+            .count(),
+        2
+    );
 }
 
 #[test]
 fn bind_inherits_concrete_keys_without_default_or_cross_key_fallback() {
-    // 用真实图行为验证 key 继承，避免只断言一个不被图编译器读取的策略标签。
-    let graph = crate::graph::GraphCompiler::compile_static().unwrap();
+    // 直接验证工具链产出的运行期计划；不在测试中再次执行另一份候选选择算法。
+    let graph = &crate::graph::plan::load().graph;
     for (interface, concrete, key) in [
         (
             ServiceType::create::<dyn Greeter>(),

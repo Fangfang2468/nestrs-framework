@@ -32,6 +32,7 @@ fn common(lifetime: ServiceLifetime) -> ProviderCommon {
     ProviderCommon {
         lifetime,
         primary: false,
+        lazy: None,
         source: ServiceSource::new("src/services.rs", 17, 9),
         cleanup: None,
     }
@@ -59,6 +60,7 @@ fn dependency(
         requested: identifier(requested),
         optional: target.is_none(),
         lazy: None,
+        lazy_plan: None,
         prepare: prepare_required::<()>,
         label: Some(label),
     }
@@ -67,7 +69,7 @@ fn dependency(
 fn node(name: &'static str, dependencies: Vec<CompiledDependency>) -> CompiledNode {
     CompiledNode {
         identifier: identifier(name),
-        common: common(ServiceLifetime::Singleton),
+        common: common(ServiceLifetime::Singleton).into(),
         dependencies,
         constructor: Constructor::Class(must_not_construct),
         requires_scope: false,
@@ -123,7 +125,6 @@ fn preserves_provider_metadata_trait_selection_keys_and_optional_absence() {
     let mut named = node("app::Client", vec![]);
     named.identifier.service_key = Some(ServiceKey::Named("card".into()));
     named.constructor = Constructor::Factory(FactoryInvoker::Sync(must_not_construct_sync));
-    named.common.primary = true;
     let mut indexed = node("app::Client", vec![]);
     indexed.identifier.service_key = Some(ServiceKey::Indexed(7));
     indexed.constructor = Constructor::Factory(FactoryInvoker::Async(must_not_construct_async));
@@ -170,7 +171,10 @@ fn preserves_provider_metadata_trait_selection_keys_and_optional_absence() {
     );
     assert_eq!(nodes[1]["lifetime"], "Singleton");
     assert_eq!(nodes[1]["kind"], "sync factory");
-    assert_eq!(nodes[1]["primary"], true);
+    assert!(
+        nodes[1].get("primary").is_none(),
+        "运行计划不保留候选优先级"
+    );
     assert_eq!(nodes[1]["key"], nodes[0]["dependencies"][0]["key"]);
     assert_eq!(nodes[2]["lifetime"], "Transient");
     assert_eq!(nodes[2]["kind"], "async factory");
@@ -282,6 +286,7 @@ fn compiler_enumeration_order_does_not_change_snapshot() {
                 token: database,
                 optional: false,
                 lazy: None,
+                project: None,
                 label: Some("database"),
                 delivery: Delivery::Direct(prepare_required::<Database>),
                 provider_source: ProviderSource::Registered,

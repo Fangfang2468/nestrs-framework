@@ -4,7 +4,7 @@
 //! 已经被 rustc 移除。没有通过手写内部描述绕过用户实际使用的宏生成路径。
 
 use nestrs::injectable;
-use nestrs_core::{Injection, LazyInjection, ServiceProvider, get_required_service};
+use nestrs_core::{Injection, LazyInjection, ServiceProvider};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
@@ -87,16 +87,20 @@ fn expects_immediate<T: ?Sized>(_: &Injection<T>) {}
 #[tokio::test(flavor = "current_thread")]
 async fn conditional_fields_and_unsized_aliases_preserve_lazy_input_semantics() {
     let provider = ServiceProvider::build().await.unwrap();
-    let configured = get_required_service!(provider, ConfiguredFields)
+    let configured = provider
+        .get_required_service::<ConfiguredFields>()
         .await
         .unwrap();
-    let tuple = get_required_service!(provider, ConfiguredTuple)
+    let tuple = provider
+        .get_required_service::<ConfiguredTuple>()
         .await
         .unwrap();
-    let interface = get_required_service!(provider, ClosedInterfaceAlias)
+    let interface = provider
+        .get_required_service::<ClosedInterfaceAlias>()
         .await
         .unwrap();
-    let concrete = get_required_service!(provider, ClosedConcreteAlias)
+    let concrete = provider
+        .get_required_service::<ClosedConcreteAlias>()
         .await
         .unwrap();
 
@@ -118,7 +122,8 @@ async fn conditional_fields_and_unsized_aliases_preserve_lazy_input_semantics() 
     assert!(std::ptr::eq(concrete.target.get().await.unwrap(), report));
     assert_eq!(CONSTRUCTIONS.load(Ordering::SeqCst), 1);
 
-    let immediate = get_required_service!(provider, ImmediateWhenLazyIsDisabled)
+    let immediate = provider
+        .get_required_service::<ImmediateWhenLazyIsDisabled>()
         .await
         .unwrap();
     expects_immediate::<ConcreteAlias>(&immediate.target);

@@ -76,18 +76,7 @@ pub fn capture_rustc(args: &[String]) -> Result<(), String> {
         .collect();
     unit.cfg.sort();
     unit.cfg.dedup();
-    let mut identity = DefaultHasher::new();
-    // The same artifact may be rebuilt with changed cfg or build-script env.
-    // Replace its record instead of retaining stale variants of that artifact.
-    (
-        &unit.out_dir,
-        &unit.crate_name,
-        &unit.extra_filename,
-        unit.test,
-        &unit.crate_types,
-    )
-        .hash(&mut identity);
-    let path = PathBuf::from(directory).join(format!("{:016x}.json", identity.finish()));
+    let path = PathBuf::from(directory).join(format!("{:016x}.json", unit.identity()));
     super::write_atomic(
         &path,
         &serde_json::to_vec(&unit).map_err(|error| error.to_string())?,
@@ -95,7 +84,11 @@ pub fn capture_rustc(args: &[String]) -> Result<(), String> {
 }
 
 impl Unit {
-    fn parse(args: &[String], cwd: &Path, environment: BTreeMap<String, String>) -> Option<Self> {
+    pub(super) fn parse(
+        args: &[String],
+        cwd: &Path,
+        environment: BTreeMap<String, String>,
+    ) -> Option<Self> {
         let crate_name = values(args, "--crate-name").pop()?;
         let out_dir = absolute(cwd, values(args, "--out-dir").pop()?);
         let root_module = args
@@ -149,6 +142,20 @@ impl Unit {
 
     pub fn is_proc_macro(&self) -> bool {
         !self.test && self.crate_types.iter().any(|kind| kind == "proc-macro")
+    }
+
+    /// 编译命令记录与语义 sidecar 共用相同身份；不能按 crate 名混合 feature/test 变体。
+    pub(super) fn identity(&self) -> u64 {
+        let mut identity = DefaultHasher::new();
+        (
+            &self.out_dir,
+            &self.crate_name,
+            &self.extra_filename,
+            self.test,
+            &self.crate_types,
+        )
+            .hash(&mut identity);
+        identity.finish()
     }
 
     pub fn owns_artifact(&self, path: &Path) -> bool {

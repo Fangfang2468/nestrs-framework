@@ -87,10 +87,14 @@ fn macro_declarations_preserve_all_ui_contracts() {
     let failing = sources(&fixture.join("tests/ui/fail"));
     let macro_passing = sources(&fixture.join("tests/ui/macro-pass"));
     let macro_failing = sources(&fixture.join("tests/ui/macro-fail"));
-    assert_eq!(passing.len(), 15, "preserve every original passing case");
+    assert_eq!(
+        passing.len(),
+        21,
+        "preserve original cases and allow compiler-collected generic, Self and ordinary method queries"
+    );
     assert_eq!(
         failing.len(),
-        39,
+        41,
         "preserve original errors and independently verify private modules/root exports and lazy target borrowing"
     );
     assert_eq!(

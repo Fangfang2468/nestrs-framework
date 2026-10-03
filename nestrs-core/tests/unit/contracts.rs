@@ -46,6 +46,7 @@ mod class_provider {
             common: ProviderCommon {
                 lifetime: ServiceLifetime::Scoped,
                 primary: true,
+                lazy: None,
                 source: ServiceSource::new("class_provider.rs", 30, 1),
                 cleanup: None,
             },
@@ -57,6 +58,7 @@ mod class_provider {
                     token: ServiceIdentifier::from(ServiceType::create::<Database>()),
                     optional: false,
                     lazy: None,
+                    project: None,
                     delivery: Delivery::Direct(crate::activation::prepare_required::<Database>),
                     provider_source: ProviderSource::Registered,
                 },
@@ -70,6 +72,7 @@ mod class_provider {
                     ),
                     optional: true,
                     lazy: None,
+                    project: None,
                     delivery: Delivery::RequiresBindingOrAbsent(
                         crate::activation::prepare_optional_absent::<dyn Audit>,
                     ),
@@ -151,6 +154,7 @@ mod class_provider {
             common: ProviderCommon {
                 lifetime: ServiceLifetime::Singleton,
                 primary: false,
+                lazy: None,
                 source: ServiceSource::new("class_provider.rs", 1, 1),
                 cleanup: None,
             },
@@ -210,6 +214,7 @@ mod provider_definition {
                 common: ProviderCommon {
                     lifetime: ServiceLifetime::Singleton,
                     primary: false,
+                    lazy: None,
                     source: ServiceSource::new("provider_definition.rs", 1, 1),
                     cleanup: None,
                 },
@@ -229,6 +234,7 @@ mod provider_definition {
             token: ServiceIdentifier::from(ServiceType::create::<Repository<Entity>>()),
             optional: false,
             lazy: None,
+            project: None,
             delivery: Delivery::Direct(prepare_required::<Repository<Entity>>),
             provider_source: ProviderSource::Materialize(callback),
         };
@@ -352,6 +358,7 @@ mod escaped_adapter {
         ProviderCommon {
             lifetime: ServiceLifetime::Singleton,
             primary: false,
+            lazy: None,
             source: ServiceSource::new(file!(), line!(), column!()),
             cleanup: None,
         }
@@ -377,6 +384,7 @@ mod escaped_adapter {
                 token: ServiceIdentifier::from(ServiceType::create::<Dependency>()),
                 optional: false,
                 lazy: None,
+                project: None,
                 label: Some("captured_dependency"),
                 delivery: Delivery::Direct(prepare_required::<Dependency>),
                 provider_source: ProviderSource::Registered,

@@ -149,12 +149,12 @@ fn private_state_and_first_downstream_generic_roots_survive_codegen_without_beco
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let provider = nestrs_core::ServiceProvider::build().await.unwrap();
-    let first = nestrs_core::get_required_service!(provider, dyn upstream::Record).await.unwrap();
-    let second = nestrs_core::get_required_service!(provider, dyn upstream::Record).await.unwrap();
+    let first = provider.get_required_service::<dyn upstream::Record>().await.unwrap();
+    let second = provider.get_required_service::<dyn upstream::Record>().await.unwrap();
     assert_eq!(first.serial(), (10, 40));
     assert_eq!(second.serial(), (11, 41));
-    let byte = nestrs_core::get_required_service!(provider, upstream::Repository<u8>).await.unwrap();
-    let word = nestrs_core::get_required_service!(provider, upstream::Repository<u16>).await.unwrap();
+    let byte = provider.get_required_service::<upstream::Repository<u8>>().await.unwrap();
+    let word = provider.get_required_service::<upstream::Repository<u16>>().await.unwrap();
     assert_eq!(byte.serial(), (20, 30, 1));
     assert_eq!(word.serial(), (21, 31, 2));
     provider.dispose_async().await.unwrap();

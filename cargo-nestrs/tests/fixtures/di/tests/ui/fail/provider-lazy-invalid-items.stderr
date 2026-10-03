@@ -1,0 +1,5 @@
+error: 结构体上的 #[lazy] 必须与 #[injectable] 配合使用
+error: 函数上的 #[lazy] 必须与 #[factory] 配合使用
+error: #[lazy] 只能标注 #[injectable] 结构体或 #[factory] 函数
+error: #[lazy] 只能标注 #[injectable] 结构体或 #[factory] 函数
+error: #[lazy] 只能标注 #[injectable] 结构体或 #[factory] 函数

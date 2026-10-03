@@ -129,85 +129,78 @@ async fn static_graph_full_lifecycle_and_frozen_routes() {
     let scope2 = provider.create_scope();
     assert_eq!(DATABASES.load(Ordering::SeqCst), 0);
     let (left, right) = tokio::join!(
-        nestrs_core::get_required_service!(scope1.service_provider(), Database),
-        nestrs_core::get_required_service!(scope2.service_provider(), Database)
+        scope1.service_provider().get_required_service::<Database>(),
+        scope2.service_provider().get_required_service::<Database>()
     );
     assert!(std::ptr::eq(left.unwrap(), right.unwrap()));
     assert_eq!(DATABASES.load(Ordering::SeqCst), 1);
-    let one = nestrs_core::get_required_service!(scope1.service_provider(), Request)
+    let one = scope1
+        .service_provider()
+        .get_required_service::<Request>()
         .await
         .unwrap();
-    let again = nestrs_core::get_required_service!(scope1.service_provider(), Request)
+    let again = scope1
+        .service_provider()
+        .get_required_service::<Request>()
         .await
         .unwrap();
-    let two = nestrs_core::get_required_service!(scope2.service_provider(), Request)
+    let two = scope2
+        .service_provider()
+        .get_required_service::<Request>()
         .await
         .unwrap();
     assert!(std::ptr::eq(one, again));
     assert_ne!(one.id, two.id);
     assert_eq!(one.db, two.db);
-    assert!(nestrs_core::get_service!(provider, Request).await.is_err());
-    assert!(
-        nestrs_core::get_service!(provider, NeedsScope)
-            .await
-            .is_err()
-    );
+    assert!(provider.get_service::<Request>().await.is_err());
+    assert!(provider.get_service::<NeedsScope>().await.is_err());
     assert_eq!(
-        nestrs_core::get_required_service!(scope1.service_provider(), NeedsScope)
+        scope1
+            .service_provider()
+            .get_required_service::<NeedsScope>()
             .await
             .unwrap()
             .request
             .id,
         one.id
     );
-    let a = nestrs_core::get_required_service!(provider, Tick)
-        .await
-        .unwrap();
-    let b = nestrs_core::get_required_service!(provider, Tick)
-        .await
-        .unwrap();
+    let a = provider.get_required_service::<Tick>().await.unwrap();
+    let b = provider.get_required_service::<Tick>().await.unwrap();
     assert_ne!(a.id, b.id);
-    let app = nestrs_core::get_required_service!(provider, App)
-        .await
-        .unwrap();
+    let app = provider.get_required_service::<App>().await.unwrap();
     assert_ne!(app.first.id, app.second.id);
     assert_eq!(app.database.id, one.db);
     assert!(app.absent.is_none() && app.absent_trait.is_none());
     assert_eq!(
-        nestrs_core::get_required_service!(provider, dyn Greeting)
+        provider
+            .get_required_service::<dyn Greeting>()
             .await
             .unwrap()
             .text(),
         "hello"
     );
     assert_eq!(
-        nestrs_core::get_required_keyed_service!(
-            provider,
-            dyn Greeting,
-            ServiceKey::Named("zh".into())
-        )
-        .await
-        .unwrap()
-        .text(),
-        "你好"
-    );
-    assert!(
-        nestrs_core::get_service!(provider, Chinese)
+        provider
+            .get_required_keyed_service::<dyn Greeting>(ServiceKey::Named("zh".into()))
             .await
             .unwrap()
-            .is_none()
+            .text(),
+        "你好"
     );
+    assert!(provider.get_service::<Chinese>().await.unwrap().is_none());
     assert_eq!(
-        nestrs_core::get_required_service!(provider, Repository<User>)
+        provider
+            .get_required_service::<Repository<User>>()
             .await
             .unwrap()
             .cache
             .value,
         99
     );
-    // The query macro contributes this closed type before build, although it is first queried here.
+    // 编译器在构建前收集方法查询的闭合类型，即使直到这里才首次查询。
     assert_eq!(
-        nestrs_core::get_service!(provider, Cache<QueryOnly>)
+        provider
+            .get_service::<Cache<QueryOnly>>()
             .await
             .unwrap()
             .unwrap()
@@ -215,18 +208,16 @@ async fn static_graph_full_lifecycle_and_frozen_routes() {
         10
     );
     assert!(
-        nestrs_core::get_service!(provider, KeyedCache<User>)
+        provider
+            .get_service::<KeyedCache<User>>()
             .await
             .unwrap()
             .is_none()
     );
-    nestrs_core::get_required_keyed_service!(
-        provider,
-        KeyedCache<User>,
-        ServiceKey::Named("named".into())
-    )
-    .await
-    .unwrap();
+    provider
+        .get_required_keyed_service::<KeyedCache<User>>(ServiceKey::Named("named".into()))
+        .await
+        .unwrap();
     scope1.warm_up().await.unwrap();
     assert_eq!(REQUESTS.load(Ordering::SeqCst), 2);
     scope1.dispose_async().await.unwrap();
@@ -242,9 +233,7 @@ async fn static_graph_full_lifecycle_and_frozen_routes() {
     .unwrap();
     assert_eq!(DATABASES.load(Ordering::SeqCst), 2);
     assert_eq!(REQUESTS.load(Ordering::SeqCst), 2);
-    nestrs_core::get_required_service!(eager, App)
-        .await
-        .unwrap();
+    eager.get_required_service::<App>().await.unwrap();
     assert_eq!(DATABASES.load(Ordering::SeqCst), 2);
     let scope = eager.create_scope();
     scope.warm_up().await.unwrap();

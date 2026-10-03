@@ -1,0 +1,95 @@
+//! 显式构造函数只提供 Class adapter 与输入描述，不再创建第二份 provider。
+//!
+//! 生成项先经过标准展开/名称解析。driver 随后按 impl 的真实类型身份把它们接到
+//! injectable 的唯一注册上，并按名称解析后的字段来源改写结构体。参数、函数体以及最终
+//! 字段赋值仍交给 Rust 的类型、借用和可见性检查。
+
+use zyn::{Render, quote::quote, syn};
+
+use super::{
+    constructor::{ConstructorResultKind, analyze_constructor},
+    injection::render::EmitDependencyRequest,
+};
+
+pub(super) fn expand(
+    args: zyn::TokenStream,
+    input: zyn::TokenStream,
+) -> syn::Result<zyn::TokenStream> {
+    if !args.is_empty() {
+        return Err(syn::Error::new_spanned(
+            args,
+            "#[constructor] 不接受参数；服务策略由 #[injectable] 声明",
+        ));
+    }
+    let analysis = analyze_constructor(syn::parse2(input)?)?;
+    let item = &analysis.item;
+    let method = &item.sig.ident;
+    let mapping = serde_json::json!({
+        "method": method.to_string(),
+        "result": analysis.result_kind == ConstructorResultKind::Result
+    })
+    .to_string();
+    let mut dependencies = Vec::new();
+    let mut arguments = Vec::new();
+    for parameter in &analysis.parameters {
+        dependencies.push(
+            EmitDependencyRequest {
+                request: parameter.dependency_request(),
+            }
+            .render(&zyn::Input::default())
+            .tokens()
+            .clone(),
+        );
+        let ty = &parameter.service_type;
+        let slot = parameter.input_slot;
+        let take = syn::Ident::new(
+            match (parameter.lazy, parameter.optional) {
+                (false, false) => "take",
+                (false, true) => "take_optional",
+                (true, false) => "take_lazy",
+                (true, true) => "take_optional_lazy",
+            },
+            zyn::proc_macro2::Span::call_site(),
+        );
+        arguments.push(
+            quote!(__nestrs_inputs.#take::<#ty>(::nestrs_core::activation::InputSlot::new(#slot))?),
+        );
+    }
+    let call = quote!(Self::#method(#(#arguments),*));
+    let construct = match analysis.result_kind {
+        ConstructorResultKind::Direct => call,
+        ConstructorResultKind::Result => {
+            quote!(#call.map_err(|error| ::nestrs_core::activation::ConstructionError::ConstructorFailed {
+            provider: ::core::any::type_name::<Self>(),
+            provider_source: ::nestrs_core::service::ServiceSource::new(file!(), line!(), column!()),
+            detail: ::std::format!("{error:?}"),
+        })?)
+        }
+    };
+    let reflection = super::reflection::support(false);
+    let mutable = (!analysis.parameters.is_empty()).then(|| quote!(mut));
+    Ok(quote! {
+        #item
+
+        #[doc(hidden)]
+        #[allow(dead_code)]
+        const __NESTRS_CONSTRUCTOR: &'static str = #mapping;
+
+        #[doc(hidden)]
+        #[allow(dead_code)]
+        pub(crate) fn __nestrs_constructor_dependencies() -> ::std::vec::Vec<::nestrs_core::activation::adapter::InputAdapter> {
+            #reflection
+            ::std::vec![#(#dependencies),*]
+        }
+
+        #[doc(hidden)]
+        #[allow(dead_code)]
+        pub(crate) fn __nestrs_constructor_activate(
+            #mutable __nestrs_inputs: ::nestrs_core::activation::ConstructionInputs,
+        ) -> ::core::result::Result<::nestrs_core::activation::ErasedService, ::nestrs_core::activation::ConstructionError> {
+            let __nestrs_instance = #construct;
+            __nestrs_inputs.ensure_all_consumed()?;
+            ::core::result::Result::Ok(::nestrs_core::activation::ErasedService::new(__nestrs_instance))
+        }
+    })
+}

@@ -80,7 +80,6 @@ impl FieldSpec {
         };
 
         DependencyRequest {
-            declaration_position: self.index,
             input_slot: self
                 .input_slot
                 .expect("inject field must have an input slot"),

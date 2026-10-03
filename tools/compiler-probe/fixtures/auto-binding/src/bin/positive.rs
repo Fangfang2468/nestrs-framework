@@ -46,10 +46,9 @@ mod warehouse {
     implement_stock!(Inventory);
 
     pub(crate) async fn assert_identity(provider: &ServiceProvider) {
-        let concrete = nestrs_core::get_required_service!(provider, Inventory)
-            .await
-            .unwrap();
-        let interface = nestrs_core::get_required_service!(provider, dyn StockPort)
+        let concrete = provider.get_required_service::<Inventory>().await.unwrap();
+        let interface = provider
+            .get_required_service::<dyn StockPort>()
             .await
             .unwrap();
         assert_eq!(interface.available(), 17);
@@ -214,19 +213,20 @@ async fn main() {
     assert_eq!(CONNECTIONS.load(Ordering::SeqCst), 0);
     warehouse::assert_identity(&provider).await;
 
-    let concrete = nestrs_core::get_required_service!(provider, Connection)
-        .await
-        .unwrap();
-    let interface = nestrs_core::get_required_service!(provider, dyn ConnectionPort)
+    let concrete = provider.get_required_service::<Connection>().await.unwrap();
+    let interface = provider
+        .get_required_service::<dyn ConnectionPort>()
         .await
         .unwrap();
     assert_eq!(interface.identity(), concrete as *const Connection as usize);
     assert_eq!(CONNECTIONS.load(Ordering::SeqCst), 1);
 
-    let repository = nestrs_core::get_required_service!(provider, UserRepository)
+    let repository = provider
+        .get_required_service::<UserRepository>()
         .await
         .unwrap();
-    let repository_port = nestrs_core::get_required_service!(provider, dyn RepositoryPort<User>)
+    let repository_port = provider
+        .get_required_service::<dyn RepositoryPort<User>>()
         .await
         .unwrap();
     assert_eq!(
@@ -235,49 +235,51 @@ async fn main() {
     );
     assert!(repository_port.entity_name().ends_with("::User"));
 
-    let greeting = nestrs_core::get_required_service!(provider, dyn GreetingPort)
+    let greeting = provider
+        .get_required_service::<dyn GreetingPort>()
         .await
         .unwrap();
     assert_eq!(greeting.text(), "hello");
-    let chinese = nestrs_core::get_required_keyed_service!(
-        provider,
-        dyn GreetingPort,
-        ServiceKey::Named("zh".into())
-    )
-    .await
-    .unwrap();
+    let chinese = provider
+        .get_required_keyed_service::<dyn GreetingPort>(ServiceKey::Named("zh".into()))
+        .await
+        .unwrap();
     assert_eq!(chinese.text(), "你好");
     assert!(
-        nestrs_core::get_service!(provider, dyn MissingPlugin)
+        provider
+            .get_service::<dyn MissingPlugin>()
             .await
             .unwrap()
             .is_none()
     );
-    assert!(
-        nestrs_core::get_service!(provider, dyn SessionPort)
-            .await
-            .is_err()
-    );
+    assert!(provider.get_service::<dyn SessionPort>().await.is_err());
 
     let left = provider.create_scope();
     let right = provider.create_scope();
-    let left_session = nestrs_core::get_required_service!(left.service_provider(), dyn SessionPort)
+    let left_session = left
+        .service_provider()
+        .get_required_service::<dyn SessionPort>()
         .await
         .unwrap();
-    let left_concrete = nestrs_core::get_required_service!(left.service_provider(), Session)
+    let left_concrete = left
+        .service_provider()
+        .get_required_service::<Session>()
         .await
         .unwrap();
-    let right_session =
-        nestrs_core::get_required_service!(right.service_provider(), dyn SessionPort)
-            .await
-            .unwrap();
+    let right_session = right
+        .service_provider()
+        .get_required_service::<dyn SessionPort>()
+        .await
+        .unwrap();
     assert_eq!(
         left_session.identity(),
         left_concrete as *const Session as usize
     );
     assert_ne!(left_session.id(), right_session.id());
     assert_eq!(left_session.connection_id(), right_session.connection_id());
-    let checkout = nestrs_core::get_required_service!(left.service_provider(), Checkout)
+    let checkout = left
+        .service_provider()
+        .get_required_service::<Checkout>()
         .await
         .unwrap();
     assert_eq!(checkout.inventory.available(), 17);

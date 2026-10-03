@@ -1,7 +1,8 @@
-use nestrs::{bind};
+use nestrs::{bind, injectable};
 
 trait ServiceInterface: Send + Sync {}
 
+#[injectable]
 struct Service;
 
 #[bind]

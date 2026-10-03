@@ -3,10 +3,7 @@
 //! 同一测试二进制包含全部合法声明；每个用例建立独立容器。静态计数与门闩
 //! 由测试锁隔离，避免并行测试把不同 root 的构造次数混在一起。
 use nestrs::{factory, injectable};
-use nestrs_core::{
-    InitializationMode, LazyInjection, ServiceProvider, ServiceProviderOptions,
-    get_required_service,
-};
+use nestrs_core::{InitializationMode, LazyInjection, ServiceProvider, ServiceProviderOptions};
 use std::{
     marker::PhantomData,
     num::NonZeroUsize,
@@ -125,7 +122,10 @@ async fn fields_defer_the_complete_target_closure_and_preserve_routes() {
     REPORT_BACKENDS.store(0, Ordering::SeqCst);
     REPORTS.store(0, Ordering::SeqCst);
     let provider = ServiceProvider::build().await.unwrap();
-    let orders = get_required_service!(provider, OrderService).await.unwrap();
+    let orders = provider
+        .get_required_service::<OrderService>()
+        .await
+        .unwrap();
     assert_eq!(REPORTS.load(Ordering::SeqCst), 0);
     assert_eq!(REPORT_BACKENDS.load(Ordering::SeqCst), 0);
     assert!(orders.absent.is_none() && orders.absent_port.is_none());
@@ -141,7 +141,10 @@ async fn fields_defer_the_complete_target_closure_and_preserve_routes() {
     assert_eq!(REPORTS.load(Ordering::SeqCst), 1);
     assert_eq!(REPORT_BACKENDS.load(Ordering::SeqCst), 1);
 
-    let keyed = get_required_service!(provider, KeyedReports).await.unwrap();
+    let keyed = provider
+        .get_required_service::<KeyedReports>()
+        .await
+        .unwrap();
     let sales = keyed.sales.get().await.unwrap();
     let concrete = keyed.sales_concrete.get().await.unwrap();
     assert_eq!(sales.name(), "sales");
@@ -160,7 +163,8 @@ async fn fields_defer_the_complete_target_closure_and_preserve_routes() {
     );
     assert!(keyed.wrong_key_kind.is_none());
 
-    let generic = get_required_service!(provider, GenericReports<Customer>)
+    let generic = provider
+        .get_required_service::<GenericReports<Customer>>()
         .await
         .unwrap();
     assert_eq!(generic.cache.get().await.unwrap().capacity, 88);
@@ -222,16 +226,21 @@ async fn lazy_fields_preserve_scope_and_transient_occurrence_identity() {
     TRANSIENT_TARGETS.store(0, Ordering::SeqCst);
     let provider = ServiceProvider::build().await.unwrap();
     assert!(
-        get_required_service!(provider, DeferredScopeRequirement)
+        provider
+            .get_required_service::<DeferredScopeRequirement>()
             .await
             .is_err()
     );
     let first_scope = provider.create_scope();
     let second_scope = provider.create_scope();
-    let first = get_required_service!(first_scope.service_provider(), ScopedConsumer)
+    let first = first_scope
+        .service_provider()
+        .get_required_service::<ScopedConsumer>()
         .await
         .unwrap();
-    let second = get_required_service!(second_scope.service_provider(), ScopedConsumer)
+    let second = second_scope
+        .service_provider()
+        .get_required_service::<ScopedConsumer>()
         .await
         .unwrap();
     assert_eq!(SCOPED_TARGETS.load(Ordering::SeqCst), 0);
@@ -241,10 +250,11 @@ async fn lazy_fields_preserve_scope_and_transient_occurrence_identity() {
     let first_scoped = first.scoped.get().await.unwrap();
     let second_scoped = second.scoped.get().await.unwrap();
     assert_ne!(first_scoped.id, second_scoped.id);
-    let scoped_dependency =
-        get_required_service!(first_scope.service_provider(), DeferredScopeRequirement)
-            .await
-            .unwrap();
+    let scoped_dependency = first_scope
+        .service_provider()
+        .get_required_service::<DeferredScopeRequirement>()
+        .await
+        .unwrap();
     assert!(std::ptr::eq(
         first_scoped,
         scoped_dependency.scoped.get().await.unwrap(),
@@ -322,7 +332,8 @@ async fn cancelled_waiters_do_not_duplicate_the_fixed_lazy_occurrence() {
     FAILED_CONSTRUCTIONS.store(0, Ordering::SeqCst);
     PANICKING_CONSTRUCTIONS.store(0, Ordering::SeqCst);
     let provider = ServiceProvider::build().await.unwrap();
-    let consumer = get_required_service!(provider, DelayedConsumer)
+    let consumer = provider
+        .get_required_service::<DelayedConsumer>()
         .await
         .unwrap();
     let mut first = Box::pin(consumer.report.get());
@@ -343,7 +354,8 @@ async fn cancelled_waiters_do_not_duplicate_the_fixed_lazy_occurrence() {
     assert!(std::ptr::eq(second, third.unwrap()));
     assert_eq!(DELAY_CONSTRUCTIONS.load(Ordering::SeqCst), 1);
 
-    let failed = get_required_service!(provider, FailedConsumer)
+    let failed = provider
+        .get_required_service::<FailedConsumer>()
         .await
         .unwrap();
     let (first_error, second_error) = tokio::join!(failed.report.get(), failed.report.get());
@@ -354,13 +366,15 @@ async fn cancelled_waiters_do_not_duplicate_the_fixed_lazy_occurrence() {
     assert!(failed.report.get().await.is_err());
     assert_eq!(FAILED_CONSTRUCTIONS.load(Ordering::SeqCst), 1);
     // Transient 的另一消费槽位仍是一次独立尝试。
-    let another = get_required_service!(provider, FailedConsumer)
+    let another = provider
+        .get_required_service::<FailedConsumer>()
         .await
         .unwrap();
     assert!(another.report.get().await.is_err());
     assert_eq!(FAILED_CONSTRUCTIONS.load(Ordering::SeqCst), 2);
 
-    let panicking = get_required_service!(provider, PanickingConsumer)
+    let panicking = provider
+        .get_required_service::<PanickingConsumer>()
         .await
         .unwrap();
     let error = panicking.report.get().await.err().unwrap().to_string();
@@ -433,7 +447,10 @@ async fn late_dependencies_cleanup_after_consumers_and_escaped_leases_remain_saf
     CLEANUP_ORDER.lock().unwrap().clear();
     LATE_DROPS.store(0, Ordering::SeqCst);
     let provider = ServiceProvider::build().await.unwrap();
-    let consumer = get_required_service!(provider, LateConsumer).await.unwrap();
+    let consumer = provider
+        .get_required_service::<LateConsumer>()
+        .await
+        .unwrap();
     assert_eq!(
         consumer.report.as_ref().unwrap().get().await.unwrap().value,
         73
@@ -451,7 +468,7 @@ async fn late_dependencies_cleanup_after_consumers_and_escaped_leases_remain_saf
 
     // 从未开始获取的句柄不能在 owner 已关闭后新建实例。
     let unused = ServiceProvider::build().await.unwrap();
-    get_required_service!(unused, LateConsumer).await.unwrap();
+    unused.get_required_service::<LateConsumer>().await.unwrap();
     unused.dispose_async().await.unwrap();
     let escaped_unused = ESCAPED.lock().unwrap().take().unwrap();
     assert!(escaped_unused.get().await.is_err());
@@ -459,7 +476,8 @@ async fn late_dependencies_cleanup_after_consumers_and_escaped_leases_remain_saf
 
     CLEANUP_ORDER.lock().unwrap().clear();
     let panics = ServiceProvider::build().await.unwrap();
-    get_required_service!(panics, BadCleanupConsumer)
+    panics
+        .get_required_service::<BadCleanupConsumer>()
         .await
         .unwrap()
         .report
@@ -504,14 +522,15 @@ async fn unresolved_lazy_access_during_construction_fails_instead_of_deadlocking
     .unwrap();
     let probe = tokio::time::timeout(
         Duration::from_secs(5),
-        get_required_service!(provider, ConstructionProbe),
+        provider.get_required_service::<ConstructionProbe>(),
     )
     .await
     .expect("单个构造名额下不能等待自己释放名额")
     .unwrap();
     assert!(probe.diagnostic.contains("构造"));
     // 阶段限制不应变成目标的永久失败；业务阶段仍能正常初始化它。
-    let guard = get_required_service!(provider, ConstructionGuard)
+    let guard = provider
+        .get_required_service::<ConstructionGuard>()
         .await
         .unwrap();
     guard.target.get().await.unwrap();
@@ -556,7 +575,8 @@ async fn eager_selection_is_independent_of_a_consumers_lazy_field() {
     .unwrap();
     assert_eq!(EAGER_TARGETS.load(Ordering::SeqCst), 1);
     assert_eq!(EAGER_DEFERRED.load(Ordering::SeqCst), 0);
-    let consumer = get_required_service!(provider, EagerConsumer)
+    let consumer = provider
+        .get_required_service::<EagerConsumer>()
         .await
         .unwrap();
     assert_eq!(consumer.target.get().await.unwrap().id, 0);
@@ -615,7 +635,9 @@ async fn accepted_lazy_work_drains_after_both_query_and_disposal_are_cancelled()
     // scope 预热会创建 Scoped 消费者，延迟的 Transient 仍保持未构造。
     scope.warm_up().await.unwrap();
     assert_eq!(CLOSING_CONSTRUCTIONS.load(Ordering::SeqCst), 0);
-    let consumer = get_required_service!(scope.service_provider(), ClosingConsumer)
+    let consumer = scope
+        .service_provider()
+        .get_required_service::<ClosingConsumer>()
         .await
         .unwrap();
     let mut query = Box::pin(consumer.report.get());

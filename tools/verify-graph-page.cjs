@@ -127,13 +127,14 @@ async function state(page) {
       id: node.getAttribute("data-node-id"), kind: node.getAttribute("data-node-kind"),
       entryId: node.getAttribute("data-entry-id"), target: node.getAttribute("data-projection-target"),
       requested: node.getAttribute("data-requested"), keyKind: node.getAttribute("data-key-kind"),
-      keyValue: node.getAttribute("data-key-value"), text: node.textContent,
+      keyValue: node.getAttribute("data-key-value"), initialization: node.getAttribute("data-initialization"), text: node.textContent,
     })),
     edges: [...document.querySelectorAll("#graph-edges .edge")].map((edge) => ({
       source: edge.getAttribute("data-edge-source"), target: edge.getAttribute("data-edge-target"),
       kind: edge.getAttribute("data-edge-kind"), slot: edge.getAttribute("data-slot"),
       label: edge.getAttribute("data-input-label"), requested: edge.getAttribute("data-requested"),
       keyKind: edge.getAttribute("data-key-kind"), keyValue: edge.getAttribute("data-key-value"),
+      lazy: edge.getAttribute("data-lazy"),
     })),
     labels: [...document.querySelectorAll("#graph-edges .edge-label")].map((label) => label.textContent),
   }));
@@ -360,6 +361,59 @@ async function main() {
       assert.equal(await interfaceResult.count(), 3, "Every interface request must appear in search");
       await interfaceResult.first().click();
       assert.equal(await page.locator("#inspector-id").innerText(), "接口请求");
+    });
+
+    await checked("service-initialization-is-distinct-from-lazy-fields", async () => {
+      const graph = syntheticGraph();
+      graph.nodes[0].initialization = "lazy";
+      graph.nodes[1].initialization = "eager";
+      graph.nodes[2].initialization = "lazy";
+      graph.nodes[3].initialization = "lazy";
+      graph.nodes[4].initialization = "eager";
+      graph.nodes[0].dependencies[4].lazy = true;
+      await load("initialization-policies", graph);
+      await assertCounts(page, 5, 3, 1);
+      const { snapshot } = await verifyVisibleGraph(page, graph);
+      assert.equal(snapshot.nodes.find((node) => node.id === "2").initialization, "lazy");
+      assert.equal(snapshot.nodes.find((node) => node.id === "4").initialization, "eager");
+      assert.equal(snapshot.edges.find((edge) => edge.source === "0" && edge.slot === "3").lazy, "false", "Lazy service policy must not delay an ordinary injected field");
+      assert.equal(snapshot.edges.find((edge) => edge.source === "0" && edge.slot === "4").lazy, "true", "Field laziness must remain independent of the eager target service");
+      await selectNode(page, "2");
+      assert.match(await page.locator("#inspector-content").innerText(), /普通依赖需要它时仍会构造/);
+      await selectNode(page, "4");
+      assert.match(await page.locator("#inspector-content").innerText(), /覆盖全局 Lazy/);
+      await selectNode(page, "0");
+      assert.match(await page.locator("#inspector-content").innerText(), /scope\.warm_up\(\)/);
+      await selectNode(page, "1");
+      assert.match(await page.locator("#inspector-content").innerText(), /create_scope\(\) 本身不构造/);
+      await selectNode(page, "3");
+      assert.match(await page.locator("#inspector-content").innerText(), /不增加独立预热实例/);
+      const textOverflow = await page.locator(".node-initialization").evaluateAll((labels) => labels.filter((label) => {
+        const text = label.getBBox();
+        const frame = label.parentElement.querySelector(".node-frame").getBBox();
+        return text.x < frame.x || text.y < frame.y || text.x + text.width > frame.x + frame.width || text.y + text.height > frame.y + frame.height;
+      }).map((label) => label.textContent));
+      assert.deepEqual(textOverflow, [], "Service initialization labels must fit inside their provider nodes");
+      await page.screenshot({ path: path.join(output, "initialization-policies.png"), fullPage: true });
+      await page.locator("#service-search").fill("提前初始化");
+      assert.equal(await page.locator("#search-results .search-result[data-node-kind=provider]").count(), 2);
+    });
+
+    await checked("old-graphs-inherit-policy-and-project-declarations-retain-policy", async () => {
+      const graph = syntheticGraph();
+      await load("initialization-backward-compatible", graph);
+      assert((await state(page)).nodes.filter((node) => node.kind === "provider").every((node) => node.initialization === "inherit"));
+      await selectNode(page, "2");
+      assert.match(await page.locator("#inspector-content").innerText(), /继承配置/);
+      const project = projectGraph(graph);
+      project.entries[1].graph.nodes[2].initialization = "lazy";
+      project.entries[1].graph.nodes[4].initialization = "inherit";
+      await load("initialization-project-identity", project);
+      assert.match(await page.locator("#project-summary").innerText(), /4 个声明在多个入口中出现/);
+      await selectNode(page, expectedId(2, "entry-a"));
+      assert.equal(await page.locator("#inspector-content .badge.shared").count(), 0, "Different initialization policies must not appear as the same declaration");
+      await selectNode(page, expectedId(4, "entry-a"));
+      assert.equal(await page.locator("#inspector-content .badge.shared").count(), 1, "Missing and explicit inherit policy have the same meaning");
     });
 
     await checked("named-and-indexed-keys-do-not-collapse", async () => {

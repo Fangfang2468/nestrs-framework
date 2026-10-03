@@ -1,0 +1,17 @@
+[package]
+name = "nestrs-constructor-contracts"
+version = "0.0.0"
+edition = "2024"
+publish = false
+default-run = "valid"
+
+[workspace]
+members = ["library"]
+
+[dependencies]
+nestrs-core = { path = "../../../../nestrs-core" }
+constructor-library = { path = "library" }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+[features]
+alternate = []

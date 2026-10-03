@@ -9,7 +9,8 @@ extern crate rustc_infer;
 extern crate rustc_span;
 extern crate rustc_trait_selection;
 
-use crate::autobind_codegen::{BindingSpec, BlueprintSpec, SourceInsertion};
+use crate::autobind_codegen::{BindingSpec, SourceInsertion};
+use crate::registration_codegen::reflect_item;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, DefIndex, LocalDefId, LocalModDefId};
 use rustc_hir::intravisit::{self, Visitor};
@@ -43,12 +44,10 @@ enum MarkerKind {
     Request,
     Binding,
     AutomaticBinding,
-    Blueprint,
-    BlueprintPath,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum CompilerKey {
+pub(crate) enum CompilerKey {
     Default,
     Named(String),
     Indexed(u128),
@@ -62,14 +61,6 @@ struct Marker<'tcx> {
     span: Span,
     key: Option<CompilerKey>,
     passive: bool,
-    dependency_slot: Option<usize>,
-    access: Option<BlueprintAccess<'tcx>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct BlueprintAccess<'tcx> {
-    anchor: Ty<'tcx>,
-    slots: Vec<usize>,
 }
 
 struct MarkerVisitor<'a, 'tcx> {
@@ -84,22 +75,8 @@ impl<'tcx> Visitor<'tcx> for MarkerVisitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx rustc_hir::Expr<'tcx>) {
         if let rustc_hir::ExprKind::Call(function, arguments) = expr.kind
             && let ty::FnDef(def_id, args) = *self.typeck.expr_ty(function).kind()
-            && self.tcx.crate_name(def_id.krate).as_str() == "nestrs_core"
         {
-            let kind = match definition_path(self.tcx, def_id).as_str() {
-                "registration::compiler::compiler_provider" => Some(MarkerKind::Provider),
-                "registration::compiler::compiler_request" => Some(MarkerKind::Request),
-                "registration::compiler::compiler_dependency" => Some(MarkerKind::Request),
-                "registration::compiler::compiler_blueprint" => Some(MarkerKind::Blueprint),
-                "registration::compiler::compiler_blueprint_path" => {
-                    Some(MarkerKind::BlueprintPath)
-                }
-                "registration::compiler::compiler_binding" => Some(MarkerKind::Binding),
-                "registration::compiler::compiler_automatic_binding" => {
-                    Some(MarkerKind::AutomaticBinding)
-                }
-                _ => None,
-            };
+            let kind = marker_kind(self.tcx, def_id);
             if let Some(kind) = kind {
                 let key = if kind == MarkerKind::Provider {
                     match self.provider_key(arguments) {
@@ -119,12 +96,6 @@ impl<'tcx> Visitor<'tcx> for MarkerVisitor<'_, 'tcx> {
                     span: expr.span,
                     key,
                     passive: false,
-                    dependency_slot: args
-                        .consts()
-                        .next()
-                        .and_then(|slot| slot.try_to_target_usize(self.tcx))
-                        .map(|slot| slot as usize),
-                    access: None,
                 });
             }
         }
@@ -164,19 +135,19 @@ impl MarkerVisitor<'_, '_> {
             }
             _ => return Err("unsupported CompilerKey marker expression".into()),
         };
-        if self.tcx.crate_name(definition.krate).as_str() != "nestrs_core" {
-            return Err("CompilerKey marker variant belongs to an unexpected crate".into());
+        if !reflect_item(self.tcx, self.tcx.parent(definition), "CompilerKey") {
+            return Err(
+                "CompilerKey marker variant belongs to an unauthenticated declaration".into(),
+            );
         }
-        match (definition_path(self.tcx, definition).as_str(), literal) {
-            ("registration::compiler::CompilerKey::Default", None) => Ok(CompilerKey::Default),
-            (
-                "registration::compiler::CompilerKey::Named",
-                Some(rustc_ast::LitKind::Str(name, _)),
-            ) => Ok(CompilerKey::Named(name.to_string())),
-            (
-                "registration::compiler::CompilerKey::Indexed",
-                Some(rustc_ast::LitKind::Int(value, _)),
-            ) => Ok(CompilerKey::Indexed(value.0)),
+        match (self.tcx.item_name(definition).as_str(), literal) {
+            ("Default", None) => Ok(CompilerKey::Default),
+            ("Named", Some(rustc_ast::LitKind::Str(name, _))) => {
+                Ok(CompilerKey::Named(name.to_string()))
+            }
+            ("Indexed", Some(rustc_ast::LitKind::Int(value, _))) => {
+                Ok(CompilerKey::Indexed(value.0))
+            }
             _ => Err("incompatible CompilerKey marker variant or literal".into()),
         }
     }
@@ -191,6 +162,7 @@ fn normalized<'tcx>(
     owner: LocalDefId,
     ty: Ty<'tcx>,
 ) -> Result<Ty<'tcx>, String> {
+    crate::query_roots::validate_type_complexity(tcx, ty)?;
     tcx.try_normalize_erasing_regions(
         if tcx.def_kind(owner) == DefKind::Mod {
             ty::TypingEnv::fully_monomorphized()
@@ -202,79 +174,106 @@ fn normalized<'tcx>(
     .map_err(|error| format!("cannot normalize DI type {ty}: {error:?}"))
 }
 
-fn definition_path(tcx: TyCtxt<'_>, definition: DefId) -> String {
-    tcx.def_path(definition)
-        .data
-        .iter()
-        .map(|component| {
-            component
-                .data
-                .get_opt_name()
-                .map_or_else(|| String::from("<anonymous>"), |name| name.to_string())
-        })
-        .collect::<Vec<_>>()
-        .join("::")
-}
-
-fn provider_definition(tcx: TyCtxt<'_>) -> Option<(DefId, DefId)> {
-    let mut crates = tcx.crates(()).to_vec();
-    if tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE).as_str() == "nestrs_core" {
-        crates.push(rustc_hir::def_id::LOCAL_CRATE);
-    }
-    for crate_num in crates {
-        if tcx.crate_name(crate_num).as_str() != "nestrs_core" {
+/// 每份泛型声明拥有自己的私有反射 trait。这里只从实际服务所属 crate 的
+/// 已认证声明中求解闭合实现，不需要 core 提供全局 ProviderDefinition 协议。
+pub(crate) fn provider_definition<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    service: Ty<'tcx>,
+) -> Option<(DefId, DefId)> {
+    let ty::Adt(service_definition, _) = service.kind() else {
+        return None;
+    };
+    let infcx = tcx
+        .infer_ctxt()
+        .ignoring_regions()
+        .build(ty::TypingMode::non_body_analysis());
+    let mut selected = None;
+    for &trait_id in tcx.traits(service_definition.did().krate) {
+        if !reflect_item(tcx, trait_id, "ProviderDefinition")
+            || !infcx
+                .type_implements_trait(trait_id, [service], ty::ParamEnv::empty())
+                .must_apply_modulo_regions()
+        {
             continue;
         }
-        for trait_id in tcx.traits(crate_num).iter().copied() {
-            if definition_path(tcx, trait_id) == "registration::provider::ProviderDefinition" {
-                let method = tcx
-                    .associated_items(trait_id)
-                    .in_definition_order()
-                    .find(|item| item.name().as_str() == "provider")?;
-                return Some((trait_id, method.def_id));
-            }
+        let Some(method) = tcx
+            .associated_items(trait_id)
+            .in_definition_order()
+            .find(|item| item.name().as_str() == "provider")
+        else {
+            continue;
+        };
+        if selected.replace((trait_id, method.def_id)).is_some() {
+            tcx.dcx()
+                .fatal(format!("服务 {service} 匹配多个工具生成的构造蓝图"));
         }
     }
-    None
+    selected
 }
 
-fn blueprint_access<'tcx>(
+/// 返回真实类型经 trait 求解得到的构造入口。私有类型只存在于 rustc Ty 中，
+/// 不生成跨 crate 源码路径，也不提升业务类型的可见性。
+pub(crate) fn provider_blueprint<'tcx>(
     tcx: TyCtxt<'tcx>,
-    anchor: Ty<'tcx>,
-    mut path: Ty<'tcx>,
-) -> Result<BlueprintAccess<'tcx>, String> {
-    let mut slots = Vec::new();
-    while let ty::Tuple(parts) = path.kind() {
-        if parts.is_empty() {
-            return Ok(BlueprintAccess { anchor, slots });
-        }
-        if parts.len() != 2 {
-            break;
-        }
-        let ty::Adt(slot, arguments) = parts[0].kind() else {
-            break;
-        };
-        if tcx.crate_name(slot.did().krate).as_str() != "nestrs_core"
-            || definition_path(tcx, slot.did()) != "registration::root::DependencySlot"
-        {
-            break;
-        }
-        let Some(slot) = arguments.const_at(0).try_to_target_usize(tcx) else {
-            break;
-        };
-        slots.push(slot as usize);
-        path = parts[1];
+    service: Ty<'tcx>,
+) -> Result<Option<ty::Instance<'tcx>>, String> {
+    let Some((_, method)) = provider_definition(tcx, service) else {
+        return Ok(None);
+    };
+    ty::Instance::try_resolve(
+        tcx,
+        ty::TypingEnv::fully_monomorphized(),
+        method,
+        tcx.mk_args(&[service.into()]),
+    )
+    .map_err(|_| format!("无法解析闭合服务蓝图 {service}"))
+}
+
+/// MIR 调用局部 trait 的普通泛型 helper；不能把 impl 方法伪装成可直接调用的 FnDef。
+pub(crate) fn provider_callback<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    service: Ty<'tcx>,
+) -> Result<ty::Instance<'tcx>, String> {
+    let (trait_id, _) = provider_definition(tcx, service)
+        .ok_or_else(|| format!("服务 {service} 缺少工具生成的构造蓝图"))?;
+    let module = tcx.parent(trait_id);
+    // module_children 是 rustc 的外部 metadata query，不能传入本地 DefId。
+    // 本地只遍历已有 HIR body，避免在 MIR 构造中要求已完成全 crate 分析。
+    let helper = if module.is_local() {
+        tcx.hir_body_owners()
+            .map(LocalDefId::to_def_id)
+            .find(|&definition| {
+                tcx.parent(definition) == module
+                    && reflect_item(tcx, definition, "provider_definition")
+            })
+    } else {
+        tcx.module_children(module)
+            .iter()
+            .filter_map(|child| child.res.opt_def_id())
+            .find(|&definition| reflect_item(tcx, definition, "provider_definition"))
     }
-    Err(format!(
-        "incompatible closed dependency blueprint path for {anchor}: {path}"
+    .ok_or_else(|| format!("服务 {service} 缺少同声明的 typed 构造 helper"))?;
+    Ok(ty::Instance::new_raw(
+        helper,
+        tcx.mk_args(&[service.into()]),
     ))
+}
+
+fn marker_kind(tcx: TyCtxt<'_>, definition: DefId) -> Option<MarkerKind> {
+    [
+        ("compiler_provider", MarkerKind::Provider),
+        ("compiler_dependency", MarkerKind::Request),
+        ("compiler_binding", MarkerKind::Binding),
+        ("compiler_automatic_binding", MarkerKind::AutomaticBinding),
+    ]
+    .into_iter()
+    .find_map(|(name, kind)| reflect_item(tcx, definition, name).then_some(kind))
 }
 
 fn closed_provider_markers<'tcx>(
     tcx: TyCtxt<'tcx>,
     method: DefId,
     service: Ty<'tcx>,
-    by_owner: &HashMap<LocalDefId, Vec<Marker<'tcx>>>,
     owner: LocalDefId,
     span: Span,
 ) -> Result<Vec<Marker<'tcx>>, String> {
@@ -286,22 +285,11 @@ fn closed_provider_markers<'tcx>(
     )
     .map_err(|_| format!("rustc could not resolve provider blueprint for {service}"))?
     .ok_or_else(|| format!("provider blueprint for {service} is not fully resolved"))?;
-    if let Some(local_owner) = instance.def_id().as_local() {
-        let nested = by_owner.get(&local_owner).ok_or_else(|| {
-            format!("provider blueprint {service} has no compiler markers; rebuild it with compatible Nestrs tooling")
-        })?;
-        let mut markers = nested.clone();
-        for marker in &mut markers {
-            for service in &mut marker.types {
-                *service = ty::EarlyBinder::bind(tcx, *service)
-                    .instantiate(tcx, instance.args)
-                    .skip_normalization();
-            }
-        }
-        Ok(markers)
-    } else {
-        external_blueprint_markers(tcx, instance, owner, span, true)
-    }
+    // 本地与跨 crate 蓝图使用同一份 MIR 描述遍历。constructor 的输入位于独立
+    // associated helper 中，不能只取 ProviderDefinition::provider 自身的 HIR marker。
+    // 本地仍用 provider 的词法模块作为投影插入上下文；上游则使用请求方上下文。
+    let owner = instance.def_id().as_local().unwrap_or(owner);
+    external_blueprint_markers(tcx, instance, owner, span, true)
 }
 
 /// Combine this crate's declarations with typed registration metadata from
@@ -333,8 +321,19 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
         return Err(errors.join("; "));
     }
     markers.extend(external_registrations(tcx)?);
+    markers.extend(
+        crate::query_roots::collect(tcx)?
+            .into_iter()
+            .map(|root| Marker {
+                kind: MarkerKind::Request,
+                types: vec![root.service],
+                owner: tcx.parent_module_from_def_id(root.owner).to_local_def_id(),
+                span: root.span,
+                key: None,
+                passive: false,
+            }),
+    );
 
-    let mut by_owner: HashMap<LocalDefId, Vec<Marker<'_>>> = HashMap::new();
     let mut pending = VecDeque::new();
     let mut explicit_providers = HashSet::new();
     for marker in markers {
@@ -356,7 +355,6 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
             }
             pending.push_back(marker.clone());
         }
-        by_owner.entry(marker.owner).or_default().push(marker);
     }
 
     let infcx = tcx
@@ -364,15 +362,11 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
         .ignoring_regions()
         .build(ty::TypingMode::non_body_analysis());
     let param_env = ty::ParamEnv::empty();
-    let definition = provider_definition(tcx);
     let mut providers: HashMap<Ty<'_>, Marker<'_>> = HashMap::new();
     let mut capability_candidates: HashMap<Ty<'_>, Marker<'_>> = HashMap::new();
     let mut requests = HashSet::new();
     let mut bindings = HashSet::new();
     let mut automatic_bindings = HashSet::new();
-    let mut blueprints = HashSet::new();
-    let mut blueprint_paths = HashSet::new();
-    let mut path_blueprint_types = HashSet::new();
     let mut needed_blueprints = HashMap::new();
     let mut expanded = HashSet::new();
     let mut passive_expanded = HashSet::new();
@@ -400,14 +394,31 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
                 span: tcx.def_span(owner),
                 key: None,
                 passive: true,
-                dependency_slot: None,
-                access: None,
             });
         }
     }
     pending.extend(closed_impls.iter().cloned());
 
+    let mut all_types = HashSet::new();
+    let mut method_query_roots = HashSet::new();
+    let mut method_provider_count = 0;
     loop {
+        if pending.is_empty() && method_provider_count != providers.len() {
+            method_provider_count = providers.len();
+            let known: Vec<_> = providers.keys().copied().collect();
+            for root in crate::query_roots::collect_with_providers(tcx, &known)? {
+                if method_query_roots.insert(root.service) {
+                    pending.push_back(Marker {
+                        kind: MarkerKind::Request,
+                        types: vec![root.service],
+                        owner: tcx.parent_module_from_def_id(root.owner).to_local_def_id(),
+                        span: root.span,
+                        key: None,
+                        passive: false,
+                    });
+                }
+            }
+        }
         if pending.is_empty() {
             for (&concrete, marker) in &capability_candidates {
                 if !expanded.contains(&concrete)
@@ -429,39 +440,17 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
         };
         for ty in &mut marker.types {
             *ty = normalized(tcx, marker.owner, *ty)?;
+            if all_types.insert(*ty) && all_types.len() > crate::query_roots::MAX_QUERY_TYPES {
+                return Err(
+                    "DI 查询/Provider 闭合类型超过 100000 个，可能存在不断增长的递归泛型声明"
+                        .into(),
+                );
+            }
         }
         if !marker.types.iter().copied().all(closed) {
             return Err("DI marker remained generic after closed-type expansion".into());
         }
         match marker.kind {
-            MarkerKind::Blueprint => {
-                blueprints.insert(marker.types[0]);
-            }
-            MarkerKind::BlueprintPath => {
-                let access = blueprint_access(tcx, marker.types[0], marker.types[1])?;
-                let (_, method) = definition
-                    .ok_or_else(|| String::from("missing ProviderDefinition for blueprint path"))?;
-                let mut service = access.anchor;
-                for &slot in &access.slots {
-                    let nested = closed_provider_markers(
-                        tcx,
-                        method,
-                        service,
-                        &by_owner,
-                        marker.owner,
-                        marker.span,
-                    )?;
-                    let dependency = nested
-                        .iter()
-                        .find(|dependency| dependency.dependency_slot == Some(slot))
-                        .ok_or_else(|| {
-                            format!("closed blueprint path has no slot {slot} in {service}")
-                        })?;
-                    service = normalized(tcx, dependency.owner, dependency.types[0])?;
-                }
-                path_blueprint_types.insert(service);
-                blueprint_paths.insert(access);
-            }
             MarkerKind::Provider => {
                 capability_candidates
                     .entry(marker.types[0])
@@ -488,13 +477,6 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
             }
             MarkerKind::Request => {
                 let requested = marker.types[0];
-                let access = marker
-                    .access
-                    .get_or_insert_with(|| BlueprintAccess {
-                        anchor: requested,
-                        slots: Vec::new(),
-                    })
-                    .clone();
                 if matches!(requested.kind(), ty::Dynamic(..)) {
                     if !marker.passive {
                         requests.insert(requested);
@@ -508,30 +490,13 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
                 }) {
                     continue;
                 }
-                let Some((trait_id, method_id)) = definition else {
+                let Some((_, method_id)) = provider_definition(tcx, requested) else {
                     continue;
                 };
-                if !infcx
-                    .type_implements_trait(trait_id, [requested], param_env)
-                    .must_apply_modulo_regions()
-                {
-                    continue;
-                }
-                let mut instantiated_markers = closed_provider_markers(
-                    tcx,
-                    method_id,
-                    requested,
-                    &by_owner,
-                    marker.owner,
-                    marker.span,
-                )?;
+                let mut instantiated_markers =
+                    closed_provider_markers(tcx, method_id, requested, marker.owner, marker.span)?;
                 for nested in &mut instantiated_markers {
                     nested.passive = marker.passive;
-                    if let Some(slot) = nested.dependency_slot {
-                        let mut nested_access = access.clone();
-                        nested_access.slots.push(slot);
-                        nested.access = Some(nested_access);
-                    }
                 }
                 let blueprint = instantiated_markers
                     .iter()
@@ -548,12 +513,9 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
                     // provider and never visit this fallback's dependencies.
                     continue;
                 }
-                let entry = needed_blueprints
+                needed_blueprints
                     .entry(requested)
                     .or_insert_with(|| marker.clone());
-                if !access.slots.is_empty() {
-                    *entry = marker.clone();
-                }
                 pending.extend(instantiated_markers);
             }
         }
@@ -562,43 +524,9 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
     let mut insertions = Vec::new();
     let mut generated = 0;
     let type_source = crate::type_source::SourceTypes::new(tcx);
-    let mut generated_blueprints = 0;
-    let mut needed_blueprints: Vec<_> = needed_blueprints.into_iter().collect();
-    needed_blueprints.sort_by_key(|(service, _)| type_source.render(*service));
-    for (service, marker) in needed_blueprints {
-        if blueprints.contains(&service) || path_blueprint_types.contains(&service) {
-            continue;
-        }
-        let source = tcx
-            .sess
-            .source_map()
-            .lookup_char_pos(marker.span.source_callsite().lo());
-        // Existing descriptor callbacks handle private/block-local blueprints.
-        // Only legal source-expressible types need an additional passive entry.
-        if let Ok(mut insertion) = source_insertion(tcx, service, None, marker.owner) {
-            insertion.blueprints.push(BlueprintSpec {
-                service: type_source.render(service),
-                path: None,
-                source_file: source.file.name.prefer_local_unconditionally().to_string(),
-                source_line: source.line as u32,
-                source_column: source.col.0 as u32 + 1,
-            });
-            insertions.push(insertion);
-            generated_blueprints += 1;
-        } else if let Some(access) = &marker.access
-            && let Ok(mut insertion) = source_insertion(tcx, access.anchor, None, marker.owner)
-        {
-            insertion.blueprints.push(BlueprintSpec {
-                service: type_source.render(access.anchor),
-                path: Some(access.slots.clone()),
-                source_file: source.file.name.prefer_local_unconditionally().to_string(),
-                source_line: source.line as u32,
-                source_column: source.col.0 as u32 + 1,
-            });
-            insertions.push(insertion);
-            generated_blueprints += 1;
-        }
-    }
+    // 有限闭合蓝图直接随真实 Ty/Instance 进入最终计划；无需生成公共锚点或
+    // DependencyPath 回调来重新描述相同依赖，私有深链同样按 MIR 迭代展开。
+    let blueprints = needed_blueprints.len();
     let mut candidates: Vec<_> = capability_candidates.iter().collect();
     candidates.sort_by_key(|(ty, _)| type_source.render(**ty));
     let mut interfaces: Vec<_> = requests.iter().copied().collect();
@@ -671,8 +599,8 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
         generated_bindings: generated,
         explicit_bindings: bindings.len(),
         automatic_bindings: automatic_bindings.len(),
-        blueprints: blueprints.len() + blueprint_paths.len(),
-        generated_blueprints,
+        blueprints,
+        generated_blueprints: 0,
         automatic_projections,
         explicit_projections,
     })
@@ -700,11 +628,8 @@ fn external_registrations<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Vec<Marker<'tcx>>, 
                 name.as_str(),
                 "__nestrs_reflect_provider"
                     | "__nestrs_reflected_factory"
-                    | "__nestrs_query_root"
                     | "__nestrs_reflect_trait_binding"
                     | "__nestrs_reflect_automatic_binding"
-                    | "__nestrs_reflect_blueprint"
-                    | "__nestrs_reflect_blueprint_path"
             ) {
                 continue;
             }
@@ -747,33 +672,15 @@ fn external_blueprint_markers<'tcx>(
             tcx.def_path_str(definition),
         ));
     }
-    let body = tcx.optimized_mir(definition);
     let mut markers = Vec::new();
-    for block in body.basic_blocks.iter() {
-        let mir::TerminatorKind::Call { func, args, .. } = &block.terminator().kind else {
+    for call in crate::registration_codegen::descriptor_calls(tcx, instance)? {
+        let (callee, generic_args, args, body) =
+            (call.definition, call.arguments, call.operands, call.body);
+        let Some(kind) = marker_kind(tcx, callee) else {
             continue;
         };
-        let ty::FnDef(callee, generic_args) = *func.ty(&body.local_decls, tcx).kind() else {
-            continue;
-        };
-        if tcx.crate_name(callee.krate).as_str() != "nestrs_core" {
-            continue;
-        }
-        let kind = match definition_path(tcx, callee).as_str() {
-            "registration::compiler::compiler_provider" => MarkerKind::Provider,
-            "registration::compiler::compiler_request" => MarkerKind::Request,
-            "registration::compiler::compiler_dependency" => MarkerKind::Request,
-            "registration::compiler::compiler_blueprint" => MarkerKind::Blueprint,
-            "registration::compiler::compiler_blueprint_path" => MarkerKind::BlueprintPath,
-            "registration::compiler::compiler_binding" => MarkerKind::Binding,
-            "registration::compiler::compiler_automatic_binding" => MarkerKind::AutomaticBinding,
-            _ => continue,
-        };
-        let generic_args = ty::EarlyBinder::bind(tcx, generic_args)
-            .instantiate(tcx, instance.args)
-            .skip_normalization();
         let key = if kind == MarkerKind::Provider {
-            let [argument] = args.as_ref() else {
+            let [argument] = args else {
                 return Err(
                     "external compiler_provider metadata has an incompatible argument count".into(),
                 );
@@ -789,12 +696,6 @@ fn external_blueprint_markers<'tcx>(
             span: request_span,
             key,
             passive: false,
-            dependency_slot: generic_args
-                .consts()
-                .next()
-                .and_then(|slot| slot.try_to_target_usize(tcx))
-                .map(|slot| slot as usize),
-            access: None,
         });
     }
     if require_provider
@@ -813,7 +714,7 @@ fn external_blueprint_markers<'tcx>(
 /// The generated key is a literal enum value. Accept exactly constants and
 /// uniquely assigned local aliases/aggregates; an arbitrary hand-written body
 /// must never make this analysis guess among control-flow-dependent values.
-fn external_key<'tcx>(
+pub(crate) fn external_key<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &mir::Body<'tcx>,
     argument: &mir::Operand<'tcx>,
@@ -902,16 +803,16 @@ fn external_key_parts<'tcx>(
     variant: DefId,
     fields: &[(mir::ConstValue, Ty<'tcx>)],
 ) -> Result<CompilerKey, String> {
-    if tcx.crate_name(variant.krate).as_str() != "nestrs_core" {
+    if !reflect_item(tcx, tcx.parent(variant), "CompilerKey") {
         return Err("external CompilerKey variant comes from an unexpected crate".into());
     }
-    match (definition_path(tcx, variant).as_str(), fields) {
-        ("registration::compiler::CompilerKey::Default", []) => Ok(CompilerKey::Default),
-        ("registration::compiler::CompilerKey::Indexed", [(value, _)]) => value
+    match (tcx.item_name(variant).as_str(), fields) {
+        ("Default", []) => Ok(CompilerKey::Default),
+        ("Indexed", [(value, _)]) => value
             .try_to_target_usize(tcx)
             .map(|value| CompilerKey::Indexed(value as u128))
             .ok_or_else(|| "external CompilerKey indexed payload is invalid".into()),
-        ("registration::compiler::CompilerKey::Named", [(value, _)]) => {
+        ("Named", [(value, _)]) => {
             let bytes = value
                 .try_get_slice_bytes_for_diagnostics(tcx)
                 .ok_or_else(|| "external CompilerKey named payload is invalid".to_string())?;
@@ -1224,7 +1125,6 @@ fn source_insertion<'tcx>(
         offset,
         expected_source,
         bindings: vec![],
-        blueprints: vec![],
     })
 }
 

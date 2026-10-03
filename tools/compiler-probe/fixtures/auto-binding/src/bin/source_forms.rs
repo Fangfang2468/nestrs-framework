@@ -1,7 +1,7 @@
 //! Source expressions emitted from compiler types, beyond local ADT names.
 
 use nestrs::injectable;
-use nestrs_core::{ServiceProvider};
+use nestrs_core::ServiceProvider;
 use std::marker::PhantomData;
 
 #[path = "../automatic_assertions.rs"]
@@ -42,10 +42,12 @@ mod generated {
 
     pub(super) async fn assert_projection(provider: &ServiceProvider) {
         super::automatic_assertions::assert_count::<dyn MacroPort>(1);
-        let concrete = nestrs_core::get_required_service!(provider, MacroService)
+        let concrete = provider
+            .get_required_service::<MacroService>()
             .await
             .unwrap();
-        let interface = nestrs_core::get_required_service!(provider, dyn MacroPort)
+        let interface = provider
+            .get_required_service::<dyn MacroPort>()
             .await
             .unwrap();
         assert_eq!(interface.value(), 31);
@@ -113,13 +115,14 @@ async fn main() {
     let provider = ServiceProvider::build().await.unwrap();
     generated::assert_projection(&provider).await;
 
-    let repository = nestrs_core::get_required_service!(provider, TextRepository)
+    let repository = provider
+        .get_required_service::<TextRepository>()
         .await
         .unwrap();
-    let repository_port =
-        nestrs_core::get_required_service!(provider, dyn RepositoryPort<std::string::String>)
-            .await
-            .unwrap();
+    let repository_port = provider
+        .get_required_service::<dyn RepositoryPort<std::string::String>>()
+        .await
+        .unwrap();
     assert_eq!(
         repository_port.entity_name(),
         std::any::type_name::<String>()
@@ -130,10 +133,9 @@ async fn main() {
         repository as *const TextRepository as usize,
     );
 
-    let buffer = nestrs_core::get_required_service!(provider, Buffer<8>)
-        .await
-        .unwrap();
-    let buffer_port = nestrs_core::get_required_service!(provider, dyn BufferPort<8>)
+    let buffer = provider.get_required_service::<Buffer<8>>().await.unwrap();
+    let buffer_port = provider
+        .get_required_service::<dyn BufferPort<8>>()
         .await
         .unwrap();
     assert_eq!(buffer_port.capacity(), 8);

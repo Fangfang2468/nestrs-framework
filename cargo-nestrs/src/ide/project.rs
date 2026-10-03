@@ -198,6 +198,12 @@ pub(crate) fn generate(
             }
         }
         environment.extend(unit.env.clone());
+        if unit.externs.contains_key("nestrs_core") {
+            environment.insert(
+                super::constructor::MODEL_ENV.to_owned(),
+                super::constructor::environment(captures, unit)?,
+            );
+        }
         normalize_editor_environment(&mut environment)?;
         let package = required_str(&entry.artifact, "package_id")?;
         let include_dirs = sources[&unit.manifest_dir]

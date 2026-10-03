@@ -56,7 +56,6 @@ pub(crate) struct FactoryReturn {
 #[derive(Clone, Debug)]
 pub(crate) struct FactoryParameterSpec {
     /// 参数在原函数签名中的零基位置。
-    pub(crate) declaration_position: usize,
     /// 在 `FactoryInputs` 中的连续输入槽位。
     pub(crate) input_slot: usize,
     /// 参数的简单标识符，用于 adapter 调用、label 和诊断。
@@ -67,6 +66,8 @@ pub(crate) struct FactoryParameterSpec {
     pub(crate) key: Option<ServiceKeySpec>,
     /// 原参数是否为 `Option<T>`，即缺失时可以交付 `None`。
     pub(crate) optional: bool,
+    /// 是否交付按值的延迟句柄；目标仍参与图校验，但不阻塞当前 factory 启动。
+    pub(crate) lazy: bool,
 }
 
 impl FactoryParameterSpec {
@@ -76,12 +77,11 @@ impl FactoryParameterSpec {
     /// 额外过滤：每个参数都是一项依赖请求。
     pub(crate) fn dependency_request(&self) -> DependencyRequest {
         DependencyRequest {
-            declaration_position: self.declaration_position,
             input_slot: self.input_slot,
             service_type: self.service_type.clone(),
             key: self.key.clone(),
             optional: self.optional,
-            lazy: false,
+            lazy: self.lazy,
             label: Some(self.ident.clone()),
         }
     }
@@ -89,11 +89,11 @@ impl FactoryParameterSpec {
 
 /// factory 宏的共享分析结果。
 ///
-/// `item` 已经移除了参数上的 `#[inject]` marker，并把参数类型改写为
-/// `&'frame T` / `Option<&'frame T>`。`'frame` 是宏生成的隐藏生命周期，并由 factory
-/// adapter 的真实 activation frame 绑定；因此最终用户函数不能把参数安全地保存到长期
-/// 服务或后台任务。所有 provider metadata 与 adapter 取参继续读取 `parameters`，避免
-/// 二次解析。
+/// `item` 已经移除了参数上的 helper marker。普通参数改写为 `&'frame T` /
+/// `Option<&'frame T>`，其隐藏生命周期由真实 activation frame 绑定，不能逃逸至
+/// 长期服务或后台任务。延迟参数改写为按值的 `LazyInjection<T>` /
+/// `Option<LazyInjection<T>>`，由句柄本身管理访问与保活，可以移动到返回服务。
+/// 所有 provider metadata 与 adapter 取参继续读取 `parameters`，避免二次解析。
 #[derive(Clone, Debug)]
 pub(crate) struct FactoryAnalysis {
     pub(crate) item: ItemFn,
@@ -135,19 +135,10 @@ pub(crate) fn analyze_factory(mut item: ItemFn) -> syn::Result<FactoryAnalysis> 
 
     let output = analyze_factory_return(&item)?;
 
-    // 用户声明的泛型已经在上方拒绝，因此这个名字不会与用户 ABI 冲突。只要存在参数，
-    // 就为重写后的函数添加一个由 adapter 推导的隐藏生命周期；不能使用一个无约束的
-    // `'_` 占位 lifetime，否则返回服务的类型约束可能把它错误地推断为 `'static`。
-    let parameter_lifetime = if item.sig.inputs.is_empty() {
-        None
-    } else {
-        let lifetime: syn::Lifetime = syn::parse_quote!('__nestrs_factory_frame);
-        item.sig
-            .generics
-            .params
-            .push(syn::parse_quote!('__nestrs_factory_frame));
-        Some(lifetime)
-    };
+    // 用户声明的泛型已经在上方拒绝，因此这个名字不会与用户 ABI 冲突。普通注入
+    // 必须使用明确的 frame lifetime，不能让 `'_` 被输出类型反向推断成 `'static`。
+    // 延迟句柄拥有输入槽位中的值，不借用 frame；全部参数都是 lazy 时不添加多余泛型。
+    let parameter_lifetime: syn::Lifetime = syn::parse_quote!('__nestrs_factory_frame);
     let mut parameters = Vec::with_capacity(item.sig.inputs.len());
 
     for (position, argument) in item.sig.inputs.iter_mut().enumerate() {
@@ -161,22 +152,26 @@ pub(crate) fn analyze_factory(mut item: ItemFn) -> syn::Result<FactoryAnalysis> 
         };
 
         let ident = simple_parameter_ident(&parameter.pat)?;
-        let key = take_parameter_key(&mut parameter.attrs)?;
+        let (key, lazy) = take_parameter_markers(&mut parameter.attrs)?;
         let original_type = (*parameter.ty).clone();
         let (service_type, optional) = split_optional(&original_type, FACTORY_MESSAGES)?;
 
-        let parameter_lifetime = parameter_lifetime
-            .as_ref()
-            .expect("a factory parameter requires the generated activation lifetime");
-        *parameter.ty = injected_parameter_type(&service_type, optional, parameter_lifetime);
+        *parameter.ty = injected_parameter_type(&service_type, optional, lazy, &parameter_lifetime);
         parameters.push(FactoryParameterSpec {
-            declaration_position: position,
             input_slot: position,
             ident,
             service_type,
             key,
             optional,
+            lazy,
         });
+    }
+
+    if parameters.iter().any(|parameter| !parameter.lazy) {
+        item.sig
+            .generics
+            .params
+            .push(syn::parse_quote!('__nestrs_factory_frame));
     }
 
     Ok(FactoryAnalysis {
@@ -209,16 +204,12 @@ fn simple_parameter_ident(pattern: &Pat) -> syn::Result<syn::Ident> {
 ///
 /// `#[inject]` 的省略形式和没有属性的参数具有同一语义。`#[value]` 对结构体字段
 /// 才有初始化意义，函数参数没有默认构造阶段，必须在这里明确拒绝。
-fn take_parameter_key(attributes: &mut Vec<Attribute>) -> syn::Result<Option<ServiceKeySpec>> {
+fn take_parameter_markers(
+    attributes: &mut Vec<Attribute>,
+) -> syn::Result<(Option<ServiceKeySpec>, bool)> {
     for attribute in attributes.iter() {
-        if inject::is_marker(attribute) {
+        if inject::is_marker(attribute) || lazy::is_marker(attribute) {
             continue;
-        }
-        if lazy::is_marker(attribute) {
-            return Err(syn::Error::new_spanned(
-                attribute,
-                "`#[factory]` 参数暂不支持 #[lazy]；请在 #[injectable] 的 #[inject] 字段上使用",
-            ));
         }
         if value::is_marker(attribute) {
             return Err(syn::Error::new_spanned(
@@ -228,27 +219,36 @@ fn take_parameter_key(attributes: &mut Vec<Attribute>) -> syn::Result<Option<Ser
         }
         return Err(syn::Error::new_spanned(
             attribute,
-            "`#[factory]` 参数只支持 #[inject] 属性",
+            "`#[factory]` 参数只支持 #[inject] 和 #[lazy] 属性",
         ));
     }
 
     let key = inject_key(attributes)?;
+    let lazy = lazy::parse_parameter(attributes)?;
 
     // 所有允许的 marker 都已成为 `FactoryParameterSpec` 的事实；最终函数绝不能
-    // 留下一个会被 rustc 当作未知属性的 `#[inject]`。
+    // 留下一个会被 rustc 当作未知属性的 `#[inject]` / `#[lazy]`。
     attributes.clear();
-    Ok(key)
+    Ok((key, lazy))
 }
 
-fn injected_parameter_type(service_type: &Type, optional: bool, lifetime: &syn::Lifetime) -> Type {
+fn injected_parameter_type(
+    service_type: &Type,
+    optional: bool,
+    lazy: bool,
+    lifetime: &syn::Lifetime,
+) -> Type {
+    let injected: Type = if lazy {
+        syn::parse_quote!(::nestrs_core::LazyInjection<#service_type>)
+    } else {
+        syn::parse_quote!(& #lifetime #service_type)
+    };
     if optional {
         syn::parse_quote!(
-            ::core::option::Option<& #lifetime #service_type>
+            ::core::option::Option<#injected>
         )
     } else {
-        syn::parse_quote!(
-            & #lifetime #service_type
-        )
+        injected
     }
 }
 
@@ -463,6 +463,39 @@ mod tests {
             "audit : :: core :: option :: Option < & '__nestrs_factory_frame dyn Audit >"
         ));
         assert!(!rewritten.contains("# [ inject"));
+    }
+
+    #[test]
+    fn owned_lazy_parameters_do_not_introduce_a_factory_frame_lifetime() {
+        let analysis = analyze(
+            r#"
+            fn make(
+                #[lazy] reports: Report<User>,
+                #[inject(7)] #[nestrs::lazy] audit: Option<dyn Audit>,
+            ) -> Service { todo!() }
+            "#,
+        )
+        .expect("lazy parameters should analyze");
+
+        assert!(analysis.item.sig.generics.params.is_empty());
+        assert!(analysis.parameters.iter().all(|parameter| parameter.lazy));
+        assert!(
+            analysis
+                .parameters
+                .iter()
+                .all(|parameter| parameter.dependency_request().lazy)
+        );
+        assert_eq!(analysis.parameters[1].key, Some(ServiceKeySpec::Indexed(7)));
+        assert!(analysis.parameters[1].optional);
+        let rewritten = analysis.item.to_token_stream().to_string();
+        assert!(!rewritten.contains("__nestrs_factory_frame"));
+        assert!(
+            rewritten.contains("reports : :: nestrs_core :: LazyInjection < Report < User > >")
+        );
+        assert!(rewritten.contains(
+            "audit : :: core :: option :: Option < :: nestrs_core :: LazyInjection < dyn Audit > >"
+        ));
+        assert!(!rewritten.contains("# ["));
     }
 
     #[test]

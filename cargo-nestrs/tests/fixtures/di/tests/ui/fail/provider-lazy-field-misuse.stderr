@@ -1,0 +1,3 @@
+error: 延迟注入字段只接受无参数的 #[lazy] 属性
+error: #[lazy] 只能用于同时标注 #[inject] 的字段，不能用于 #[value] 或默认字段
+error: 延迟注入参数只接受无参数的 #[lazy] 属性

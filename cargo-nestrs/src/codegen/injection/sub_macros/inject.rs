@@ -5,8 +5,8 @@
 //! 两者的 `Option<T>` 可选形态与可注入服务类型规则完全一致。
 //!
 //! 这里只做「源码语法 → 宏期事实」：不生成 token、不改写 AST、不依赖 provider 注册
-//! ABI。key 值的字面量规则定义在 [`crate::codegen::injection::macros_attrs::service_key`]，注册 ABI
-//! 的渲染在 `crate::codegen::injection::render`。
+//! ABI。key 值的字面量规则定义在 [`crate::codegen::injection::macros_attrs::service_key`]，
+//! 私有反射标记与执行适配操作的渲染在 `crate::codegen::injection::render`。
 
 use crate::codegen::injection::macros_attrs::service_key::{self, ServiceKeySpec};
 use zyn::syn::{self, Attribute, GenericArgument, Lit, Meta, PathArguments, Type};
@@ -17,17 +17,10 @@ use zyn::syn::{self, Attribute, GenericArgument, Lit, Meta, PathArguments, Type}
 
 /// 一个依赖请求的宏期事实。
 ///
-/// 它与 `nestrs_core::registration::dependency::DependencyRequest` 一一对应：这里是
-/// 语法层事实，后者是写进 provider 注册 ABI 的运行时描述。`#[inject]` 字段与 factory
-/// 参数都先归一到这个形状，再共享同一套渲染逻辑。
+/// 该模型仅属于工具链。`#[inject]` 字段与 factory 参数先归一到这个形状，再生成
+/// 供编译器读取的标记及真实输入操作；不会把本模型作为注册描述交给 core。
 #[derive(Clone, Debug)]
 pub(crate) struct DependencyRequest {
-    /// 依赖在字段或参数声明中的零基位置。
-    ///
-    /// 对结构体字段，该位置包含 `#[value]` 与默认字段；它只服务于稳定诊断，不等同
-    /// 于构造 ABI 的输入槽位。
-    pub(crate) declaration_position: usize,
-
     /// 依赖在构造输入中的位置。
     pub(crate) input_slot: usize,
 

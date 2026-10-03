@@ -161,7 +161,7 @@ fn native_tools_compile_run_export_and_refresh_ide_in_paths_with_spaces() {
         .unwrap();
     assert!(!invalid_graph.status.success());
     assert!(
-        String::from_utf8_lossy(&invalid_graph.stderr).contains("graph validation failed"),
+        String::from_utf8_lossy(&invalid_graph.stderr).contains("DI 依赖图编译失败"),
         "{}",
         String::from_utf8_lossy(&invalid_graph.stderr),
     );
@@ -192,7 +192,7 @@ fn native_tools_compile_run_export_and_refresh_ide_in_paths_with_spaces() {
         );
         assert_eq!(report["kind"], "project");
         let entries = report["entries"].as_array().unwrap();
-        assert_eq!(entries.len(), 8);
+        assert_eq!(entries.len(), 9);
         for binary in ["alpha", "beta"] {
             let entry = entries
                 .iter()
@@ -207,14 +207,26 @@ fn native_tools_compile_run_export_and_refresh_ide_in_paths_with_spaces() {
             .unwrap();
         assert_eq!(build_named["status"], "ok", "{build_named}");
         assert_eq!(build_named["graph"]["nodes"].as_array().unwrap().len(), 1);
-        for binary in ["invalid_graph", "no_main", "cfg_no_main"] {
+        let macro_main = entries
+            .iter()
+            .find(|entry| entry["binary"] == "macro_main")
+            .unwrap();
+        assert_eq!(macro_main["status"], "ok", "{macro_main}");
+        assert_eq!(macro_main["graph"]["nodes"].as_array().unwrap().len(), 1);
+        let invalid = entries
+            .iter()
+            .find(|entry| entry["binary"] == "invalid_graph")
+            .unwrap();
+        assert_eq!(invalid["status"], "error", "{invalid}");
+        assert!(invalid["graph"].is_null());
+        assert!(!invalid["diagnostic"].as_str().unwrap().is_empty());
+        for binary in ["no_main", "cfg_no_main"] {
             let entry = entries
                 .iter()
                 .find(|entry| entry["binary"] == binary)
                 .unwrap();
-            assert_eq!(entry["status"], "error", "{entry}");
-            assert!(entry["graph"].is_null());
-            assert!(!entry["diagnostic"].as_str().unwrap().is_empty());
+            assert_eq!(entry["status"], "ok", "{entry}");
+            assert_eq!(entry["graph"]["nodes"].as_array().unwrap().len(), 0);
         }
         for binary in ["feature_app", "compile_error"] {
             let entry = entries

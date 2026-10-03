@@ -1,4 +1,4 @@
-//! 使用真实宏注册与业务服务，覆盖两种初始化模式下同一套下单和生命周期契约。
+//! 使用真实声明与业务服务，覆盖两种初始化模式下同一套下单和生命周期契约。
 
 use crate::{
     checkout::{CheckoutService, ReceiptFormatter, RequestContext},
@@ -8,10 +8,7 @@ use crate::{
     },
     infrastructure::{Database, Inventory, Repository},
 };
-use nestrs_core::{
-    InitializationMode, ServiceKey, ServiceProvider, ServiceProviderOptions, get_keyed_service,
-    get_required_keyed_service, get_required_service, get_service,
-};
+use nestrs_core::{InitializationMode, ServiceKey, ServiceProvider, ServiceProviderOptions};
 
 fn request(customer: &str, sku: &str, quantity: u32, payment: PaymentMethod) -> CheckoutRequest {
     CheckoutRequest {
@@ -50,16 +47,24 @@ async fn exercise_checkout(initialization: InitializationMode) {
     let first_scope = provider.create_scope();
     let second_scope = provider.create_scope();
     let (first, second) = tokio::join!(
-        get_required_service!(first_scope.service_provider(), CheckoutService),
-        get_required_service!(second_scope.service_provider(), CheckoutService),
+        first_scope
+            .service_provider()
+            .get_required_service::<CheckoutService>(),
+        second_scope
+            .service_provider()
+            .get_required_service::<CheckoutService>(),
     );
     let first = first.unwrap();
     let second = second.unwrap();
-    let first_again = get_required_service!(first_scope.service_provider(), CheckoutService)
+    let first_again = first_scope
+        .service_provider()
+        .get_required_service::<CheckoutService>()
         .await
         .unwrap();
     assert!(std::ptr::eq(first, first_again));
-    let context = get_required_service!(first_scope.service_provider(), RequestContext)
+    let context = first_scope
+        .service_provider()
+        .get_required_service::<RequestContext>()
         .await
         .unwrap();
     assert_eq!(context.id(), first.context_id());
@@ -74,34 +79,43 @@ async fn exercise_checkout(initialization: InitializationMode) {
         first.formatter_id().await.unwrap(),
         second.formatter_id().await.unwrap(),
     );
-    assert!(get_service!(provider, CheckoutService).await.is_err());
+    assert!(provider.get_service::<CheckoutService>().await.is_err());
 
-    let store = get_required_service!(provider, dyn OrderStore)
+    let store = provider
+        .get_required_service::<dyn OrderStore>()
         .await
         .unwrap();
-    let repository = get_required_service!(provider, Repository<Order>)
+    let repository = provider
+        .get_required_service::<Repository<Order>>()
         .await
         .unwrap();
-    let scoped_repository =
-        get_required_service!(second_scope.service_provider(), Repository<Order>)
-            .await
-            .unwrap();
+    let scoped_repository = second_scope
+        .service_provider()
+        .get_required_service::<Repository<Order>>()
+        .await
+        .unwrap();
     assert!(std::ptr::eq(repository, scoped_repository));
     assert_eq!(repository.id(), store.instance_id());
     assert_eq!(store.instance_id(), first.store_id());
     assert_eq!(store.database_id(), first.database_id());
     assert_eq!(repository.database_id(), first.database_id());
-    let root_database = get_required_service!(provider, Database).await.unwrap();
-    let scoped_database = get_required_service!(first_scope.service_provider(), Database)
+    let root_database = provider.get_required_service::<Database>().await.unwrap();
+    let scoped_database = first_scope
+        .service_provider()
+        .get_required_service::<Database>()
         .await
         .unwrap();
     assert!(std::ptr::eq(root_database, scoped_database));
     assert_eq!(root_database.id(), first.database_id());
 
-    let formatter_one = get_required_service!(first_scope.service_provider(), ReceiptFormatter)
+    let formatter_one = first_scope
+        .service_provider()
+        .get_required_service::<ReceiptFormatter>()
         .await
         .unwrap();
-    let formatter_two = get_required_service!(first_scope.service_provider(), ReceiptFormatter)
+    let formatter_two = first_scope
+        .service_provider()
+        .get_required_service::<ReceiptFormatter>()
         .await
         .unwrap();
     assert!(!std::ptr::eq(formatter_one, formatter_two));
@@ -110,47 +124,40 @@ async fn exercise_checkout(initialization: InitializationMode) {
     assert!(!first.has_fraud_check());
     assert!(!second.has_fraud_check());
     assert!(
-        get_service!(provider, dyn FraudCheck)
+        provider
+            .get_service::<dyn FraudCheck>()
             .await
             .unwrap()
             .is_none()
     );
 
-    let card = get_required_keyed_service!(
-        provider,
-        dyn PaymentGateway,
-        ServiceKey::Named("card".into())
-    )
-    .await
-    .unwrap();
-    let wallet = get_required_keyed_service!(
-        provider,
-        dyn PaymentGateway,
-        ServiceKey::Named("wallet".into())
-    )
-    .await
-    .unwrap();
+    let card = provider
+        .get_required_keyed_service::<dyn PaymentGateway>(ServiceKey::Named("card".into()))
+        .await
+        .unwrap();
+    let wallet = provider
+        .get_required_keyed_service::<dyn PaymentGateway>(ServiceKey::Named("wallet".into()))
+        .await
+        .unwrap();
     assert_eq!(card.channel(), "card");
     assert_eq!(wallet.channel(), "wallet");
     assert_ne!(card.id(), wallet.id());
     assert!(
-        get_service!(provider, dyn PaymentGateway)
+        provider
+            .get_service::<dyn PaymentGateway>()
             .await
             .unwrap()
             .is_none()
     );
     assert!(
-        get_keyed_service!(
-            provider,
-            dyn PaymentGateway,
-            ServiceKey::Named("unregistered".into())
-        )
-        .await
-        .unwrap()
-        .is_none()
+        provider
+            .get_keyed_service::<dyn PaymentGateway>(ServiceKey::Named("unregistered".into()))
+            .await
+            .unwrap()
+            .is_none()
     );
 
-    let inventory = get_required_service!(provider, Inventory).await.unwrap();
+    let inventory = provider.get_required_service::<Inventory>().await.unwrap();
     assert_eq!(inventory.remaining("KEYBOARD"), Some(5));
     assert!(store.all().is_empty());
     let (first_order, second_order) = tokio::join!(
@@ -209,7 +216,8 @@ async fn exercise_checkout(initialization: InitializationMode) {
     assert_saved_orders(store, &[&first_order, &second_order]);
 
     // 查询发现另一个闭合泛型：它具有独立的表，仍共享同一个 Database。
-    let audit = get_required_service!(provider, Repository<AuditEvent>)
+    let audit = provider
+        .get_required_service::<Repository<AuditEvent>>()
         .await
         .unwrap();
     assert_ne!(audit.id(), repository.id());
@@ -256,7 +264,8 @@ async fn request_boundary_audits_actual_outcomes_and_preserves_shared_state() {
         failure.result,
         Err(CheckoutError::PaymentDeclined)
     ));
-    let audit = get_required_service!(provider, Repository<AuditEvent>)
+    let audit = provider
+        .get_required_service::<Repository<AuditEvent>>()
         .await
         .unwrap();
     let entries = audit.all();
@@ -272,14 +281,16 @@ async fn request_boundary_audits_actual_outcomes_and_preserves_shared_state() {
             .contains("客户 RejectedCustomer 下单拒绝：支付渠道拒绝")
     );
     assert_eq!(
-        get_required_service!(provider, Inventory)
+        provider
+            .get_required_service::<Inventory>()
             .await
             .unwrap()
             .remaining("KEYBOARD"),
         Some(4)
     );
     assert_eq!(
-        get_required_service!(provider, dyn OrderStore)
+        provider
+            .get_required_service::<dyn OrderStore>()
             .await
             .unwrap()
             .all()

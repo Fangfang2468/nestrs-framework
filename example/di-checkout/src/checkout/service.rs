@@ -1,4 +1,4 @@
-use nestrs::injectable;
+use nestrs::{constructor, injectable};
 use nestrs_core::ResolveError;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -17,26 +17,41 @@ static NEXT_ORDER: AtomicUsize = AtomicUsize::new(1);
 /// Scoped 应用服务串联校验、库存预留、支付与保存；构造本身不执行任何下单业务。
 #[injectable(lifetime = Scoped, cleanup = "cleanup_checkout")]
 pub(crate) struct CheckoutService {
-    #[inject]
     context: RequestContext,
-    #[inject]
     orders: dyn OrderStore,
-    #[inject]
     inventory: Inventory,
-    #[inject("card")]
     card: dyn PaymentGateway,
-    #[inject("wallet")]
     wallet: dyn PaymentGateway,
-    #[inject]
-    #[lazy]
     formatter: ReceiptFormatter,
-    #[inject]
     fraud: Option<dyn FraudCheck>,
-    #[value(crate::observe::created("CheckoutService"))]
     id: usize,
 }
 
 impl CheckoutService {
+    /// 参数描述依赖，函数体明确完成业务状态初始化。字段仍写业务类型；工具链
+    /// 根据整值赋值将依赖字段改为注入令牌，id 等普通业务值不会被改写。
+    #[constructor]
+    fn new(
+        context: RequestContext,
+        orders: dyn OrderStore,
+        inventory: Inventory,
+        #[inject("card")] card: dyn PaymentGateway,
+        #[inject("wallet")] wallet: dyn PaymentGateway,
+        #[lazy] formatter: ReceiptFormatter,
+        fraud: Option<dyn FraudCheck>,
+    ) -> Self {
+        Self {
+            context,
+            orders,
+            inventory,
+            card,
+            wallet,
+            formatter,
+            fraud,
+            id: crate::observe::created("CheckoutService"),
+        }
+    }
+
     pub(crate) async fn place_order(
         &self,
         request: CheckoutRequest,

@@ -2,7 +2,7 @@
 use std::marker::PhantomData;
 
 use nestrs::{factory, injectable};
-use nestrs_core::{ServiceProvider, get_required_service};
+use nestrs_core::ServiceProvider;
 
 struct FactoryValue<T>(T);
 
@@ -95,7 +95,7 @@ impl DormantPort for Dormant<u32> {}
 #[tokio::test]
 async fn aliases_factory_only_types_and_substituted_parameters_resolve() {
     let provider = ServiceProvider::build().await.unwrap();
-    let consumer = get_required_service!(provider, Consumer).await.unwrap();
+    let consumer = provider.get_required_service::<Consumer>().await.unwrap();
     assert_eq!(consumer.factory.0, 42);
     assert_eq!(consumer.named.0, 17);
     assert_eq!(consumer.optional_factory.as_ref().unwrap().0, 42);
@@ -104,18 +104,20 @@ async fn aliases_factory_only_types_and_substituted_parameters_resolve() {
     assert_eq!(consumer.optional_store.as_ref().unwrap().value(), 73);
     assert!(consumer.absent.is_none());
     assert_eq!(
-        get_required_service!(provider, Combined).await.unwrap().0,
+        provider.get_required_service::<Combined>().await.unwrap().0,
         132
     );
 
     // The macro can see only T in the generic body. The compiler's passive
     // closed blueprint directory supplies the recursively substituted types.
-    let wrapped = get_required_service!(provider, Wrapper<Wrapper<Repository<u32>>>)
+    let wrapped = provider
+        .get_required_service::<Wrapper<Wrapper<Repository<u32>>>>()
         .await
         .unwrap();
     assert_eq!(wrapped.service.service.value, 0);
     assert_eq!(
-        get_required_service!(provider, Wrapper<FactoryValue<u32>>)
+        provider
+            .get_required_service::<Wrapper<FactoryValue<u32>>>()
             .await
             .unwrap()
             .service
@@ -123,7 +125,8 @@ async fn aliases_factory_only_types_and_substituted_parameters_resolve() {
         42,
     );
     assert_eq!(
-        get_required_service!(provider, Wrapper<StoreAlias>)
+        provider
+            .get_required_service::<Wrapper<StoreAlias>>()
             .await
             .unwrap()
             .service

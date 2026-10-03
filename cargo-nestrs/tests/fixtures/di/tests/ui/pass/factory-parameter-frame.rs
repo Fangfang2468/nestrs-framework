@@ -1,5 +1,6 @@
-use nestrs::{factory};
+use nestrs::{factory, injectable};
 
+#[injectable]
 struct Database;
 
 impl Database {

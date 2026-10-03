@@ -170,6 +170,9 @@ def main():
     environment["NESTRS_DRIVER"] = str(driver)
     environment["NESTRS_MACRO_BRIDGE"] = str(bridge)
     environment["CARGO_TARGET_DIR"] = str(output / "cargo")
+    ambiguity_sentinel = output / "ambiguous-main-executed.txt"
+    ambiguity_sentinel.unlink(missing_ok=True)
+    environment["NESTRS_CROSS_AMBIGUITY_SENTINEL"] = str(ambiguity_sentinel)
     before = source_hashes(fixture)
     report = {
         "passed": False,
@@ -191,27 +194,39 @@ def main():
         if expected is not None:
             assert expected in result.stdout, f"{name}: runtime assertions did not finish"
         if diagnostic is not None:
-            assert diagnostic in result.stderr, f"{name}: missing diagnostic {diagnostic!r}; inspect {error_log}"
+            details = [diagnostic] if isinstance(diagnostic, str) else diagnostic
+            for detail in details:
+                assert detail in result.stderr, f"{name}: missing diagnostic {detail!r}; inspect {error_log}"
+        assert "internal compiler error" not in result.stderr, f"{name}: compiler crashed; inspect {error_log}"
+        assert not ambiguity_sentinel.exists(), f"{name}: invalid binary's business main executed"
         case = {"name": name, "passed": True, "command": command, "exit_code": result.returncode}
         report["cases"].append(case)
         print(f"PASS {name}", flush=True)
         return case
 
     try:
-        run("check-all-targets", ["check", *common, "--all-targets"])
+        # library 只贡献能力；需要兄弟 crate 补齐的依赖留给最终 binary 验证。
+        run("check-libraries", ["check", "--locked", "--manifest-path", str(fixture / "Cargo.toml"), "--workspace", "--lib"])
+        valid_targets = [argument for binary in BINARIES for argument in ["--bin", binary]]
+        run("check-valid-targets", ["check", *common, *valid_targets])
+        ambiguity = ["AmbiguousTrait", "AmbiguousPort", "conflict", "primary-provider", "fallback-provider"]
+        run("check-all-targets-rejects-ambiguity", ["check", *common, "--all-targets"], success=False, diagnostic=ambiguity)
         for profile in ["debug", "release"]:
             for binary, expected in BINARIES.items():
                 command = ["run", *common, "--bin", binary]
                 if profile == "release":
                     command.append("--release")
                 run(f"run-{profile}-{binary}", command, expected)
-            negative_command = ["run", *common, "--bin", "ambiguous_candidates"]
-            if profile == "release":
-                negative_command.append("--release")
-            run(
-                f"run-{profile}-ambiguous_candidates", negative_command, success=False,
-                diagnostic="cross-crate ambiguity: rejected before any provider construction",
-            )
+            # 不再运行一个捕获 build panic 后 exit(23) 的程序；两种构建入口都必须
+            # 在编译时拒绝该未被查询的非法服务，且完整保留候选和源码诊断。
+            for operation in ["check", "build"]:
+                negative_command = [operation, *common, "--bin", "ambiguous_candidates"]
+                if profile == "release":
+                    negative_command.append("--release")
+                run(
+                    f"{operation}-{profile}-ambiguous_candidates", negative_command,
+                    success=False, diagnostic=ambiguity,
+                )
         for binary in BINARIES:
             graph = output / f"{binary}.html"
             case = run(f"graph-{binary}", ["graph", *common, "--bin", binary, "--output", str(graph)])
@@ -225,11 +240,12 @@ def main():
         run(
             "graph-ambiguous_candidates",
             ["graph", *common, "--bin", "ambiguous_candidates", "--output", str(preserved)],
-            success=False, diagnostic="trait 候选不唯一",
+            success=False, diagnostic=ambiguity,
         )
         assert preserved.read_text(encoding="utf-8") == "existing graph must survive a failed export\n"
         assert source_hashes(fixture) == before, "toolchain changed application sources or manifests"
         report["sources_unchanged"] = True
+        report["invalid_main_not_executed"] = not ambiguity_sentinel.exists()
         report["passed"] = True
     except (AssertionError, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         report["failure"] = str(error)

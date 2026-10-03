@@ -32,6 +32,15 @@ pub fn factory(
     cargo_nestrs::codegen::expand_factory(args.into(), input.into()).into()
 }
 
+/// 为 injectable 服务指定同步关联构造函数；参数声明依赖，函数体完成业务初始化。
+#[proc_macro_attribute]
+pub fn constructor(
+    args: proc_macro::TokenStream,
+    input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    cargo_nestrs::codegen::expand_constructor(args.into(), input.into()).into()
+}
+
 /// 将服务声明标记为 primary；可以放在 `injectable` 或 `factory` 上下方。
 ///
 /// 配合使用时保留属性的末段名称 `primary`、`injectable`、`factory`；支持
@@ -44,6 +53,16 @@ pub fn primary(
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
     cargo_nestrs::codegen::expand_primary(args.into(), input.into()).into()
+}
+
+/// 设置声明本身的初始化策略：bare/true 延迟，false 提前，无标注则继承容器策略。
+/// 必须与 injectable 结构体或 factory 函数配合；上下顺序均可，路径命名边界同 primary。
+#[proc_macro_attribute]
+pub fn lazy(
+    args: proc_macro::TokenStream,
+    input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    cargo_nestrs::codegen::expand_lazy(args.into(), input.into()).into()
 }
 
 /// 显式绑定 ABI 的内部回归入口；应用使用普通 impl 和 CLI 自动绑定。

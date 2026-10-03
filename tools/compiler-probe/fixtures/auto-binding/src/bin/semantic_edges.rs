@@ -63,10 +63,12 @@ type RequestedCache = dyn CachePort<Entity = User> + Send + Sync;
 #[tokio::main]
 async fn main() {
     let provider = ServiceProvider::build().await.unwrap();
-    let repository = nestrs_core::get_required_service!(provider, dyn RepositoryPort)
+    let repository = provider
+        .get_required_service::<dyn RepositoryPort>()
         .await
         .unwrap();
-    let cache = nestrs_core::get_required_service!(provider, RequestedCache)
+    let cache = provider
+        .get_required_service::<RequestedCache>()
         .await
         .unwrap();
     assert_eq!(repository.cache_identity(), cache.identity());

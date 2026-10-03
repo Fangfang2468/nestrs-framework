@@ -1,9 +1,9 @@
-//! Keep compiler-discovered declarations reachable from downstream registries.
+//! 保留下游反射计划需要的类型化 adapter 与其真实代码依赖。
 //!
 //! Encoding a private callback's MIR alone is insufficient: downstream codegen
 //! can instantiate that MIR, but cannot instantiate an upstream private static
 //! referenced by it. Seed rustc's normal reachability analysis with authenticated
-//! declaration callbacks so its existing inline/const/generic traversal retains
+//! typed adapter callbacks so its existing inline/const/generic traversal retains
 //! the complete necessary symbol closure in the producing crate.
 //! The runtime's public items inside private modules are also codegen inputs:
 //! retain their bodies once in core instead of giving every provider rlib its

@@ -1,11 +1,22 @@
 use crate::activation::{ConstructionInputs, InputSlot};
+use crate::graph::Constructor;
 use crate::lifetime::ServiceLifetime;
-use crate::registration::dependency::{Delivery, ProviderSource};
-use crate::registration::provider::{ClassProvider, Provider};
 use crate::service::{ServiceIdentifier, ServiceKey, ServiceType};
 use nestrs::{injectable, primary};
 
 struct Database;
+
+// 完整入口现在在编译期间验证全部 provider。声明 ABI 测试也提供真实依赖，避免把
+// “测试只读取元数据”当成允许生产图缺少必选依赖的特殊通道。
+#[nestrs::factory]
+fn database() -> Database {
+    Database
+}
+
+#[nestrs::factory(key = 7)]
+fn indexed_database() -> Database {
+    Database
+}
 
 trait Audit: Send + Sync {}
 
@@ -60,180 +71,150 @@ struct CleanupController;
 #[injectable(lifetime = Transient)]
 struct TransientController;
 
+// primary 已在编译期消费，不应为断言重放到运行期。分别加入实际竞争实现，
+// 用已选接口路由验证两种属性顺序仍选择原来的 primary 服务。
+trait BeforePort: Send + Sync {}
+trait AfterPort: Send + Sync {}
+#[injectable]
+struct Secondary;
+impl BeforePort for PrimaryBeforeInjectable {}
+impl BeforePort for Secondary {}
+impl AfterPort for InjectableBeforePrimary {}
+impl AfterPort for Secondary {}
+
+#[allow(dead_code)]
+async fn primary_queries(provider: &crate::ServiceProvider) {
+    let _ = provider.get_service::<dyn BeforePort>().await;
+    let _ = provider.get_service::<dyn AfterPort>().await;
+}
+
+fn node<T: Send + Sync + 'static>() -> &'static crate::graph::CompiledNode {
+    crate::graph::plan::load()
+        .graph
+        .nodes
+        .iter()
+        .find(|node| node.identifier.service_type == ServiceType::create::<T>())
+        .unwrap()
+}
+
 #[test]
-fn injectable_collects_class_providers_and_dependency_specs() {
-    let providers: Vec<_> = crate::registration::catalog::collect().providers;
-    let controller = providers
-        .iter()
-        .find(|provider| {
-            matches!(
-                provider,
-                Provider::Class(ClassProvider { provide, .. })
-                    if provide
-                        == &ServiceIdentifier::new(
-                            Some(ServiceKey::Named("controller".to_owned())),
-                            ServiceType::create::<Controller>(),
-                        )
-            )
-        })
-        .expect("injectable macro should collect Controller provider");
-    let Provider::Class(ClassProvider {
-        common,
-        dependencies,
-        ..
-    }) = controller
-    else {
-        panic!("Controller should be a class provider");
-    };
-
-    assert_eq!(common.lifetime, ServiceLifetime::Scoped);
-    assert!(!common.primary);
-    assert!(common.source.file.ends_with("injectable_provider.rs"));
-    assert!(common.cleanup.is_none());
-    assert_eq!(dependencies.len(), 2);
-
-    let transient = providers
-        .iter()
-        .find(|provider| {
-            matches!(
-                provider,
-                Provider::Class(ClassProvider { provide, .. })
-                    if provide.service_type == ServiceType::create::<TransientController>()
-            )
-        })
-        .expect("injectable macro should collect TransientController provider");
-    let Provider::Class(ClassProvider { common, .. }) = transient else {
-        panic!("TransientController should be a class provider");
-    };
-    assert_eq!(common.lifetime, ServiceLifetime::Transient);
-
-    let database = &dependencies[0];
-    assert_eq!(database.declaration_position, 0);
-    assert_eq!(database.label, Some("database"));
-    assert_eq!(database.input_slot, InputSlot::new(0));
+fn injectable_compiles_execution_policy_and_exact_dependency_slots() {
+    let graph = &crate::graph::plan::load().graph;
+    let controller = node::<Controller>();
+    assert!(matches!(controller.constructor, Constructor::Class(_)));
     assert_eq!(
-        database.token,
+        controller.identifier.service_key,
+        Some(ServiceKey::Named("controller".into()))
+    );
+    assert_eq!(controller.common.lifetime, ServiceLifetime::Scoped);
+    assert!(
+        controller
+            .common
+            .source
+            .file
+            .ends_with("injectable_provider.rs")
+    );
+    assert!(controller.common.cleanup.is_none());
+    assert_eq!(controller.dependencies.len(), 2);
+    assert_eq!(
+        node::<TransientController>().common.lifetime,
+        ServiceLifetime::Transient
+    );
+
+    let database = &controller.dependencies[0];
+    assert_eq!(database.label, Some("database"));
+    assert_eq!(database.slot, InputSlot::new(0));
+    assert_eq!(
+        database.requested,
         ServiceIdentifier::from(ServiceType::create::<Database>())
     );
-    assert!(matches!(database.delivery, Delivery::Selected(_)));
-    assert!(matches!(
-        database.provider_source,
-        ProviderSource::Registered
-    ));
     assert!(!database.optional);
-
-    let audit = &dependencies[1];
-    assert_eq!(audit.declaration_position, 3);
-    assert_eq!(audit.label, Some("audit"));
-    assert_eq!(audit.input_slot, InputSlot::new(1));
     assert_eq!(
-        audit.token,
+        graph.nodes[database.target.unwrap()].identifier,
+        database.requested
+    );
+
+    let audit = &controller.dependencies[1];
+    assert_eq!(audit.label, Some("audit"));
+    assert_eq!(audit.slot, InputSlot::new(1));
+    assert_eq!(
+        audit.requested,
         ServiceIdentifier::new(
-            Some(ServiceKey::Named("audit".to_owned())),
-            ServiceType::create::<dyn Audit>(),
+            Some(ServiceKey::Named("audit".into())),
+            ServiceType::create::<dyn Audit>()
         )
     );
-    assert!(matches!(
-        audit.delivery,
-        Delivery::RequiresBindingOrAbsent(_)
-    ));
-    assert!(matches!(audit.provider_source, ProviderSource::Registered));
     assert!(audit.optional);
+    assert!(audit.target.is_none());
+    assert!(
+        (audit.prepare)(audit.slot, None)
+            .unwrap()
+            .into_optional::<dyn Audit>(audit.slot)
+            .unwrap()
+            .is_none()
+    );
 
-    let tuple = providers
-        .iter()
-        .find(|provider| {
-            matches!(
-                provider,
-                Provider::Class(ClassProvider { provide, .. })
-                    if provide.service_type == ServiceType::create::<TupleConsumer>()
-            )
-        })
-        .expect("injectable macro should collect tuple provider");
-    let Provider::Class(ClassProvider { dependencies, .. }) = tuple else {
-        panic!("TupleConsumer should be a class provider");
-    };
-    assert_eq!(dependencies[0].declaration_position, 0);
-    assert_eq!(dependencies[0].label, None);
-    assert_eq!(dependencies[0].input_slot, InputSlot::new(0));
+    let tuple = node::<TupleConsumer>();
+    assert_eq!(tuple.dependencies.len(), 1);
+    let input = &tuple.dependencies[0];
+    assert_eq!(input.label, None);
+    assert_eq!(input.slot, InputSlot::new(0));
     assert_eq!(
-        dependencies[0].token,
+        input.requested,
         ServiceIdentifier::new(
             Some(ServiceKey::Indexed(7)),
-            ServiceType::create::<Database>(),
+            ServiceType::create::<Database>()
         )
     );
+    assert_eq!(
+        graph.nodes[input.target.unwrap()].identifier,
+        input.requested
+    );
+}
 
-    let values = providers
-        .iter()
-        .find(|provider| {
-            matches!(
-                provider,
-                Provider::Class(ClassProvider { provide, .. })
-                    if provide.service_type == ServiceType::create::<FieldValues>()
-            )
-        })
-        .expect("injectable macro should collect FieldValues provider");
-    let Provider::Class(ClassProvider { constructor, .. }) = values else {
-        panic!("FieldValues should be a class provider");
+#[test]
+fn generated_value_expressions_cleanup_and_primary_keep_their_business_semantics() {
+    let Constructor::Class(constructor) = node::<FieldValues>().constructor else {
+        panic!("class")
     };
-    let erased_values = constructor(ConstructionInputs::empty())
-        .expect("value-only constructor should not need dependency inputs");
-    let values = match erased_values.downcast::<FieldValues>() {
+    let erased = constructor(ConstructionInputs::empty()).unwrap();
+    let values = match erased.downcast::<FieldValues>() {
         Ok(values) => values,
-        Err(_) => panic!("generated constructor should return FieldValues"),
+        Err(_) => panic!("FieldValues constructor result"),
     };
-
     assert_eq!(values.owned_literal, "123");
     assert_eq!(values.static_label, "from-static");
     assert_eq!(values.expression, 42);
     assert!(values.defaults.is_empty());
-
-    let primary_before_injectable = providers
-        .iter()
-        .find(|provider| {
-            matches!(
-                provider,
-                Provider::Class(ClassProvider { provide, .. })
-                    if provide.service_type == ServiceType::create::<PrimaryBeforeInjectable>()
-            )
-        })
-        .expect("primary-before-injectable should collect a class provider");
-    let Provider::Class(ClassProvider { common, .. }) = primary_before_injectable else {
-        panic!("primary-before-injectable should be a class provider");
-    };
-    assert!(common.primary);
-
-    let injectable_before_primary = providers
-        .iter()
-        .find(|provider| {
-            matches!(
-                provider,
-                Provider::Class(ClassProvider { provide, .. })
-                    if provide.service_type == ServiceType::create::<InjectableBeforePrimary>()
-            )
-        })
-        .expect("injectable-before-primary should collect a class provider");
-    let Provider::Class(ClassProvider { common, .. }) = injectable_before_primary else {
-        panic!("injectable-before-primary should be a class provider");
-    };
-    assert!(common.primary);
-
-    let cleanup_controller = providers
-        .iter()
-        .find(|provider| {
-            matches!(
-                provider,
-                Provider::Class(ClassProvider { provide, .. })
-                    if provide.service_type == ServiceType::create::<CleanupController>()
-            )
-        })
-        .expect("injectable cleanup should be retained by its provider");
-    let Provider::Class(ClassProvider { common, .. }) = cleanup_controller else {
-        panic!("CleanupController should be a class provider");
-    };
-    let cleanup = common
+    drop(node::<CleanupController>()
+        .common
         .cleanup
-        .expect("injectable cleanup should be adapted to CleanupHook");
-    drop(cleanup());
+        .expect("cleanup callback")());
+
+    let graph = &crate::graph::plan::load().graph;
+    for (port, selected) in [
+        (
+            ServiceType::create::<dyn BeforePort>(),
+            ServiceType::create::<PrimaryBeforeInjectable>(),
+        ),
+        (
+            ServiceType::create::<dyn AfterPort>(),
+            ServiceType::create::<InjectableBeforePrimary>(),
+        ),
+    ] {
+        let route = &graph.routes[&ServiceIdentifier::from(port)];
+        assert_eq!(
+            graph.nodes[route.provider].identifier.service_type,
+            selected
+        );
+        assert!(route.projection.is_some());
+        assert_eq!(
+            graph
+                .nodes
+                .iter()
+                .filter(|node| node.identifier.service_type == selected)
+                .count(),
+            1
+        );
+    }
 }

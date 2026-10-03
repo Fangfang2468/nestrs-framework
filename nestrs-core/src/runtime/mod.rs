@@ -26,6 +26,7 @@ pub(crate) use owner::Owner;
 
 type OwnerId = u64;
 type TaskId = u64;
+type QueryId = u64;
 type Resolution = Result<DependencyLease, ResolveError>;
 type ResolveWaiter = oneshot::Sender<Resolution>;
 type CloseWaiter = oneshot::Sender<Result<(), DisposeError>>;

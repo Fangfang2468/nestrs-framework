@@ -1,26 +1,44 @@
-//! 在执行任何用户构造代码之前编译完整、不可变的服务图。
+//! 工具链编译的完整、不可变服务执行计划。
 //!
-//! 元数据展开、provider 选择和图遍历均使用工作队列或显式栈。运行期只消费编译结果，
-//! 不得再次调用物化 callback、选择候选或修改图。
+//! 生产入口通过 `plan` 装载编译结果，不再物化泛型、选择候选或执行图编译。
+//! `tests/support/graph` 保存原算法与诊断参照，便于验证迁移前后的规则一致性。
 //!
-//! 阅读顺序：`compiler` 展示编译阶段；本文件定义阶段的最终输出；`diagnostics` 把
-//! 冻结结果转成只读图数据。这里的节点是 Provider 声明，运行期一次 Transient 消费
+//! 本文件只定义生产执行计划，`plan` 负责装载目标程序中的 typed adapter 地址。
+//! 这里的节点是已选定的服务执行单元，运行期一次 Transient 消费
 //! 产生的实例/任务不等同于图节点。
 
+#[cfg(test)]
+#[path = "../../tests/support/graph/compiler.rs"]
 mod compiler;
+#[cfg(test)]
+#[path = "../../tests/support/graph/diagnostics.rs"]
 mod diagnostics;
+#[cfg(test)]
+#[path = "../../tests/support/graph/error.rs"]
+mod error;
+#[cfg(test)]
+#[path = "../../tests/support/graph/names.rs"]
 mod names;
+pub(crate) mod plan;
 
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    activation::{ClassConstructor, InputPreparer, InputSlot, LazyInputPreparer},
-    registration::provider::{FactoryInvoker, ProviderCommon},
+    ServiceLifetime,
+    activation::{
+        InputPreparer, InputSlot, LazyInputPlan, LazyInputPreparer, adapter::CleanupHook,
+    },
     service::{ServiceIdentifier, ServiceSource},
 };
 
+pub(crate) use crate::activation::adapter::Constructor;
+
+#[cfg(test)]
 pub(crate) use compiler::GraphCompiler;
+#[cfg(test)]
 pub(crate) use diagnostics::snapshot;
+#[cfg(test)]
+pub(crate) use error::{GraphDiagnostic, GraphDiagnosticKind, GraphError};
 
 /// 冻结后节点数组的稳定下标。展开阶段完成排序之前的临时下标不能流入运行期。
 pub(crate) type ProviderId = usize;
@@ -36,11 +54,11 @@ pub(crate) struct ValidatedGraph {
     pub(crate) dependents: Vec<Vec<ProviderId>>,
 }
 
-/// 一份 Provider 声明的构造计划；生命周期决定运行期有多少个实际 occurrence。
+/// 一个服务的构造计划；生命周期决定运行期有多少个实际 occurrence。
 #[derive(Debug)]
 pub(crate) struct CompiledNode {
     pub(crate) identifier: ServiceIdentifier,
-    pub(crate) common: ProviderCommon,
+    pub(crate) common: NodePolicy,
     /// 输入槽位完整保留，不能像拓扑边一样去重。
     pub(crate) dependencies: Vec<CompiledDependency>,
     pub(crate) constructor: Constructor,
@@ -48,10 +66,14 @@ pub(crate) struct CompiledNode {
     pub(crate) requires_scope: bool,
 }
 
+/// 实例执行所需的固定策略。候选优先级等声明事实不会进入运行期节点。
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum Constructor {
-    Class(ClassConstructor),
-    Factory(FactoryInvoker),
+pub(crate) struct NodePolicy {
+    pub(crate) lifetime: ServiceLifetime,
+    /// None 继承当前 root/预热调用的默认值，Some 覆盖自主预热选择。
+    pub(crate) lazy: Option<bool>,
+    pub(crate) source: ServiceSource,
+    pub(crate) cleanup: Option<CleanupHook>,
 }
 
 /// 已决定交付方式的一项构造输入，不再包含运行期候选选择或泛型展开逻辑。
@@ -63,6 +85,9 @@ pub(crate) struct CompiledDependency {
     pub(crate) optional: bool,
     /// 延迟字段在消费者构造时交付句柄；目标边仍参与完整图验证与关闭排序。
     pub(crate) lazy: Option<LazyInputPreparer>,
+    /// 每条存在目标的延迟边只有一份不可变描述；全部 root/scope/字段 occurrence 共享它。
+    /// 缺席 optional 不创建描述，初始化接收端与结果缓存仍由每个字段分别拥有。
+    pub(crate) lazy_plan: Option<Arc<LazyInputPlan>>,
     /// None 只在成功图中表示已确定缺席的 optional 输入。
     pub(crate) target: Option<ProviderId>,
     /// 目标发布后用此类型化函数准备槽位；target 为 None 时写入合法缺席值。
@@ -76,85 +101,6 @@ pub(crate) struct RootRoute {
     /// trait 根查询复用 binding 的必选输入投影，concrete 根使用实例的准确类型地址。
     pub(crate) projection: Option<InputPreparer>,
 }
-
-/// 内部聚合结构错误；公开 build 边界选择 panic，实际服务构造失败使用另一类错误。
-#[derive(Debug)]
-pub(crate) struct GraphError {
-    pub(crate) diagnostics: Vec<GraphDiagnostic>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GraphDiagnosticKind {
-    DuplicateProvider,
-    DuplicateBinding,
-    OrphanBinding,
-    AmbiguousTrait,
-    InvalidMetadata,
-    MissingDependency,
-    MaterializationMismatch,
-    Cycle,
-    ScopeRequired,
-}
-
-/// 诊断携带完整参与类型和来源，不依赖日志拼接反向恢复信息。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GraphDiagnostic {
-    pub(crate) kind: GraphDiagnosticKind,
-    pub(crate) message: String,
-    pub(crate) services: Vec<ServiceIdentifier>,
-    pub(crate) sources: Vec<ServiceSource>,
-}
-
-impl GraphDiagnostic {
-    fn new(kind: GraphDiagnosticKind, message: String) -> Self {
-        Self {
-            kind,
-            message,
-            services: Vec::new(),
-            sources: Vec::new(),
-        }
-    }
-
-    fn at(mut self, service: &ServiceIdentifier, source: ServiceSource) -> Self {
-        self.services.push(service.clone());
-        self.sources.push(source);
-        self
-    }
-}
-
-impl fmt::Display for GraphDiagnostic {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "[{:?}] {}", self.kind, self.message)?;
-        for service in &self.services {
-            if !self.message.contains(service.service_type.name) {
-                write!(
-                    formatter,
-                    "；服务 {} [key={:?}]",
-                    service.service_type.name, service.service_key
-                )?;
-            }
-        }
-        for source in &self.sources {
-            let location = format!("{}:{}:{}", source.file, source.line, source.column);
-            if !self.message.contains(&location) {
-                write!(formatter, "；来源 {location}")?;
-            }
-        }
-        Ok(())
-    }
-}
-
-impl fmt::Display for GraphError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(formatter, "服务图验证失败（{} 项）", self.diagnostics.len())?;
-        for diagnostic in &self.diagnostics {
-            writeln!(formatter, "- {diagnostic}")?;
-        }
-        Ok(())
-    }
-}
-
-impl std::error::Error for GraphError {}
 
 #[cfg(test)]
 #[path = "../../tests/unit/graph/compiler.rs"]

@@ -12,7 +12,7 @@ use super::slot::InputSlot;
 /// 源码位置和依赖路径，转换为公开的 [`crate::ResolveError`]；Eager 构建再按构建契约
 /// 汇总为 [`crate::BuildError`]。
 #[doc(hidden)]
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum ConstructionError {
     #[error("构造输入槽位 {slot:?} 超出范围（槽位总数：{slot_count}）")]
     SlotOutOfBounds { slot: InputSlot, slot_count: usize },
@@ -59,6 +59,13 @@ pub enum ConstructionError {
 
     #[error("factory provider {provider}（{provider_source:?}）执行失败：{detail}")]
     FactoryFailed {
+        provider: &'static str,
+        provider_source: ServiceSource,
+        detail: String,
+    },
+
+    #[error("constructor provider {provider}（{provider_source:?}）执行失败：{detail}")]
+    ConstructorFailed {
         provider: &'static str,
         provider_source: ServiceSource,
         detail: String,

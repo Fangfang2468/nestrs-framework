@@ -15,9 +15,11 @@ use zyn::zyn;
 /// 生成 const 的局部 lint allow 屏蔽，而不会泄漏到调用方。
 #[zyn::element]
 pub(crate) fn emit_injectable_registration(children: zyn::TokenStream) -> zyn::TokenStream {
+    let reflection = crate::codegen::reflection::support(false);
     zyn! {
         #[allow(clippy::unused_unit)]
         const _: () = {
+            {{ reflection }}
             {{ children }}
             ()
         };
@@ -50,10 +52,10 @@ mod tests {
             panic!("registration const should contain a block");
         };
 
-        assert_eq!(block.block.stmts.len(), 3);
+        assert_eq!(block.block.stmts.len(), 4);
         assert!(matches!(
             &block.block.stmts[0],
-            syn::Stmt::Item(syn::Item::Fn(_))
+            syn::Stmt::Item(syn::Item::Mod(_))
         ));
         assert!(matches!(
             &block.block.stmts[1],
@@ -61,6 +63,10 @@ mod tests {
         ));
         assert!(matches!(
             &block.block.stmts[2],
+            syn::Stmt::Item(syn::Item::Fn(_))
+        ));
+        assert!(matches!(
+            &block.block.stmts[3],
             syn::Stmt::Expr(syn::Expr::Tuple(tuple), None) if tuple.elems.is_empty()
         ));
     }

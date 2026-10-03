@@ -57,6 +57,7 @@ name = "cargo-nestrs"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "proc-macro2",
  "serde",
  "serde_json",
  "toml",

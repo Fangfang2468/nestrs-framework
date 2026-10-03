@@ -1,7 +1,7 @@
 //! Each target/feature analysis must describe the active compiler configuration.
 
 use nestrs::injectable;
-use nestrs_core::{ServiceProvider};
+use nestrs_core::ServiceProvider;
 
 #[path = "../automatic_assertions.rs"]
 mod automatic_assertions;
@@ -37,9 +37,7 @@ async fn main() {
     assert_eq!(automatic_assertions::explicit_count(), 0);
     automatic_assertions::assert_count::<dyn Port>(1);
     let provider = ServiceProvider::build().await.unwrap();
-    let service = nestrs_core::get_required_service!(provider, dyn Port)
-        .await
-        .unwrap();
+    let service = provider.get_required_service::<dyn Port>().await.unwrap();
     assert_eq!(
         service.selected(),
         if cfg!(feature = "alternate") {

@@ -68,23 +68,18 @@ async fn main() {
     // A concrete producer may export its projection without creating a demand
     // from the generic blueprints superseded by these exact type/key factories.
     automatic_assertions::assert_count::<dyn Port>(1);
-    let default = nestrs_core::get_required_service!(provider, DefaultRepository<User>)
+    let default = provider
+        .get_required_service::<DefaultRepository<User>>()
         .await
         .unwrap();
-    let named = nestrs_core::get_required_keyed_service!(
-        provider,
-        NamedRepository<User>,
-        ServiceKey::Named("same".into())
-    )
-    .await
-    .unwrap();
-    let indexed = nestrs_core::get_required_keyed_service!(
-        provider,
-        IndexedRepository<User>,
-        ServiceKey::Indexed(7)
-    )
-    .await
-    .unwrap();
+    let named = provider
+        .get_required_keyed_service::<NamedRepository<User>>(ServiceKey::Named("same".into()))
+        .await
+        .unwrap();
+    let indexed = provider
+        .get_required_keyed_service::<IndexedRepository<User>>(ServiceKey::Indexed(7))
+        .await
+        .unwrap();
     assert!(default.port.is_none());
     assert!(named.port.is_none());
     assert!(indexed.port.is_none());

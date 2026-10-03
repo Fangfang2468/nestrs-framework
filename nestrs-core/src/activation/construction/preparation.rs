@@ -8,7 +8,7 @@ use super::{
     ConstructionError, ConstructionInputs, FactoryLeaseFrame, InputPreparer, InputSlot,
     LazyInputPreparer, PreparedInput,
 };
-use crate::activation::{DependencyLease, lazy::LazyDependency};
+use crate::activation::{DependencyLease, LazyDependency};
 
 /// 一次构造的准备事务；与固定槽位缓冲区共置，集中维护输入和 lease 的提交顺序。
 pub(crate) struct ActivationPreparation {

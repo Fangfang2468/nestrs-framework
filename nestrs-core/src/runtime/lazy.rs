@@ -1,114 +1,73 @@
-//! 一个延迟消费槽位的请求状态。状态属于字段，绝不属于第一个等待它的 future。
+//! 延迟字段的 owner 请求入口与等待规则。
 //!
-//! 槽位只允许提交一次；协调器收到请求后负责初始化和发布。watch 接收端一直由槽位
-//! 保存，因此取消、重新等待或并发等待都不会再次创建 Transient occurrence。
+//! 这里复用 owner 原有的 Arc 分配提供弱 resolver；字段的类型化缓存与 watch 接收端
+//! 由 activation 的控制块保存。runtime 只负责检查 owner 是否接受新请求、提交命令，
+//! 不为每个字段再建立一份状态机，也不持有字段的缓存。
 
-use std::{
-    future::Future,
-    pin::Pin,
-    sync::atomic::Ordering,
-    sync::{Arc, Mutex, Weak},
+use std::sync::{Arc, atomic::Ordering};
+
+use tokio::sync::watch;
+
+use super::{handle::Command, owner::OwnerData};
+use crate::activation::{
+    LazyDependency, LazyInputPlan,
+    deferred::{LazyReceiver, LazyResolver},
 };
 
-use tokio::sync::{mpsc, watch};
-
-use super::{Resolution, handle::Command, owner::OwnerData};
-use crate::{
-    activation::lazy::{LazyDependency, LazyResolver},
-    error::ResolveError,
-    graph::{CompiledDependency, CompiledNode},
-    service::{ServiceIdentifier, ServiceSource},
-};
-
-pub(super) struct LazySlot {
-    owner: Weak<OwnerData>,
-    commands: mpsc::WeakUnboundedSender<Command>,
-    provider: usize,
-    consumer: ServiceIdentifier,
-    source: ServiceSource,
-    label: Option<&'static str>,
-    // None 是尚未请求，不是初始化失败。Some 内同时保存进行中和最终结果。
-    receiver: Mutex<Option<watch::Receiver<Option<Resolution>>>>,
+tokio::task_local! {
+    /// 构造 worker 持有全局激活名额；此时等待新的延迟目标可能耗尽名额而死锁。
+    ///
+    /// 标记属于 runtime 的调度约束，activation 仅通过等待许可函数访问它。
+    /// 它覆盖完整构造 future，随任务而非操作系统线程移动，不传播到用户自行 spawn 的任务。
+    pub(super) static IN_ACTIVATION: ();
 }
 
-impl LazySlot {
-    pub(super) fn dependency(
-        owner: &Arc<OwnerData>,
-        commands: mpsc::WeakUnboundedSender<Command>,
-        provider: usize,
-        consumer: &CompiledNode,
-        dependency: &CompiledDependency,
-    ) -> LazyDependency {
-        LazyDependency {
-            resolver: Arc::new(Self {
-                owner: Arc::downgrade(owner),
-                commands,
-                provider,
-                consumer: consumer.identifier.clone(),
-                source: consumer.common.source,
-                label: dependency.label,
-                receiver: Mutex::new(None),
-            }),
-            preparer: dependency.prepare,
-            optional: dependency.optional,
-        }
+/// 为固定依赖交付弱 owner 引用和真实投影，不创建目标实例或新的引用计数分配。
+///
+/// Weak 的 trait 转换只附加已有 OwnerData 的 vtable；不会分配 Arc<dyn LazyResolver>。
+/// 保留独立的等待检查函数，使已经接受的请求在 owner 消失后仍可接续其 watch 结果。
+pub(super) fn dependency(owner: &Arc<OwnerData>, plan: Arc<LazyInputPlan>) -> LazyDependency {
+    let resolver = Arc::downgrade(owner);
+    LazyDependency {
+        plan,
+        resolver,
+        check_wait_allowed,
     }
+}
 
-    /// 锁只保护“建立唯一请求”这个同步步骤，不持锁等待，也不持有 owner 强引用跨 await。
-    fn subscribe(&self) -> Result<watch::Receiver<Option<Resolution>>, ResolveError> {
-        let mut state = self
-            .receiver
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if let Some(receiver) = &*state {
-            return Ok(receiver.clone());
+/// 这里只检查当前调用者，不读取 owner，也不触碰延迟字段的接收端或失败缓存。
+///
+/// 每个尚未取得类型化结果的调用都必须检查，包括加入另一调用已开始的初始化。
+/// 缓存命中不等待新任务，由 activation 在调用本函数之前直接返回。
+pub(super) fn check_wait_allowed() -> Result<(), &'static str> {
+    if IN_ACTIVATION.try_with(|()| ()).is_ok() {
+        return Err(
+            "服务构造期间不能首次获取尚未完成的延迟注入；请声明普通注入依赖，或在服务发布后调用 LazyInjection::get",
+        );
+    }
+    Ok(())
+}
+
+impl LazyResolver for OwnerData {
+    /// 同步提交一次请求；单字段的去重与取消接续由 activation 控制块保证。
+    ///
+    /// 调用期间暂时升级命令通道，返回后只留下接收端，不持有 owner 或 runtime 的
+    /// 强引用。关闭与请求之间若有竞争，协调器仍按队列中的 owner 状态作最终裁决。
+    fn request(&self, provider: usize) -> Result<LazyReceiver, &'static str> {
+        const CLOSED: &str = "服务 owner 已关闭或正在关闭，无法首次获取延迟依赖";
+        if self.status.load(Ordering::Acquire) != super::owner::OPEN {
+            return Err(CLOSED);
         }
-        let closed = || self.error("服务 owner 已关闭或正在关闭，无法首次获取延迟依赖".into());
-        let owner = self.owner.upgrade().ok_or_else(closed)?;
-        if owner.status.load(Ordering::Acquire) != super::owner::OPEN {
-            return Err(closed());
-        }
-        let commands = self.commands.upgrade().ok_or_else(closed)?;
+        let commands = self.commands.upgrade().ok_or(CLOSED)?;
         let (waiter, receiver) = watch::channel(None);
         commands
             .send(Command::ResolveLazy {
-                owner: owner.id,
-                provider: self.provider,
+                owner: self.id,
+                provider,
                 waiter,
             })
-            .map_err(|_| closed())?;
-        *state = Some(receiver.clone());
+            .map_err(|_| CLOSED)?;
         Ok(receiver)
-    }
-}
-
-impl LazyResolver for LazySlot {
-    fn resolve(&self) -> Pin<Box<dyn Future<Output = Resolution> + Send + '_>> {
-        Box::pin(async move {
-            let mut receiver = self.subscribe()?;
-            loop {
-                // 必须在 await 之前释放 watch 的读锁，防止完成者等待当前读取者。
-                let result = receiver.borrow().clone();
-                if let Some(result) = result {
-                    return result.map_err(|error| {
-                        ResolveError::dependency(&self.consumer, self.source, error)
-                    });
-                }
-                receiver
-                    .changed()
-                    .await
-                    .map_err(|_| self.error("Tokio 协调器已停止，延迟初始化未完成".into()))?;
-            }
-        })
-    }
-
-    fn error(&self, message: String) -> ResolveError {
-        let label = self.label.unwrap_or("未命名字段");
-        ResolveError::construction(
-            &self.consumer,
-            self.source,
-            format!("延迟注入字段 {label}：{message}"),
-        )
     }
 }
 

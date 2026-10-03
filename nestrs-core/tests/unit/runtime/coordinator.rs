@@ -1,6 +1,9 @@
 //! 运行时状态与行为回归。直接检查内部任务表的用例用于证明任务会退役，
 //! 其余测试通过真实 Tokio worker 验证并发、失败排空、深图与关闭契约。
 
+#[path = "subscriptions.rs"]
+mod subscriptions;
+
 use std::{
     collections::HashMap,
     sync::{
@@ -14,13 +17,14 @@ use tokio::sync::Semaphore;
 
 use super::super::{Runtime, TaskId, owner::CLOSED, task::TaskRequest};
 use crate::{
+    activation::adapter::FactoryInvoker,
     activation::{
         ConstructionError, ConstructionInputs, ErasedService, FactoryFuture, FactoryInputs,
         InputSlot, prepare_required,
     },
+    graph::NodePolicy,
     graph::{CompiledDependency, CompiledNode, Constructor, ValidatedGraph},
     lifetime::ServiceLifetime,
-    registration::provider::{FactoryInvoker, ProviderCommon},
     service::{ServiceIdentifier, ServiceKey, ServiceSource, ServiceType},
 };
 
@@ -42,9 +46,10 @@ fn node<T: Send + Sync + 'static>(
             Some(ServiceKey::Indexed(index)),
             ServiceType::create::<T>(),
         ),
-        common: ProviderCommon {
+        common: NodePolicy {
             lifetime,
-            primary: false,
+
+            lazy: None,
             source: ServiceSource::new(file!(), line!(), 0),
             cleanup: None,
         },
@@ -90,9 +95,9 @@ async fn completed_shared_success_retires_tasks_and_preserves_owner_cache() {
     for lifetime in [ServiceLifetime::Singleton, ServiceLifetime::Scoped] {
         SHARED_SUCCESS_CALLS.store(0, Ordering::SeqCst);
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-        let root = super::OwnerData::new(super::ROOT);
-        let first_scope = super::OwnerData::new(1);
-        let second_scope = super::OwnerData::new(2);
+        let root = super::OwnerData::new(super::ROOT, sender.downgrade());
+        let first_scope = super::OwnerData::new(1, sender.downgrade());
+        let second_scope = super::OwnerData::new(2, sender.downgrade());
         let mut coordinator = super::Coordinator::new(
             graph(vec![node::<u32>(
                 0,
@@ -102,15 +107,14 @@ async fn completed_shared_success_retires_tasks_and_preserves_owner_cache() {
             )]),
             root.clone(),
             receiver,
-            sender.downgrade(),
             4,
         );
         coordinator.handle_command(super::Command::Register(first_scope.clone()));
         coordinator.handle_command(super::Command::Register(second_scope.clone()));
         let mut queries = Vec::new();
-        for owner in [1, 1, 2] {
+        for (query, owner) in [1, 1, 2].into_iter().enumerate() {
             let (waiter, result) = tokio::sync::oneshot::channel();
-            coordinator.accept_resolution(owner, 0, waiter);
+            coordinator.accept_resolution(owner, 0, (query as u64, waiter));
             queries.push(result);
         }
         let expected = if lifetime == ServiceLifetime::Singleton {
@@ -163,7 +167,7 @@ async fn completed_shared_success_retires_tasks_and_preserves_owner_cache() {
         );
 
         let (waiter, cached) = tokio::sync::oneshot::channel();
-        coordinator.accept_resolution(1, 0, waiter);
+        coordinator.accept_resolution(1, 0, (3, waiter));
         assert!(cached.await.unwrap().unwrap().ptr_eq(&results[0]));
         assert!(coordinator.tasks.is_empty());
         assert!(coordinator.jobs.is_empty());
@@ -195,8 +199,8 @@ async fn completed_shared_failure_retires_tasks_without_retrying_or_publishing()
     for lifetime in [ServiceLifetime::Singleton, ServiceLifetime::Scoped] {
         SHARED_FAILURE_CALLS.store(0, Ordering::SeqCst);
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-        let root = super::OwnerData::new(super::ROOT);
-        let scope = super::OwnerData::new(1);
+        let root = super::OwnerData::new(super::ROOT, sender.downgrade());
+        let scope = super::OwnerData::new(1, sender.downgrade());
         let mut coordinator = super::Coordinator::new(
             graph(vec![node::<u32>(
                 0,
@@ -206,14 +210,13 @@ async fn completed_shared_failure_retires_tasks_without_retrying_or_publishing()
             )]),
             root.clone(),
             receiver,
-            sender.downgrade(),
             4,
         );
         coordinator.handle_command(super::Command::Register(scope.clone()));
         let mut queries = Vec::new();
-        for _ in 0..3 {
+        for query in 0..3 {
             let (waiter, result) = tokio::sync::oneshot::channel();
-            coordinator.accept_resolution(1, 0, waiter);
+            coordinator.accept_resolution(1, 0, (query, waiter));
             queries.push(result);
         }
         assert_eq!(coordinator.tasks.len(), 1);
@@ -246,7 +249,7 @@ async fn completed_shared_failure_retires_tasks_without_retrying_or_publishing()
         assert!(scope.journal.lock().unwrap().is_empty());
 
         let (waiter, cached) = tokio::sync::oneshot::channel();
-        coordinator.accept_resolution(1, 0, waiter);
+        coordinator.accept_resolution(1, 0, (3, waiter));
         assert_eq!(
             cached.await.unwrap().err().unwrap().to_string(),
             diagnostics[0]
@@ -272,9 +275,8 @@ fn failed_transient_tasks_are_retired_without_disposing_the_owner() {
     )]);
     let mut coordinator = super::Coordinator::new(
         graph,
-        super::OwnerData::new(super::ROOT),
+        super::OwnerData::new(super::ROOT, sender.downgrade()),
         receiver,
-        sender.downgrade(),
         1,
     );
     for _ in 0..10_000 {
@@ -307,6 +309,7 @@ async fn retiring_a_failed_parent_still_drains_its_previously_accepted_children(
             ),
             optional: false,
             lazy: None,
+            lazy_plan: None,
             target: Some(provider),
             prepare: prepare_required::<u32>,
             label: None,
@@ -333,16 +336,15 @@ async fn retiring_a_failed_parent_still_drains_its_previously_accepted_children(
         ),
     ]);
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-    let owner = super::OwnerData::new(super::ROOT);
-    let mut coordinator =
-        super::Coordinator::new(graph, owner.clone(), receiver, sender.downgrade(), 1);
+    let owner = super::OwnerData::new(super::ROOT, sender.downgrade());
+    let mut coordinator = super::Coordinator::new(graph, owner.clone(), receiver, 1);
     let cached = pending(coordinator.ensure_task(super::ROOT, 0, &mut vec![]));
     coordinator.settle(
         cached,
         Err(crate::ResolveError::new("cached failure".into())),
     );
     let (waiter, result) = tokio::sync::oneshot::channel();
-    coordinator.accept_resolution(super::ROOT, 2, waiter);
+    coordinator.accept_resolution(super::ROOT, 2, (0, waiter));
     assert!(
         result
             .await
@@ -426,6 +428,7 @@ fn deep_graph_activation_and_shutdown_do_not_use_a_recursive_rust_stack() {
                                     ),
                                     optional: false,
                                     lazy: None,
+                                    lazy_plan: None,
                                     target: Some(index - 1),
                                     prepare: prepare_required::<Chain>,
                                     label: Some("previous"),
@@ -610,6 +613,7 @@ async fn a_ready_successor_does_not_wait_for_an_unrelated_slow_node() {
                 ),
                 optional: false,
                 lazy: None,
+                lazy_plan: None,
                 target: Some(0),
                 prepare: prepare_required::<Fast>,
                 label: Some("fast"),
@@ -620,7 +624,15 @@ async fn a_ready_successor_does_not_wait_for_an_unrelated_slow_node() {
     let warming = {
         let runtime = runtime.clone();
         let owner = owner.clone();
-        tokio::spawn(async move { runtime.warm_up(&owner, ServiceLifetime::Singleton).await })
+        tokio::spawn(async move {
+            runtime
+                .warm_up(
+                    &owner,
+                    ServiceLifetime::Singleton,
+                    crate::InitializationMode::Eager,
+                )
+                .await
+        })
     };
     let gates = LAYER_GATES.get().unwrap();
     tokio::time::timeout(Duration::from_secs(3), gates.slow_started.acquire())
@@ -697,7 +709,11 @@ async fn synchronous_ready_nodes_can_execute_in_parallel_on_tokio_workers() {
         .collect();
     let (runtime, owner) = Runtime::start(graph(nodes), 2);
     runtime
-        .warm_up(&owner, ServiceLifetime::Singleton)
+        .warm_up(
+            &owner,
+            ServiceLifetime::Singleton,
+            crate::InitializationMode::Eager,
+        )
         .await
         .unwrap();
     runtime.close(&owner).await.unwrap();

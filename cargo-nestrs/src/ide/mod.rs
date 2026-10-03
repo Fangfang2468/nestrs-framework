@@ -4,6 +4,8 @@
 //! of the application. Compiler capture is opt-in and records only build data.
 
 mod capture;
+#[doc(hidden)]
+pub mod constructor;
 mod project;
 mod settings;
 

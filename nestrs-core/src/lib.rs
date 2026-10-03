@@ -1,8 +1,9 @@
 // 以静态依赖图为执行计划的异步 DI 容器。
 //
 // 阅读实现时可以沿以下顺序进入各模块：
-// 1. `registration` 接收编译器收集的类型化声明，不执行用户构造代码。
-// 2. `graph` 展开声明、选择路由并验证完整图，得到不可变的构造计划。
+// 1. 工具链收集类型化声明和查询摘要，在最终入口编译时验证完整 DI 图。
+// 2. 工具链生成的 reflect 产物提供执行入口，`graph::plan` 一次装配并共享执行计划；
+//    core 生产运行时不再选择候选、展开泛型或验证拓扑。
 // 3. `facade` 将用户借用和查询请求交给 `runtime` 的单一协调器。
 // 4. `activation` 准备输入、保存稳定实例和强 lease，并以迭代队列释放依赖。
 //
@@ -21,8 +22,10 @@ mod facade;
 mod graph;
 mod lifetime;
 mod options;
-mod query;
+// 旧声明结构仅保留为隔离图算法的测试输入；生产构建与工具生成代码均不使用此模块。
+#[cfg(test)]
 #[allow(dead_code)]
+#[path = "../tests/support/registration/mod.rs"]
 mod registration;
 mod runtime;
 #[allow(dead_code)]

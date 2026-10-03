@@ -1,10 +1,9 @@
-//! `#[bind]` 的 `TraitBinding` 注册生成。
+//! 隐藏 `#[bind]` 回归入口的类型化投影生成。
 //!
 //! bind 的语义不是注册一份 trait-object 实例，也不是注册 provider：它只将具体服务的
-//! 地址通过 Rust 类型系统投影为 `dyn Trait`，从而保存正确的 vtable，因此进入
-//! 独立的绑定切片。闭合 self 类型若有 ProviderDefinition，还提交可选蓝图供图编译
-//! 收集；factory-only self 不需要该 trait。请求 key 按 `InheritRequestedKey` 继承到
-//! concrete 服务 token，绑定不会创建另一份实例或覆盖 provider 自身的 key。
+//! 地址通过 Rust 类型系统投影为 `dyn Trait`，从而保存正确的 vtable。真实配对通过
+//! 局部反射 marker 交给编译器选择，目标端回调只返回执行投影；它不寻找 provider、
+//! 不物化泛型，也不会创建另一份实例或覆盖 provider 自身的 key。
 
 use zyn::{syn, zyn};
 
@@ -15,9 +14,11 @@ use zyn::{syn, zyn};
 /// binding callback。
 #[zyn::element]
 pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> zyn::TokenStream {
+    let reflection = crate::codegen::reflection::support(false);
     zyn! {
         #[allow(clippy::unused_unit)]
         const _: () = {
+            {{ reflection }}
             fn __nestrs_project_bound_service(
                 service: &{{ service }}
             ) -> &(dyn {{ interface }} + 'static) {
@@ -27,19 +28,16 @@ pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> z
         #[allow(dead_code)]
             #[allow(clippy::needless_borrow)]
             fn __nestrs_reflect_trait_binding()
-                -> ::nestrs_core::registration::binding::TraitBinding
+                -> ::nestrs_core::activation::adapter::ProjectionAdapter
             {
-                ::nestrs_core::registration::compiler::compiler_binding::<{{ service }}, dyn {{ interface }}>();
-                use ::nestrs_core::registration::root::ProbeProvider as _;
-                let __nestrs_probe = ::nestrs_core::registration::root::Probe::<{{ service }}>::new();
-                ::nestrs_core::registration::binding::TraitBinding {
+                __nestrs_reflect::compiler_binding::<{{ service }}, dyn {{ interface }}>();
+                ::nestrs_core::activation::adapter::ProjectionAdapter {
                     trait_type: ::nestrs_core::service::ServiceType::create::<
                         dyn {{ interface }}
                     >(),
                     concrete_type: ::nestrs_core::service::ServiceType::create::<
                         {{ service }}
                     >(),
-                    materialize: (&&__nestrs_probe).provider_callback(),
                     prepare_required: (|
                         slot: ::nestrs_core::activation::InputSlot,
                         input: ::core::option::Option<::nestrs_core::activation::ErasedServiceRef>,
@@ -66,11 +64,21 @@ pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> z
                             __nestrs_project_bound_service,
                         )
                     }) as ::nestrs_core::activation::InputPreparer,
-                    source: ::nestrs_core::service::ServiceSource::new(
-                        file!(),
-                        line!(),
-                        column!(),
-                    ),
+                    project: (|
+                        slot: ::nestrs_core::activation::InputSlot,
+                        input: ::nestrs_core::activation::ErasedServiceRef,
+                        target: &mut ::nestrs_core::activation::ProjectionTarget<'_>,
+                    | {
+                        ::nestrs_core::activation::project_bound::<
+                            {{ service }},
+                            dyn {{ interface }},
+                        >(
+                            slot,
+                            input,
+                            target,
+                            __nestrs_project_bound_service,
+                        )
+                    }) as ::nestrs_core::activation::ServiceProjector,
                 }
             }
 
@@ -95,10 +103,13 @@ mod tests {
         .to_string();
 
         assert!(rendered.contains("compiler_binding"));
-        assert!(rendered.contains("TraitBinding"));
+        assert!(rendered.contains("ProjectionAdapter"));
         assert!(!rendered.contains("key_policy"));
         assert!(rendered.contains("prepare_bound_required"));
         assert!(rendered.contains("prepare_bound_optional"));
+        assert!(rendered.contains("project_bound"));
+        assert!(rendered.contains("ProjectionTarget"));
+        assert!(rendered.contains("ServiceProjector"));
         assert!(rendered.contains("ErasedServiceRef"));
         assert!(rendered.contains("InputSlot"));
         assert!(rendered.contains("InputPreparer"));

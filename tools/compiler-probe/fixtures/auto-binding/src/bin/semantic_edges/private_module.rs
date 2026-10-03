@@ -26,10 +26,12 @@ mod api {
     }
 
     pub(super) async fn assert_projection(provider: &ServiceProvider) {
-        let concrete = nestrs_core::get_required_service!(provider, PrivateService)
+        let concrete = provider
+            .get_required_service::<PrivateService>()
             .await
             .unwrap();
-        let projected = nestrs_core::get_required_service!(provider, dyn PrivatePort)
+        let projected = provider
+            .get_required_service::<dyn PrivatePort>()
             .await
             .unwrap();
         assert_eq!(

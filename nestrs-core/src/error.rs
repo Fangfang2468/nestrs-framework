@@ -1,6 +1,7 @@
 //! 门面与运行时共用的错误模型。
 //!
-//! 图结构错误在构建入口 panic；本模块表达运行环境、实例初始化和关闭失败。
+//! 图结构错误由工具链在编译期报告；本模块表达编译计划缺失、运行环境、
+//! 实例初始化和关闭失败。
 //! 错误类型位于独立的内部模块，避免 runtime 为了报告错误而反向依赖 facade。
 //! 公开类型仍从 crate 根导出，错误文本、共享失败记录和依赖路径顺序保持不变。
 
@@ -8,9 +9,12 @@ use std::{fmt, sync::Arc};
 
 use crate::service::{ServiceIdentifier, ServiceSource};
 
-/// 运行环境或 Eager 初始化失败。静态图错误直接 panic。
+/// 编译计划缺失、运行环境或启动预热失败。静态图错误由工具链在编译期报告。
+/// Lazy 默认下显式 #[lazy(false)] 的初始化失败也属于启动失败。
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
+    #[error("服务容器缺少编译计划；请使用 cargo nestrs check/build/run/test 构建应用")]
+    CompilerPlanUnavailable,
     #[error("构建服务容器需要当前 Tokio runtime")]
     RuntimeUnavailable,
     #[error("服务容器预热失败: {error}; 关闭结果: {dispose_error:?}")]

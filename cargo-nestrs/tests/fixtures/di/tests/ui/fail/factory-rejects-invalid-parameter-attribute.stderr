@@ -1,4 +1,4 @@
-error: `#[factory]` 参数只支持 #[inject] 属性
+error: `#[factory]` 参数只支持 #[inject] 和 #[lazy] 属性
  --> tests/ui/fail/factory-rejects-invalid-parameter-attribute.rs:4:33
   |
 4 | fn attributed_parameter_factory(#[allow(unused)] dependency: u8) -> u8 {

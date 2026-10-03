@@ -248,6 +248,13 @@ def validate_model(path, project, alternate, release):
     assert ("debug_assertions" in cfg) != release, cfg
     assert 'panic="unwind"' in cfg and 'target_arch="x86_64"' in cfg, cfg
     assert app["env"]["NESTRS_FIXTURE_LABEL"] == "generated-by-build-script", app["env"]
+    constructor_model = json.loads(app["env"]["NESTRS_IDE_CONSTRUCTORS"])
+    assert constructor_model["version"] == 1, constructor_model
+    selections = [entry["selection"] for entry in constructor_model["declarations"] if "struct ConstructorService" in entry["input"]]
+    assert len(selections) == 1 and selections[0]["constructor"], selections
+    fields = {field["name"]: field for field in selections[0]["fields"]}
+    assert fields["constructor_port"]["slot"] == 0 and not fields["constructor_port"]["lazy"], fields
+    assert fields["later"]["slot"] == 1 and fields["later"]["lazy"], fields
     assert (Path(app["env"]["OUT_DIR"]) / "generated.rs").is_file(), app["env"]
     dependencies = {entry["name"]: crates[entry["crate"]] for entry in app["deps"]}
     assert {"nestrs", "nestrs_core", "tokio"} <= dependencies.keys(), dependencies.keys()
@@ -274,6 +281,14 @@ def lsp_cases(server, project, settings, environment, output, full, release):
         expanded = session.until(lambda: session.request("rust-analyzer/expandMacro", expansion_params),
                                  lambda item: item and "Injection" in item.get("expansion", ""), "service expansion")
         evidence["expansion"] = expanded
+        constructor_params = params(uri, source, "#[injectable]\nstruct ConstructorService", len("#["))
+        constructor_expanded = session.until(
+            lambda: session.request("rust-analyzer/expandMacro", constructor_params),
+            lambda item: item and "LazyInjection" in item.get("expansion", "") and "__nestrs_constructor_activate" in item.get("expansion", ""),
+            "constructor service expansion",
+        )
+        assert "Default::default" not in constructor_expanded["expansion"], constructor_expanded
+        evidence["constructor_expansion"] = constructor_expanded
         evidence["cold_diagnostics"] = session.clean_diagnostics(uri)
         profile_hover = session.request("textDocument/hover", params(uri, source, "let _ = editor_profile_value();", len("let _ = ")))
         assert profile_hover and ("usize" if release else "str") in json.dumps(profile_hover), profile_hover
@@ -285,6 +300,12 @@ def lsp_cases(server, project, settings, environment, output, full, release):
         field = session.request("textDocument/hover", params(uri, source, "self.port.label()", len("self.")))
         assert field and "Injection" in json.dumps(field), field
         evidence["field_hover"] = field
+        constructor_field = session.request("textDocument/hover", params(uri, source, "self.constructor_port.label()", len("self.")))
+        assert constructor_field and "Injection" in json.dumps(constructor_field), constructor_field
+        lazy_field = session.request("textDocument/hover", params(uri, source, "self.later.get()", len("self.")))
+        assert lazy_field and "LazyInjection" in json.dumps(lazy_field), lazy_field
+        evidence["constructor_field_hover"] = constructor_field
+        evidence["constructor_lazy_hover"] = lazy_field
         factory = session.request("textDocument/hover", params(uri, source, "Client(port.label())", len("Client(")))
         assert factory and "Port" in json.dumps(factory) and "&" in json.dumps(factory), factory
         evidence["factory_hover"] = factory

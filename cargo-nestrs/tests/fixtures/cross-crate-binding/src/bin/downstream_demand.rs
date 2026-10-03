@@ -1,7 +1,7 @@
 //! Only this executable contributes query roots; providers have no local demand.
 
 use contracts::{CatalogPort, ConnectionPort, ConnectionView};
-use nestrs_core::{ServiceProvider, get_required_service};
+use nestrs_core::ServiceProvider;
 use primary_provider::Catalog;
 use upstream_consumer::Checkout;
 
@@ -12,23 +12,31 @@ async fn main() {
     assert_eq!(primary_provider::total_constructions(), 0);
     let left = provider.create_scope();
     let right = provider.create_scope();
-    let checkout = get_required_service!(left.service_provider(), Checkout)
+    let checkout = left
+        .service_provider()
+        .get_required_service::<Checkout>()
         .await
         .unwrap();
-    let second = get_required_service!(right.service_provider(), Checkout)
+    let second = right
+        .service_provider()
+        .get_required_service::<Checkout>()
         .await
         .unwrap();
-    let catalog = get_required_service!(provider, Catalog).await.unwrap();
-    let catalog_port = get_required_service!(provider, dyn CatalogPort)
+    let catalog = provider.get_required_service::<Catalog>().await.unwrap();
+    let catalog_port = provider
+        .get_required_service::<dyn CatalogPort>()
         .await
         .unwrap();
-    let connection = get_required_service!(provider, dyn ConnectionPort)
+    let connection = provider
+        .get_required_service::<dyn ConnectionPort>()
         .await
         .unwrap();
-    let view = get_required_service!(provider, dyn ConnectionView)
+    let view = provider
+        .get_required_service::<dyn ConnectionView>()
         .await
         .unwrap();
-    let fallback = get_required_service!(provider, fallback_provider::Service)
+    let fallback = provider
+        .get_required_service::<fallback_provider::Service>()
         .await
         .unwrap();
     assert_eq!(checkout.available(), 17);

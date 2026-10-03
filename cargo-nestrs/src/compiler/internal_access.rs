@@ -7,6 +7,9 @@
 //! with a HIR audit; installing the resolver hooks without running `validate`
 //! is not a supported compilation mode.
 
+extern crate rustc_abi;
+
+use rustc_abi::ExternAbi;
 use rustc_hir::{
     self as hir,
     def::Res,
@@ -151,19 +154,21 @@ fn mark_generated(tcx: TyCtxt<'_>, span: Span) -> Span {
         if tcx.crate_name(krate).as_str() != "nestrs_core" {
             return None;
         }
-        let mut definition = DefId {
-            krate,
-            index: rustc_hir::def_id::CRATE_DEF_INDEX,
-        };
-        for component in ["registration", "compiler", "compiler_automatic_binding"] {
-            definition =
-                (CHILDREN.get().expect("Nestrs child hook not installed"))(tcx, definition)
-                    .iter()
-                    .find(|child| child.ident.name.as_str() == component)?
-                    .res
-                    .opt_def_id()?;
-        }
-        generated_anchor(tcx, definition).then_some(definition)
+        // plan 是真实私有运行期模块，其 pub(crate) 子模块不保证出现在外部名字表。
+        // 按已保留 MIR 的 DefId 找执行 ABI，避免把“可从源码命名”误当成“有真实定义”。
+        // 先查 MIR 可用性跳过 metadata 表中的空洞，再核对完整身份与签名。
+        (0..tcx.num_extern_def_ids(krate)).find_map(|index| {
+            let definition = DefId {
+                krate,
+                index: rustc_hir::def_id::DefIndex::from_usize(index),
+            };
+            (tcx.is_mir_available(definition)
+                && tcx
+                    .opt_item_name(definition)
+                    .is_some_and(|name| name.as_str() == "plan_set_options")
+                && generated_anchor(tcx, definition))
+            .then_some(definition)
+        })
     });
     let Some(anchor) = anchor else {
         return span;
@@ -184,9 +189,36 @@ fn mark_generated(tcx: TyCtxt<'_>, span: Span) -> Span {
 }
 
 fn generated_anchor(tcx: TyCtxt<'_>, definition: DefId) -> bool {
-    is_runtime(tcx, definition)
-        && tcx.def_path_str(definition)
-            == "nestrs_core::registration::compiler::compiler_automatic_binding"
+    // 认证锚点复用真实运行期配置接合 ABI。core 不再为编译器保存空 marker，且
+    // 不能只信函数拼写：必须来自匹配的 runtime crate，并核对完整普通 Rust 签名。
+    // 身份比较使用真实 DefPath。def_path_str 是诊断路径，可能因 facade 的私有 use
+    // 别名显示为 facade::plan，不能把用于展示的路径当成元数据中的定义身份。
+    if !is_runtime(tcx, definition)
+        || !tcx
+            .def_path(definition)
+            .data
+            .iter()
+            .map(|component| component.data.get_opt_name())
+            .eq(["graph", "plan", "plan_set_options"].map(|name| Some(Symbol::intern(name))))
+        || tcx.def_kind(definition) != hir::def::DefKind::Fn
+        || tcx.is_foreign_item(definition)
+        || tcx.generics_of(definition).count() != 0
+    {
+        return false;
+    }
+    let signature = tcx
+        .fn_sig(definition)
+        .instantiate_identity()
+        .skip_normalization()
+        .skip_binder();
+    signature.abi() == ExternAbi::Rust
+        && !signature.safety().is_safe()
+        && !signature.c_variadic()
+        && signature.output() == tcx.types.unit
+        && matches!(signature.inputs(), [pointer, eager, concurrency]
+            if matches!(pointer.kind(), ty::RawPtr(element, mutability)
+                if *element == tcx.types.unit && mutability.is_mut())
+                && *eager == tcx.types.bool && *concurrency == tcx.types.usize)
 }
 
 fn is_runtime(tcx: TyCtxt<'_>, definition: DefId) -> bool {
@@ -501,7 +533,9 @@ fn trusted_span_in(tcx: TyCtxt<'_>, span: Span, ranges: &[TrustedRange]) -> bool
     }
     let span = origin;
     let source = tcx.sess.source_map().lookup_source_file(span.lo());
-    if matches!(&source.name, rustc_span::FileName::Custom(name) if name == "nestrs graph entry") {
+    if matches!(&source.name, rustc_span::FileName::Custom(name)
+        if name == "nestrs graph entry" || name == "nestrs reflection metadata")
+    {
         return true;
     }
     let rustc_span::FileName::Real(name) = &source.name else {

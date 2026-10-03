@@ -1,7 +1,7 @@
 //! Same local type names in different crates and renamed public exports stay distinct.
 
 use contracts::{CatalogPort as PublicCatalogPort, DeliveryPort};
-use nestrs_core::{ServiceKey, ServiceProvider, get_required_keyed_service, get_required_service};
+use nestrs_core::{ServiceKey, ServiceProvider};
 use primary_provider::Catalog as PublicCatalog;
 use std::any::TypeId;
 
@@ -12,28 +12,28 @@ type Alternate = fallback_provider::Service;
 async fn main() {
     assert_ne!(TypeId::of::<Preferred>(), TypeId::of::<Alternate>());
     let provider = ServiceProvider::build().await.unwrap();
-    let catalog = get_required_service!(provider, PublicCatalog)
+    let catalog = provider
+        .get_required_service::<PublicCatalog>()
         .await
         .unwrap();
-    let port = get_required_service!(provider, dyn PublicCatalogPort)
+    let port = provider
+        .get_required_service::<dyn PublicCatalogPort>()
         .await
         .unwrap();
-    let preferred = get_required_service!(provider, Preferred).await.unwrap();
-    let alternate = get_required_service!(provider, Alternate).await.unwrap();
-    let selected = get_required_service!(provider, dyn DeliveryPort)
+    let preferred = provider.get_required_service::<Preferred>().await.unwrap();
+    let alternate = provider.get_required_service::<Alternate>().await.unwrap();
+    let selected = provider
+        .get_required_service::<dyn DeliveryPort>()
         .await
         .unwrap();
-    let keyed_concrete =
-        get_required_keyed_service!(provider, Preferred, ServiceKey::Named("audit".into()))
-            .await
-            .unwrap();
-    let keyed_interface = get_required_keyed_service!(
-        provider,
-        dyn DeliveryPort,
-        ServiceKey::Named("audit".into())
-    )
-    .await
-    .unwrap();
+    let keyed_concrete = provider
+        .get_required_keyed_service::<Preferred>(ServiceKey::Named("audit".into()))
+        .await
+        .unwrap();
+    let keyed_interface = provider
+        .get_required_keyed_service::<dyn DeliveryPort>(ServiceKey::Named("audit".into()))
+        .await
+        .unwrap();
     assert_eq!(port.identity(), catalog as *const PublicCatalog as usize);
     assert_eq!(selected.identity(), preferred as *const Preferred as usize);
     assert_eq!(

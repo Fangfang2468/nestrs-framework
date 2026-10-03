@@ -8,10 +8,16 @@
 //! 无需过程宏执行上下文，也不通过字符串往返解析 token。
 
 mod conditional_fields;
+mod constructor;
+mod constructor_codegen;
+mod constructor_ide;
 mod injection;
+mod reflection;
 
 mod utility;
 
+#[cfg(test)]
+mod lazy_tests;
 #[cfg(test)]
 mod tests;
 
@@ -33,6 +39,7 @@ use crate::codegen::injection::{
             config::InjectableConfig,
         },
     },
+    macros_attrs::lazy::{ServiceLazyConfig, defer_to_provider, take_lazy_for_provider},
     macros_attrs::primary::{
         DeferPrimaryToFactory, DeferPrimaryToInjectable, PrimaryConfig, has_attribute_named,
         take_primary_for_factory, take_primary_for_injectable,
@@ -97,12 +104,22 @@ fn injectable(item: syn::ItemStruct, args: Args) -> zyn::Output {
         Err(error) => return error.into_compile_error().into(),
     };
     let primary_attribute_use = primary.consumed_attribute_use();
+    let lazy = match take_lazy_for_provider(&mut item.attrs) {
+        Ok(lazy) => lazy,
+        Err(error) => return error.into_compile_error().into(),
+    };
+    let lazy_attribute_use = lazy.consumed_attribute_use();
 
     // 分析阶段只产出共享数据和去除 marker 的 AST；它不负责渲染后续阶段。
     let analyzed_fields = match analyze_fields(item) {
         Ok(fields) => fields,
         Err(error) => return error.into_compile_error().into(),
     };
+    let ide_selection = match constructor_ide::selection(&analyzed_fields.item) {
+        Ok(selection) => selection,
+        Err(error) => return error.into_compile_error().into(),
+    };
+    let ide_service = analyzed_fields.item.ident.clone();
 
     // 模块作用域检查所需的标识符必须在 zyn element 消费 AST 前保存。
     let scope_ident = Some(analyzed_fields.item.ident.clone());
@@ -111,21 +128,24 @@ fn injectable(item: syn::ItemStruct, args: Args) -> zyn::Output {
     // 字段定义、构造 adapter 与 Provider 注册是三个独立的输出职责。注册 scope 只
     // 接收后两者作为 children，明确它们必须共享匿名词法作用域，避免把 helper
     // 暴露为用户可调用的 inherent method。
-    zyn! {
+    let output = zyn! {
         @RequireModuleScope(ident = scope_ident) {
             @RewriteInjectionField(
                 analysis = analyzed_fields.clone(),
             )
             @if (is_open_generic_provider) {
                 {{ primary_attribute_use }}
+                {{ lazy_attribute_use }}
                 @DefineGenericInjectableProvider(
                     analysis = analyzed_fields,
                     config = config,
                     primary = primary.is_primary(),
+                    lazy = lazy.value(),
                 )
             } @else {
                 @EmitInjectableRegistration {
                     {{ primary_attribute_use }}
+                    {{ lazy_attribute_use }}
                     @GenerateInjectableConstructor(
                         analysis = analyzed_fields.clone(),
                     )
@@ -133,10 +153,19 @@ fn injectable(item: syn::ItemStruct, args: Args) -> zyn::Output {
                         analysis = analyzed_fields,
                         config = config,
                         primary = primary.is_primary(),
+                        lazy = lazy.value(),
                     )
                 }
             }
         }
+    };
+    if let Some(selection) = ide_selection {
+        match constructor_ide::apply(output.tokens().clone(), &ide_service, &selection) {
+            Ok(tokens) => tokens.into(),
+            Err(error) => error.into_compile_error().into(),
+        }
+    } else {
+        output
     }
 }
 
@@ -160,6 +189,11 @@ fn factory(item: syn::ItemFn, args: Args) -> zyn::Output {
         Err(error) => return error.into_compile_error().into(),
     };
     let primary_attribute_use = primary.consumed_attribute_use();
+    let lazy = match take_lazy_for_provider(&mut item.attrs) {
+        Ok(lazy) => lazy,
+        Err(error) => return error.into_compile_error().into(),
+    };
+    let lazy_attribute_use = lazy.consumed_attribute_use();
 
     let analysis = match analyze_factory(item) {
         Ok(analysis) => analysis,
@@ -174,6 +208,7 @@ fn factory(item: syn::ItemFn, args: Args) -> zyn::Output {
                     @RequireNonUnitFutureOutputType(macro_name = "factory".to_string(), item = analysis.item.clone()) {
                         @RequireModuleScope(ident = scope_ident) {
                             {{ primary_attribute_use }}
+                            {{ lazy_attribute_use }}
                             @MustBePrivateFn() {
                                 @RewriteFactorySignature(
                                     analysis = analysis.clone(),
@@ -183,6 +218,7 @@ fn factory(item: syn::ItemFn, args: Args) -> zyn::Output {
                                 analysis = analysis.clone(),
                                 config = config,
                                 primary = primary.is_primary(),
+                                lazy = lazy.value(),
                             )
                         }
                     }
@@ -338,10 +374,24 @@ pub fn expand_factory(args: zyn::TokenStream, input: zyn::TokenStream) -> zyn::T
     expand_attribute(args, input, factory)
 }
 
+/// 展开同步关联构造函数；所属服务身份由编译器在名称解析后关联。
+#[doc(hidden)]
+pub fn expand_constructor(args: zyn::TokenStream, input: zyn::TokenStream) -> zyn::TokenStream {
+    constructor_codegen::expand(args, input).unwrap_or_else(syn::Error::into_compile_error)
+}
+
 /// 展开 `#[primary]`，包括其与服务声明之间的属性交接。
 #[doc(hidden)]
 pub fn expand_primary(args: zyn::TokenStream, input: zyn::TokenStream) -> zyn::TokenStream {
     expand_attribute(args, input, primary)
+}
+
+/// 展开服务声明级 `#[lazy]`。字段同名 helper 由 injectable 消费，不进入此入口。
+#[doc(hidden)]
+pub fn expand_lazy(args: zyn::TokenStream, input: zyn::TokenStream) -> zyn::TokenStream {
+    let result = ServiceLazyConfig::from_tokens(args)
+        .and_then(|config| defer_to_provider(syn::parse2(input)?, config));
+    result.unwrap_or_else(syn::Error::into_compile_error)
 }
 
 /// 展开迁移期保留的显式 `#[bind]`。

@@ -2,7 +2,7 @@
 
 use contracts::{BorrowedPort, CountPort, TextPort, UnspecifiedBorrowedPort};
 use fallback_provider as _;
-use nestrs_core::{ServiceProvider, get_required_service, get_service};
+use nestrs_core::ServiceProvider;
 use primary_provider as _;
 
 #[nestrs::injectable]
@@ -20,11 +20,16 @@ struct Reader {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let provider = ServiceProvider::build().await.unwrap();
-    let text = get_required_service!(provider, dyn TextPort).await.unwrap();
-    let count = get_required_service!(provider, dyn CountPort<Item = usize> + Send + Sync)
+    let text = provider
+        .get_required_service::<dyn TextPort>()
         .await
         .unwrap();
-    let borrowed = get_required_service!(provider, dyn BorrowedPort)
+    let count = provider
+        .get_required_service::<dyn CountPort<Item = usize> + Send + Sync>()
+        .await
+        .unwrap();
+    let borrowed = provider
+        .get_required_service::<dyn BorrowedPort>()
         .await
         .unwrap();
     assert_eq!(text.text(), "higher-ranked view");
@@ -32,13 +37,14 @@ async fn main() {
     assert_eq!(borrowed.borrowed(), text.text());
     assert_eq!(text.identity(), count.identity());
     assert_eq!(text.identity(), borrowed.identity());
-    let reader = get_required_service!(provider, Reader).await.unwrap();
+    let reader = provider.get_required_service::<Reader>().await.unwrap();
     assert_eq!(reader.text.identity(), text.identity());
     assert_eq!(reader.count.identity(), text.identity());
     assert_eq!(reader.borrowed.identity(), text.identity());
     assert!(reader.incompatible.is_none());
     assert!(
-        get_service!(provider, dyn UnspecifiedBorrowedPort<Item = &'static str>)
+        provider
+            .get_service::<dyn UnspecifiedBorrowedPort<Item = &'static str>>()
             .await
             .unwrap()
             .is_none()

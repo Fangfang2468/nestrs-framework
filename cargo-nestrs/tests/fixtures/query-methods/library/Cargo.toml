@@ -1,0 +1,11 @@
+[package]
+name = "query-library"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+nestrs-core = { path = "../../../../../nestrs-core" }
+
+[features]
+extra-root = []

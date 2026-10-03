@@ -16,17 +16,17 @@ error: Nestrs 内部实现 `nestrs_core::lifetime` 只能由编译器生成代�
 2 | use nestrs_core::lifetime::ServiceLifetime;
   |                  ^^^^^^^^
 
-error: Nestrs 内部实现 `nestrs_core::registration` 只能由编译器生成代码访问；请使用公开门面 API
+error: Nestrs 内部实现 `nestrs_core::graph` 只能由编译器生成代码访问；请使用公开门面 API
  --> tests/ui/fail/core-internals-are-private.rs:3:5
   |
-3 | use nestrs_core::registration::*;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+3 | use nestrs_core::graph::*;
+  |     ^^^^^^^^^^^^^^^^^^
 
-error: Nestrs 内部实现 `nestrs_core::registration` 只能由编译器生成代码访问；请使用公开门面 API
+error: Nestrs 内部实现 `nestrs_core::graph` 只能由编译器生成代码访问；请使用公开门面 API
  --> tests/ui/fail/core-internals-are-private.rs:3:18
   |
-3 | use nestrs_core::registration::*;
-  |                  ^^^^^^^^^^^^
+3 | use nestrs_core::graph::*;
+  |                  ^^^^^
 
 error: Nestrs 内部实现 `nestrs_core::service` 只能由编译器生成代码访问；请使用公开门面 API
  --> tests/ui/fail/core-internals-are-private.rs:4:5

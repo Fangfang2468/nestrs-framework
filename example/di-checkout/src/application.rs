@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 
 use nestrs_core::{
     BuildError, DisposeError, InitializationMode, ResolveError, ServiceProvider,
-    ServiceProviderOptions, get_required_service,
+    ServiceProviderOptions,
 };
 use thiserror::Error;
 
@@ -70,7 +70,7 @@ pub(crate) async fn run(
         "[启动] {:?}；构造并发上限 {}；scope 预热 {}",
         options.initialization, options.max_concurrent_activations, options.warm_up_scopes
     ));
-    event("[启动] build 开始：验证全部静态声明并冻结依赖图");
+    event("[启动] build 开始：加载编译计划并启动容器");
     let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
         initialization: options.initialization,
         max_concurrent_activations: options.max_concurrent_activations,
@@ -113,9 +113,14 @@ async fn process_orders(
             responses.push(handle_checkout(provider, first, warm_up).await?);
         }
     }
-    let orders = get_required_service!(provider, dyn OrderStore).await?.all();
-    let inventory = get_required_service!(provider, Inventory).await?;
-    let audit = get_required_service!(provider, Repository<AuditEvent>).await?;
+    let orders = provider
+        .get_required_service::<dyn OrderStore>()
+        .await?
+        .all();
+    let inventory = provider.get_required_service::<Inventory>().await?;
+    let audit = provider
+        .get_required_service::<Repository<AuditEvent>>()
+        .await?;
     Ok(RunReport {
         responses,
         orders,
@@ -138,10 +143,16 @@ pub(crate) async fn handle_checkout(
         if warm_up {
             scope.warm_up().await?;
         }
-        let checkout = get_required_service!(scope.service_provider(), CheckoutService).await?;
-        // 查询宏使闭合仓库在 build 前进入图。审计随真实业务结果写入，
+        let checkout = scope
+            .service_provider()
+            .get_required_service::<CheckoutService>()
+            .await?;
+        // 编译器从查询方法识别闭合仓库并纳入计划。审计随真实业务结果写入，
         // 不由演示脚本事后补写，也不需要让结账用例依赖容器。
-        let audit = get_required_service!(scope.service_provider(), Repository<AuditEvent>).await?;
+        let audit = scope
+            .service_provider()
+            .get_required_service::<Repository<AuditEvent>>()
+            .await?;
         let result = checkout.place_order(request).await;
         let message = match &result {
             Ok(order) => format!(
