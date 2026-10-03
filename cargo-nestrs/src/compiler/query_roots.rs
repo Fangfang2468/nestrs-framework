@@ -174,17 +174,11 @@ impl<'tcx> QueryValue<'tcx> {
         }
     }
 
-    fn normalize(
-        self,
-        tcx: TyCtxt<'tcx>,
-        span: Span,
-        origin: Span,
-        query_path: bool,
-    ) -> Result<Self, String> {
+    fn normalize(self, tcx: TyCtxt<'tcx>, span: Span, origin: Span) -> Result<Self, String> {
         match self {
             Self::Unsize(source, target) => {
                 // Erasure 只是有限 concrete 候选，尚未调用的方法不消耗 DI 类型预算。
-                // 匹配到真实虚调用后，其闭合 callable/service 会接受相同预算检查。
+                // 匹配到真实虚调用后，由实际展开出的 service 接受类型预算检查。
                 let (source, target) = tcx
                     .try_normalize_erasing_regions(
                         ty::TypingEnv::fully_monomorphized(),
@@ -196,7 +190,12 @@ impl<'tcx> QueryValue<'tcx> {
                 Ok(Self::Unsize(source, target))
             }
             Self::Service(value) | Self::Callable(value) => {
-                if query_path || matches!(self, Self::Service(_)) {
+                // Callable 的大实参可能仅属于实际选中的空 impl 或转发 helper。
+                // 粗筛不能证明它是 DI 输入；预算落在实际查询的 Service 类型上。
+                // Alias 的 Self/参数不是最终服务结构：<Wide as Family>::Target
+                // 可能只等于 u8。先让 rustc 归一化这类表达式，再检查真实结果；
+                // 没有 alias 的服务仍在归一化前拒绝过大类型。
+                if matches!(self, Self::Service(_)) && !value.has_aliases() {
                     validate_type_complexity_at(tcx, value, span, origin)?;
                 }
                 let normalized = tcx
@@ -206,17 +205,13 @@ impl<'tcx> QueryValue<'tcx> {
                     )
                     .map_err(|error| format!("无法归一化 DI 查询类型 {value}: {error:?}"))?;
                 Ok(if matches!(self, Self::Service(_)) {
+                    validate_type_complexity_at(tcx, normalized, span, origin)?;
                     Self::Service(normalized)
                 } else {
                     Self::Callable(normalized)
                 })
             }
             Self::Constant(id, args) => {
-                if query_path {
-                    for value in args.types() {
-                        validate_type_complexity_at(tcx, value, span, origin)?;
-                    }
-                }
                 let args = tcx
                     .try_normalize_erasing_regions(
                         ty::TypingEnv::fully_monomorphized(),
@@ -1050,14 +1045,16 @@ fn concrete_virtual_call<'tcx>(
     concrete: Ty<'tcx>,
     object: Ty<'tcx>,
     value: QueryValue<'tcx>,
-) -> Option<QueryValue<'tcx>> {
+) -> Result<Option<QueryValue<'tcx>>, String> {
     let QueryValue::Callable(callable) = value else {
-        return None;
+        return Ok(None);
     };
     let ty::FnDef(method, args) = *callable.kind() else {
-        return None;
+        return Ok(None);
     };
-    let trait_id = tcx.trait_of_assoc(method)?;
+    let Some(trait_id) = tcx.trait_of_assoc(method) else {
+        return Ok(None);
+    };
     let called_object = args.type_at(0);
     if object != called_object {
         // 同名 trait 不代表相同对象形状。只允许 rustc 认可的 object upcast，
@@ -1079,13 +1076,15 @@ fn concrete_virtual_call<'tcx>(
             reference,
         ));
         if !ocx.evaluate_obligations_error_on_ambiguity().is_empty() {
-            return None;
+            return Ok(None);
         }
     }
     let ty::Dynamic(predicates, _) = *object.kind() else {
-        return None;
+        return Ok(None);
     };
-    let principal = predicates.principal()?;
+    let Some(principal) = predicates.principal() else {
+        return Ok(None);
+    };
     let concrete_args = tcx.mk_args_from_iter(args.iter().enumerate().map(|(index, argument)| {
         if index == 0 {
             concrete.into()
@@ -1093,16 +1092,42 @@ fn concrete_virtual_call<'tcx>(
             argument
         }
     }));
+    // Supertrait 参数可含 Map::Target 等尚未归一化的关联投影，而调用点
+    // 已是闭合参数。两边都在同一环境中归一化，不能把合法路径误当成不匹配。
+    let environment = ty::TypingEnv::fully_monomorphized();
+    let concrete_args = tcx
+        .try_normalize_erasing_regions(environment, ty::Unnormalized::new_wip(concrete_args))
+        .map_err(|error| {
+            format!(
+                "无法归一化动态查询调用 {}: {error:?}",
+                tcx.def_path_str(method)
+            )
+        })?;
     let trait_count = tcx.generics_of(trait_id).count();
-    let matches = rustc_trait_selection::traits::supertraits(
-        tcx,
-        principal.with_self_ty(tcx, concrete),
-    )
-    .any(|reference| {
+    for reference in
+        rustc_trait_selection::traits::supertraits(tcx, principal.with_self_ty(tcx, concrete))
+    {
         let reference = tcx.instantiate_bound_regions_with_erased(reference);
-        reference.def_id == trait_id && reference.args.as_slice() == &concrete_args[..trait_count]
-    });
-    matches.then(|| QueryValue::Callable(Ty::new_fn_def(tcx, method, concrete_args)))
+        if reference.def_id != trait_id {
+            continue;
+        }
+        let reference = tcx
+            .try_normalize_erasing_regions(environment, ty::Unnormalized::new_wip(reference))
+            .map_err(|error| {
+                format!(
+                    "无法归一化动态查询父接口 {}: {error:?}",
+                    tcx.def_path_str(trait_id)
+                )
+            })?;
+        if reference.args.as_slice() == &concrete_args[..trait_count] {
+            return Ok(Some(QueryValue::Callable(Ty::new_fn_def(
+                tcx,
+                method,
+                concrete_args,
+            ))));
+        }
+    }
+    Ok(None)
 }
 
 /// 每个编译入口汇总全部已类型检查的 body。非泛型 body 即使没有被调用也贡献查询；
@@ -1254,16 +1279,9 @@ pub fn collect_with_providers<'tcx>(
             incoming.entry(id).or_default().push(trait_item);
         }
     }
-    // carrier 只表示可能通过标准转发、drop 或 erasure 到达查询，不能据此把
-    // Box::new<Runner<Wide>> 等普通业务类型当成 DI 请求。单类型预算仅施于真实
-    // 查询/调用/常量边反向可达的路径；粗筛发现仍保留下面的全局实例数量上限。
-    let mut query_paths = HashSet::new();
-    let mut direct = propagation.clone();
-    while let Some(id) = direct.pop_front() {
-        if query_paths.insert(id) {
-            direct.extend(incoming.get(&id).into_iter().flatten().copied());
-        }
-    }
+    // 反向可达集合只用于发现候选，不证明任何闭合实例实际执行查询。
+    // trait item 可能由不同 impl 到达；只有 Instance 选择后的摘要才能给出
+    // 实际 Service 类型。辅助调用/常量仍由下面的单链增长与总实例预算保护。
     while let Some(id) = propagation.pop_front() {
         if relevant.insert(id) {
             propagation.extend(incoming.get(&id).into_iter().flatten().copied());
@@ -1342,11 +1360,7 @@ pub fn collect_with_providers<'tcx>(
                 "DI 查询泛型实例展开超过有限分析上限，可能存在不断增长的递归泛型调用".into(),
             );
         }
-        let query_path = record
-            .value
-            .definition()
-            .is_some_and(|id| query_paths.contains(&id));
-        if !query_path && let Some(definition) = record.value.definition() {
+        if let Some(definition) = record.value.definition() {
             if !seen_discovery.insert(record.value) {
                 continue;
             }
@@ -1363,7 +1377,9 @@ pub fn collect_with_providers<'tcx>(
                             origin,
                             "single_type_tree_nodes",
                             limit,
-                            "查询载体发现过程中，同一函数或常量的泛型实参沿调用链持续增长".into(),
+                            format!(
+                                "DI 泛型类型不断增长或过于复杂：单个类型树超过 {limit} 个节点；请终止递归泛型查询或拆分类型\n查询载体发现过程中，同一函数或常量的泛型实参沿调用链持续增长"
+                            ),
                         );
                     }
                     ancestor = step.parent;
@@ -1376,9 +1392,7 @@ pub fn collect_with_providers<'tcx>(
             });
             path = discovery.len() - 1;
         }
-        record.value = record
-            .value
-            .normalize(tcx, record.span, origin, query_path)?;
+        record.value = record.value.normalize(tcx, record.span, origin)?;
         if !record.value.closed() {
             continue;
         }
@@ -1391,7 +1405,7 @@ pub fn collect_with_providers<'tcx>(
             {
                 dynamic_sources.push((concrete, object));
                 for &(call, owner, path, origin) in &virtual_calls {
-                    if let Some(value) = concrete_virtual_call(tcx, concrete, object, call.value) {
+                    if let Some(value) = concrete_virtual_call(tcx, concrete, object, call.value)? {
                         pending.push_back((Record { value, ..call }, owner, path, origin));
                     }
                 }
@@ -1434,7 +1448,7 @@ pub fn collect_with_providers<'tcx>(
                         virtual_calls.push((record, owner, path, origin));
                         for &(concrete, object) in &dynamic_sources {
                             if let Some(value) =
-                                concrete_virtual_call(tcx, concrete, object, record.value)
+                                concrete_virtual_call(tcx, concrete, object, record.value)?
                             {
                                 pending.push_back((
                                     Record { value, ..record },

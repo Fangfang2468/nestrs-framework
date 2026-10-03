@@ -49,6 +49,42 @@ const CASES: &[(&str, &str)] = &[
         "carrier_growth",
         include_str!("fixtures/type-budget/carrier_growth.rs"),
     ),
+    (
+        "trait_empty_impl",
+        include_str!("fixtures/type-budget/trait_empty_impl.rs"),
+    ),
+    (
+        "trait_split_control",
+        include_str!("fixtures/type-budget/trait_split_control.rs"),
+    ),
+    (
+        "trait_generic_helper",
+        include_str!("fixtures/type-budget/trait_generic_helper.rs"),
+    ),
+    (
+        "trait_default_forward",
+        include_str!("fixtures/type-budget/trait_default_forward.rs"),
+    ),
+    (
+        "trait_default_override",
+        include_str!("fixtures/type-budget/trait_default_override.rs"),
+    ),
+    (
+        "trait_associated_const",
+        include_str!("fixtures/type-budget/trait_associated_const.rs"),
+    ),
+    (
+        "fixed_query_generic",
+        include_str!("fixtures/type-budget/fixed_query_generic.rs"),
+    ),
+    (
+        "query_projected",
+        include_str!("fixtures/type-budget/query_projected.rs"),
+    ),
+    (
+        "projected_small_control",
+        include_str!("fixtures/type-budget/projected_small_control.rs"),
+    ),
 ];
 
 #[test]
@@ -108,7 +144,18 @@ with-di = []
         for (name, native, with_di) in runs {
             let expected_success = matches!(
                 name,
-                "ordinary" | "carrier_direct" | "carrier_erased" | "carrier_independent"
+                "ordinary"
+                    | "carrier_direct"
+                    | "carrier_erased"
+                    | "carrier_independent"
+                    | "trait_empty_impl"
+                    | "trait_split_control"
+                    | "trait_generic_helper"
+                    | "trait_default_forward"
+                    | "trait_default_override"
+                    | "trait_associated_const"
+                    | "fixed_query_generic"
+                    | "projected_small_control"
             );
             let mut command = Command::new(if native {
                 "cargo"

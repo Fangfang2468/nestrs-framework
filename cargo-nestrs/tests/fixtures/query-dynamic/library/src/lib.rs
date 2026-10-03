@@ -1,5 +1,6 @@
 //! Ordinary business objects are deliberately not DI providers.
 #![allow(dead_code)]
+pub mod projected;
 use nestrs::injectable;
 use nestrs_core::ServiceProvider;
 use std::{
