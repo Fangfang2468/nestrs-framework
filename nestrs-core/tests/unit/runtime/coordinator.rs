@@ -23,7 +23,7 @@ use crate::{
     activation::adapter::FactoryInvoker,
     activation::{
         ConstructionError, ConstructionInputs, ErasedService, FactoryFuture, FactoryInputs,
-        InputSlot, prepare_required,
+        InputSlot, project_required,
     },
     graph::NodePolicy,
     graph::{CompiledDependency, CompiledNode, Constructor, DependencyInput, ValidatedGraph},
@@ -313,7 +313,7 @@ async fn retiring_a_failed_parent_still_drains_its_previously_accepted_children(
             optional: false,
             input: DependencyInput::Immediate {
                 target: provider,
-                prepare: prepare_required::<u32>,
+                project: project_required::<u32>,
             },
             label: None,
         })
@@ -432,7 +432,7 @@ fn deep_graph_activation_and_shutdown_do_not_use_a_recursive_rust_stack() {
                                     optional: false,
                                     input: DependencyInput::Immediate {
                                         target: index - 1,
-                                        prepare: prepare_required::<Chain>,
+                                        project: project_required::<Chain>,
                                     },
                                     label: Some("previous"),
                                 }],
@@ -617,7 +617,7 @@ async fn a_ready_successor_does_not_wait_for_an_unrelated_slow_node() {
                 optional: false,
                 input: DependencyInput::Immediate {
                     target: 0,
-                    prepare: prepare_required::<Fast>,
+                    project: project_required::<Fast>,
                 },
                 label: Some("fast"),
             }],

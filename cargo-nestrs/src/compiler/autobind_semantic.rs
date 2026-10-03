@@ -479,7 +479,8 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
                     marker.diagnostic_span,
                     "discovery_closed_types",
                     crate::query_roots::MAX_QUERY_TYPES,
-                    "DI 查询/Provider 闭合类型超过 100000 个，可能存在不断增长的递归泛型声明".into(),
+                    "DI 查询/Provider 闭合类型超过 100000 个，可能存在不断增长的递归泛型声明"
+                        .into(),
                 );
             }
         }

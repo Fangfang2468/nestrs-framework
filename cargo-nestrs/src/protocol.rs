@@ -9,7 +9,7 @@ pub(crate) const REFLECTION_MODULE: &str = "__nestrs_reflect";
 pub(crate) const COMPILER_KEY: &str = "CompilerKey";
 pub(crate) const PROVIDER_DEFINITION: &str = "ProviderDefinition";
 pub(crate) const PROVIDER_HELPER: &str = "provider_definition";
-pub(crate) const PLAN_ENTRY: &str = "__nestrs_reflect_v1";
+pub(crate) const PLAN_ENTRY: &str = "__nestrs_reflect_v2";
 pub(crate) const ACTIVATION_ADAPTER: &str = "activation::adapter::ActivationAdapter";
 pub(crate) const PROJECTION_ADAPTER: &str = "activation::adapter::ProjectionAdapter";
 
@@ -226,7 +226,7 @@ impl PlanSink {
 
     pub(crate) const fn name(self) -> &'static str {
         match self {
-            Self::Options => "plan_set_options",
+            Self::Options => "plan_set_options_v2",
             Self::Binding => "plan_push_binding",
             Self::Provider => "plan_push_provider",
             Self::Input => "plan_set_input",

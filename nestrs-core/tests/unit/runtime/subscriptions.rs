@@ -10,7 +10,7 @@ use crate::{
     ResolveError, ServiceLifetime,
     activation::{
         ConstructionError, ConstructionInputs, DependencyLease, ErasedService, InputSlot,
-        prepare_required,
+        project_required,
     },
     graph::{CompiledDependency, Constructor, DependencyInput, ValidatedGraph},
     runtime::{
@@ -45,7 +45,7 @@ fn dependency(input: usize, provider: usize) -> CompiledDependency {
         optional: false,
         input: DependencyInput::Immediate {
             target: provider,
-            prepare: prepare_required::<u32>,
+            project: project_required::<u32>,
         },
         label: None,
     }

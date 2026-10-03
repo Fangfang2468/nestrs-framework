@@ -6,11 +6,12 @@
 use super::{Resolution, lazy::ActivationContext, owner::Published};
 use crate::{
     activation::{
-        ActivationPreparation, DependencyLease, ReleaseDomain, adapter::FactoryInvoker,
+        ConstructionError, ConstructionInput, ConstructionInputs, DependencyLease, InputSlot,
+        ReleaseDomain, adapter::FactoryInvoker, construction::FactoryLeaseFrame,
         deferred::LazyResolver,
     },
     error::ResolveError,
-    graph::{AbsentInput, Constructor, DependencyInput, ValidatedGraph},
+    graph::{Constructor, DependencyInput, ValidatedGraph},
     panic_payload::PanicPayload,
 };
 use std::{
@@ -63,40 +64,70 @@ impl ActivationWorker {
         let convert = |error: crate::activation::ConstructionError| {
             ResolveError::construction(&node.identifier, node.common.source, error.to_string())
         };
-        // 每个 worker 只准备当前节点的输入，依赖实例已由调度器构造并以强 lease 传入。
-        // Preparation 对写入失败负责回滚，factory frame 则持有跨 await 的真实借用对象。
-        let mut preparation = ActivationPreparation::new(node.dependencies.len());
-        for (dependency, input) in node.dependencies.iter().zip(inputs) {
-            // 计划已经决定完整交付形态。缺席分支使用准确类型的 None；只有立即输入
-            // 消费已就绪实例，只有实际延迟目标才接收关联 owner 的请求句柄。
-            match &dependency.input {
-                DependencyInput::Absent(AbsentInput::Immediate(prepare)) => {
-                    preparation.prepare(dependency.slot, *prepare, None)
-                }
-                DependencyInput::Absent(AbsentInput::Lazy(prepare)) => {
-                    preparation.prepare_lazy(dependency.slot, *prepare, None)
-                }
-                DependencyInput::Immediate { prepare, .. } => {
-                    preparation.prepare(dependency.slot, *prepare, input)
-                }
-                DependencyInput::Lazy { plan, prepare } => {
-                    // 固定描述与实际 owner 只在交付此槽位时组合，不再维护另一条并行输入数组。
-                    // 包装弱能力不提交目标请求；每个字段仍独占后续的接收端与类型化结果。
-                    let lazy_input = context.dependency(plan.clone());
-                    preparation.prepare_lazy(dependency.slot, *prepare, Some(lazy_input))
-                }
-            }
-            .map_err(convert)?;
+        // 调度器已经构造 Immediate 目标。这里只组合已选执行信息和真实实例凭证，
+        // 不调用逐参数准备回调；生成 adapter 会一次读取全部 typed 输入再执行业务代码。
+        let slot_count = node.dependencies.len();
+        if inputs.len() < slot_count {
+            return Err(convert(ConstructionError::UnfilledSlot {
+                slot: InputSlot::new(inputs.len()),
+            }));
         }
-        // 字段已各自保存弱能力，worker 不需要在用户构造 future 中继续持有它。
+        if inputs.len() > slot_count {
+            return Err(convert(ConstructionError::SlotOutOfBounds {
+                slot: InputSlot::new(slot_count),
+                slot_count,
+            }));
+        }
+        // 已知准确槽位数，不能用 Result<Vec<_>> 收集丢失 size_hint 后按最小容量增长。
+        // 输入记录含类型及执行能力，短参数列表的多余容量会抵消去除逐参数 Box 的收益。
+        let mut selected = Vec::with_capacity(slot_count);
+        for (index, (dependency, input)) in node.dependencies.iter().zip(inputs).enumerate() {
+            let slot = InputSlot::new(index);
+            if dependency.slot != slot {
+                return Err(convert(ConstructionError::InputSlotMismatch {
+                    slot,
+                    actual: dependency.slot,
+                }));
+            }
+            let service_type = dependency.requested.service_type;
+            let kind = dependency.kind();
+            let input = match &dependency.input {
+                DependencyInput::Immediate { project, .. } => {
+                    let lease = input.ok_or_else(|| {
+                        convert(ConstructionError::RequiredDependencyAbsent { slot })
+                    })?;
+                    ConstructionInput::immediate(service_type, kind, lease, *project)
+                }
+                DependencyInput::Absent(_) => {
+                    if input.is_some() {
+                        return Err(convert(ConstructionError::UnexpectedDependencyPresent {
+                            slot,
+                        }));
+                    }
+                    ConstructionInput::absent(service_type, kind)
+                }
+                DependencyInput::Lazy { plan } => {
+                    if input.is_some() {
+                        return Err(convert(ConstructionError::UnexpectedDependencyPresent {
+                            slot,
+                        }));
+                    }
+                    // 共享描述与实际 owner 在本次槽位组合；不提交目标请求或收纳强 lease。
+                    ConstructionInput::lazy(service_type, kind, context.dependency(plan.clone()))
+                }
+            };
+            selected.push(input);
+        }
+        let inputs = ConstructionInputs::new(selected).map_err(convert)?;
+        // 延迟输入已经保存弱能力，worker 不在用户构造 future 中额外持有上下文。
         drop(context);
         let (service, dependencies) = match node.constructor {
             Constructor::Class(constructor) => {
-                let (inputs, dependencies) = preparation.finish_class().map_err(convert)?;
+                let dependencies = inputs.dependency_leases();
                 (constructor(inputs).map_err(convert)?, dependencies)
             }
             Constructor::Factory(invoker) => {
-                let mut frame = preparation.finish_factory().map_err(convert)?;
+                let mut frame = FactoryLeaseFrame::new(inputs);
                 let service = match invoker {
                     FactoryInvoker::Sync(constructor) => {
                         constructor(frame.inputs()).map_err(convert)?

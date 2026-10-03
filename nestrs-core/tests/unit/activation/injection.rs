@@ -5,7 +5,7 @@ use std::sync::{
 
 use super::Injection;
 use crate::activation::{
-    DependencyLease, ErasedService, InputSlot, ReleaseDomain, prepare_required,
+    DependencyLease, ErasedService, InputSlot, ProjectionTarget, ReleaseDomain, project_required,
 };
 
 struct Service;
@@ -51,10 +51,12 @@ fn a_token_moved_out_by_consumer_drop_keeps_the_dependency_alive() {
         vec![],
         domain.clone(),
     );
-    let token = prepare_required::<Dependency>(InputSlot::new(0), Some(dependency.erased_ref()))
-        .unwrap()
-        .into_required(InputSlot::new(0))
-        .unwrap();
+    let token = ProjectionTarget::project::<Dependency>(
+        InputSlot::new(0),
+        dependency.clone(),
+        project_required::<Dependency>,
+    )
+    .unwrap();
     let consumer = DependencyLease::new(
         ErasedService::new(Consumer {
             dependency: Some(token),

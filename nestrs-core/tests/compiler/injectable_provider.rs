@@ -146,17 +146,21 @@ fn injectable_compiles_execution_policy_and_exact_dependency_slots() {
     );
     assert!(audit.optional);
     assert!(audit.input.target().is_none());
-    let crate::graph::DependencyInput::Absent(crate::graph::AbsentInput::Immediate(prepare)) =
-        audit.input
+    let crate::graph::DependencyInput::Absent(crate::graph::AbsentInput::Immediate) = audit.input
     else {
         panic!("缺席的普通字段必须交付 Option<Injection<T>>")
     };
     assert!(
-        prepare(audit.slot, None)
-            .unwrap()
-            .into_optional::<dyn Audit>(audit.slot)
-            .unwrap()
-            .is_none()
+        crate::activation::ConstructionInputs::new(vec![
+            crate::activation::ConstructionInput::absent(
+                audit.requested.service_type,
+                audit.kind(),
+            )
+        ])
+        .unwrap()
+        .take_optional::<dyn Audit>(InputSlot::new(0))
+        .unwrap()
+        .is_none()
     );
 
     let tuple = node::<TupleConsumer>();

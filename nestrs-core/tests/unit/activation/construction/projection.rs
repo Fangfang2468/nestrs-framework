@@ -9,9 +9,10 @@ use std::{
 
 use super::{ProjectionTarget, ServiceProjection, project_bound, project_required};
 use crate::activation::{
-    ConstructionError, DependencyLease, ErasedService, ErasedServiceRef, InputSlot, ReleaseDomain,
-    prepare_bound_required, prepare_required,
+    ConstructionError, ConstructionInput, ConstructionInputs, DependencyLease, ErasedService,
+    ErasedServiceRef, InputKind, InputSlot, ReleaseDomain,
 };
+use crate::service::ServiceType;
 
 /// 只统计显式测量窗口内、当前测试线程的分配，不把并发测试/测试框架分配混入结果。
 /// 所有实际分配仍委托 System；计数关闭时不改变生产分配与释放行为。
@@ -110,30 +111,34 @@ fn concrete_and_trait_projection_deliver_without_temporary_allocations() {
     assert_eq!(bound.value(), 73);
     assert_eq!(bound_count, 0);
 
-    // 与构造输入仍使用的通用 PreparedInput 路径作同条件对照；根 trait 查询和
-    // LazyInjection 现在共用上面的直接交付，实例身份检查也不能引入临时堆载荷。
-    let (ordinary, ordinary_count) = allocations(|| {
-        let input = prepare_required::<Adapter>(slot, Some(instance.erased_ref())).unwrap();
-        std::hint::black_box(input)
-            .into_required::<Adapter>(slot)
-            .unwrap()
-    });
+    // 实例和输入容器在窗口外建立。两个普通构造参数直接投影到 typed 局部变量，
+    // 与根查询/lazy 同样不创建逐参数 Box；容器自身的分配单独测量。
+    let mut inputs = ConstructionInputs::new(vec![
+        ConstructionInput::immediate(
+            ServiceType::create::<Adapter>(),
+            InputKind::Required,
+            instance.clone(),
+            project_required::<Adapter>,
+        ),
+        ConstructionInput::immediate(
+            ServiceType::create::<dyn Port>(),
+            InputKind::Required,
+            instance,
+            |slot, input, target| {
+                project_bound::<Adapter, dyn Port>(slot, input, target, |value| value)
+            },
+        ),
+    ])
+    .unwrap();
+    let (ordinary, ordinary_count) =
+        allocations(|| inputs.take::<Adapter>(InputSlot::new(0)).unwrap());
     assert_eq!(ordinary.0, 73);
-    assert_eq!(ordinary_count, 1);
-
-    let (ordinary_trait, ordinary_trait_count) = allocations(|| {
-        let input = prepare_bound_required::<Adapter, dyn Port>(
-            slot,
-            Some(instance.erased_ref()),
-            |value| value,
-        )
-        .unwrap();
-        std::hint::black_box(input)
-            .into_required::<dyn Port>(slot)
-            .unwrap()
-    });
+    assert_eq!(ordinary_count, 0);
+    let (ordinary_trait, ordinary_trait_count) =
+        allocations(|| inputs.take::<dyn Port>(InputSlot::new(1)).unwrap());
     assert_eq!(ordinary_trait.value(), 73);
-    assert_eq!(ordinary_trait_count, 1);
+    assert_eq!(ordinary_trait_count, 0);
+    inputs.ensure_all_consumed().unwrap();
 }
 
 #[test]

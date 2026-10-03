@@ -5,7 +5,7 @@ use crate::{
     ServiceLifetime,
     activation::{
         ConstructionError, ConstructionInputs, ErasedService, InputSlot, LazyInjection,
-        LazyInputPlan, prepare_lazy_optional, project_required,
+        LazyInputPlan, project_required,
     },
     graph::NodePolicy,
     graph::{
@@ -57,7 +57,7 @@ fn reports_token_with_plan(
     owner: &Arc<crate::runtime::owner::OwnerData>,
     plan: Arc<LazyInputPlan>,
 ) -> LazyInjection<Reports> {
-    use crate::activation::{ActivationPreparation, LazyDependency, prepare_lazy_required};
+    use crate::activation::{ConstructionInput, InputKind, LazyDependency};
     let resolver = Arc::downgrade(owner);
     let slot = InputSlot::new(0);
     let dependency = LazyDependency {
@@ -65,11 +65,13 @@ fn reports_token_with_plan(
         check_wait_allowed: super::ActivationContext::check_wait_allowed,
         plan,
     };
-    let mut preparation = ActivationPreparation::new(1);
-    preparation
-        .prepare_lazy(slot, prepare_lazy_required::<Reports>, Some(dependency))
-        .unwrap();
-    let (mut inputs, leases) = preparation.finish_class().unwrap();
+    let mut inputs = ConstructionInputs::new(vec![ConstructionInput::lazy(
+        ServiceType::create::<Reports>(),
+        InputKind::LazyRequired,
+        dependency,
+    )])
+    .unwrap();
+    let leases = inputs.dependency_leases();
     assert!(leases.is_empty());
     let token = inputs.take_lazy::<Reports>(slot).unwrap();
     inputs.ensure_all_consumed().unwrap();
@@ -78,7 +80,7 @@ fn reports_token_with_plan(
 
 #[tokio::test]
 async fn lazy_edges_skip_activation_waits_but_order_cleanup_after_the_consumer() {
-    use crate::activation::{adapter::CleanupFuture, prepare_lazy_required};
+    use crate::activation::adapter::CleanupFuture;
     use std::sync::Mutex;
     static TARGET_BUILDS: AtomicUsize = AtomicUsize::new(0);
     static CLEANUPS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
@@ -128,7 +130,6 @@ async fn lazy_edges_skip_activation_waits_but_order_cleanup_after_the_consumer()
                     requested: target_id.clone(),
                     optional: false,
                     input: DependencyInput::Lazy {
-                        prepare: prepare_lazy_required::<Target>,
                         plan: Arc::new(LazyInputPlan {
                             provider: 1,
                             consumer: consumer_id,
@@ -462,7 +463,6 @@ fn ten_thousand_deferred_nodes_construct_close_and_release_on_small_stack() {
                             optional: true,
                             input: match target {
                                 Some(provider) => DependencyInput::Lazy {
-                                    prepare: prepare_lazy_optional::<Chain>,
                                     plan: Arc::new(LazyInputPlan {
                                         provider,
                                         consumer: ServiceIdentifier::new(
@@ -475,9 +475,7 @@ fn ten_thousand_deferred_nodes_construct_close_and_release_on_small_stack() {
                                         project: project_required::<Chain>,
                                     }),
                                 },
-                                None => DependencyInput::Absent(AbsentInput::Lazy(
-                                    prepare_lazy_optional::<Chain>,
-                                )),
+                                None => DependencyInput::Absent(AbsentInput::Lazy),
                             },
                             label: Some("next"),
                         }],
@@ -524,9 +522,7 @@ fn ten_thousand_deferred_nodes_construct_close_and_release_on_small_stack() {
 
 #[test]
 fn an_accepted_lazy_request_reports_runtime_exit_instead_of_waiting_forever() {
-    use crate::activation::{
-        FactoryFuture, FactoryInputs, adapter::FactoryInvoker, prepare_lazy_required,
-    };
+    use crate::activation::{FactoryFuture, FactoryInputs, adapter::FactoryInvoker};
     use std::time::Duration;
 
     static STARTED: AtomicUsize = AtomicUsize::new(0);
@@ -566,7 +562,6 @@ fn an_accepted_lazy_request_reports_runtime_exit_instead_of_waiting_forever() {
                     requested: target.clone(),
                     optional: false,
                     input: DependencyInput::Lazy {
-                        prepare: prepare_lazy_required::<PendingTarget>,
                         plan: Arc::new(LazyInputPlan {
                             provider: 1,
                             consumer: ServiceIdentifier::new(

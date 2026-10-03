@@ -44,32 +44,6 @@ pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> z
                     concrete_type: ::nestrs_core::service::ServiceType::create::<
                         {{ service }}
                     >(),
-                    prepare_required: (|
-                        slot: ::nestrs_core::activation::InputSlot,
-                        input: ::core::option::Option<::nestrs_core::activation::ErasedServiceRef>,
-                    | {
-                        ::nestrs_core::activation::prepare_bound_required::<
-                            {{ service }},
-                            dyn {{ interface }},
-                        >(
-                            slot,
-                            input,
-                            __nestrs_project_bound_service,
-                        )
-                    }) as ::nestrs_core::activation::InputPreparer,
-                    prepare_optional: (|
-                        slot: ::nestrs_core::activation::InputSlot,
-                        input: ::core::option::Option<::nestrs_core::activation::ErasedServiceRef>,
-                    | {
-                        ::nestrs_core::activation::prepare_bound_optional::<
-                            {{ service }},
-                            dyn {{ interface }},
-                        >(
-                            slot,
-                            input,
-                            __nestrs_project_bound_service,
-                        )
-                    }) as ::nestrs_core::activation::InputPreparer,
                     project: (|
                         slot: ::nestrs_core::activation::InputSlot,
                         input: ::nestrs_core::activation::ErasedServiceRef,
@@ -111,14 +85,12 @@ mod tests {
         assert!(rendered.contains("compiler_binding"));
         assert!(rendered.contains("ProjectionAdapter"));
         assert!(!rendered.contains("key_policy"));
-        assert!(rendered.contains("prepare_bound_required"));
-        assert!(rendered.contains("prepare_bound_optional"));
+        assert!(!rendered.contains("prepare_"));
         assert!(rendered.contains("project_bound"));
         assert!(rendered.contains("ProjectionTarget"));
         assert!(rendered.contains("ServiceProjector"));
         assert!(rendered.contains("ErasedServiceRef"));
         assert!(rendered.contains("InputSlot"));
-        assert!(rendered.contains("InputPreparer"));
         assert!(rendered.contains("ConcreteService"));
         assert!(rendered.contains("dyn Port"));
     }

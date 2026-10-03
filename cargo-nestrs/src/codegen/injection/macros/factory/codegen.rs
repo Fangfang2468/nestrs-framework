@@ -136,14 +136,17 @@ fn generate_factory_adapter(analysis: FactoryAnalysis) -> zyn::TokenStream {
 
 /// 选择无输入时不会触发 unused-variable warning 的 context 参数写法。
 fn factory_context_binding(analysis: &FactoryAnalysis) -> zyn::TokenStream {
+    // 用户函数名已占据当前模块的值命名空间，因此不可能同时解析成业务 const。
+    // adapter 可将它用作局部参数，并始终通过 self::function 调用原 factory。
+    let context = &analysis.item.sig.ident;
     if analysis.parameters.is_empty() {
         quote!(
-            __nestrs_factory_context:
+            #context:
                 ::nestrs_core::activation::FactoryInputs<'frame>
         )
     } else {
         quote!(
-            mut __nestrs_factory_context:
+            mut #context:
                 ::nestrs_core::activation::FactoryInputs<'frame>
         )
     }
@@ -157,39 +160,28 @@ fn invoke_sync_factory(
     result_kind: FactoryResultKind,
 ) -> zyn::TokenStream {
     let returns_result = matches!(result_kind, FactoryResultKind::Result);
-    let context: syn::Ident = syn::parse_quote!(__nestrs_factory_context);
+    let context = function.clone();
     let function_path = quote!(self::#function);
-    let parameter_bindings: Vec<_> = parameters
-        .iter()
-        .map(|parameter| factory_input_binding_identifier(parameter.input_slot))
-        .collect();
-
     zyn! {
-        @for (parameter in parameters.iter()) {
-            @BindFactoryParameter(
-                parameter = parameter.clone(),
-                context = context.clone(),
-            )
-        }
-        {{ context }}.ensure_all_consumed()?;
+        @TakeFactoryParameters(parameters = parameters.clone(), context = context.clone())
         @if (returns_result) {
             match {{ function_path }}(
-                @for (binding in parameter_bindings.iter()) {
-                    {{ binding }},
+                @for (parameter in parameters.iter()) {
+                    {{ context }}.{{ syn::Index::from(parameter.input_slot) }},
                 }
             ) {
-                ::core::result::Result::Ok(__nestrs_factory_service) => {
+                ::core::result::Result::Ok({{ context }}) => {
                     ::core::result::Result::Ok(
                         ::nestrs_core::activation::ErasedService::new(
-                            __nestrs_factory_service
+                            {{ context }}
                         )
                     )
                 }
-                ::core::result::Result::Err(__nestrs_factory_error) => {
+                ::core::result::Result::Err({{ context }}) => {
                     ::core::result::Result::Err(
                         ::nestrs_core::activation::ConstructionError::FactoryFailed {
                             provider: stringify!({{ function }}),
-                            detail: ::std::format!("{:?}", __nestrs_factory_error),
+                            detail: ::std::format!("{:?}", {{ context }}),
                             provider_source: ::nestrs_core::service::ServiceSource::new(
                                 file!(),
                                 line!(),
@@ -203,8 +195,8 @@ fn invoke_sync_factory(
             ::core::result::Result::Ok(
                 ::nestrs_core::activation::ErasedService::new(
                     {{ function_path }}(
-                        @for (binding in parameter_bindings.iter()) {
-                            {{ binding }},
+                        @for (parameter in parameters.iter()) {
+                            {{ context }}.{{ syn::Index::from(parameter.input_slot) }},
                         }
                     )
                 )
@@ -221,39 +213,28 @@ fn invoke_async_factory(
     result_kind: FactoryResultKind,
 ) -> zyn::TokenStream {
     let returns_result = matches!(result_kind, FactoryResultKind::Result);
-    let context: syn::Ident = syn::parse_quote!(__nestrs_factory_context);
+    let context = function.clone();
     let function_path = quote!(self::#function);
-    let parameter_bindings: Vec<_> = parameters
-        .iter()
-        .map(|parameter| factory_input_binding_identifier(parameter.input_slot))
-        .collect();
-
     zyn! {
-        @for (parameter in parameters.iter()) {
-            @BindFactoryParameter(
-                parameter = parameter.clone(),
-                context = context.clone(),
-            )
-        }
-        {{ context }}.ensure_all_consumed()?;
+        @TakeFactoryParameters(parameters = parameters.clone(), context = context.clone())
         @if (returns_result) {
             match {{ function_path }}(
-                @for (binding in parameter_bindings.iter()) {
-                    {{ binding }},
+                @for (parameter in parameters.iter()) {
+                    {{ context }}.{{ syn::Index::from(parameter.input_slot) }},
                 }
             ).await {
-                ::core::result::Result::Ok(__nestrs_factory_service) => {
+                ::core::result::Result::Ok({{ context }}) => {
                     ::core::result::Result::Ok(
                         ::nestrs_core::activation::ErasedService::new(
-                            __nestrs_factory_service
+                            {{ context }}
                         )
                     )
                 }
-                ::core::result::Result::Err(__nestrs_factory_error) => {
+                ::core::result::Result::Err({{ context }}) => {
                     ::core::result::Result::Err(
                         ::nestrs_core::activation::ConstructionError::FactoryFailed {
                             provider: stringify!({{ function }}),
-                            detail: ::std::format!("{:?}", __nestrs_factory_error),
+                            detail: ::std::format!("{:?}", {{ context }}),
                             provider_source: ::nestrs_core::service::ServiceSource::new(
                                 file!(),
                                 line!(),
@@ -267,8 +248,8 @@ fn invoke_async_factory(
             ::core::result::Result::Ok(
                 ::nestrs_core::activation::ErasedService::new(
                     {{ function_path }}(
-                        @for (binding in parameter_bindings.iter()) {
-                            {{ binding }},
+                        @for (parameter in parameters.iter()) {
+                            {{ context }}.{{ syn::Index::from(parameter.input_slot) }},
                         }
                     ).await
                 )
@@ -279,8 +260,8 @@ fn invoke_async_factory(
 
 /// 从 frame-bound `FactoryInputs` 取出一个 factory 依赖参数。
 ///
-/// 适配器先把所有输入写入只属于 adapter 的按槽位命名局部变量，确认没有 metadata
-/// 遗留槽位后才调用用户 factory。返回的 `&'frame T` 会沿着 adapter future 保持到
+/// 适配器先把所有输入写入类型化 tuple，确认没有 metadata 遗留槽位后才调用用户
+/// factory。返回的 `&'frame T` 会沿着 adapter future 保持到
 /// factory 完成，从而不能逃逸至输出服务或后台任务。延迟输入则从槽位按值移出；其
 /// 生命周期由句柄的 owner 访问协议和成功实例 lease 管理，可以安全保存到返回服务。
 #[zyn::element]
@@ -319,22 +300,32 @@ fn take_factory_parameter(
 }
 
 #[zyn::element]
-fn bind_factory_parameter(
-    parameter: FactoryParameterSpec,
+fn take_factory_parameters(
+    parameters: Vec<FactoryParameterSpec>,
     context: syn::Ident,
 ) -> zyn::TokenStream {
-    let binding = factory_input_binding_identifier(parameter.input_slot);
-
     zyn! {
-        let {{ binding }} = @TakeFactoryParameter(
-            parameter = parameter.clone(),
-            context = context.clone(),
-        );
+        @if (parameters.is_empty()) {
+            {{ context }}.ensure_all_consumed()?;
+            ::core::mem::drop({{ context }});
+        } @else {
+            // 复用已有参数名，避免 let 模式解析成同名业务 const。
+            // tuple 的最后一个元素验证全部槽位并释放空输入；此前不会执行用户代码。
+            let {{ context }} = (
+                @for (parameter in parameters.iter()) {
+                    @TakeFactoryParameter(
+                        parameter = parameter.clone(),
+                        context = context.clone(),
+                    ),
+                }
+                {
+                    {{ context }}.ensure_all_consumed()?;
+                    // 普通引用借用外部 frame，lazy 句柄已按值移出，不借用输入数组。
+                    ::core::mem::drop({{ context }});
+                },
+            );
+        }
     }
-}
-
-fn factory_input_binding_identifier(input_slot: usize) -> syn::Ident {
-    zyn::format_ident!("__nestrs_factory_input_{input_slot}")
 }
 
 #[zyn::element]
@@ -401,22 +392,29 @@ mod tests {
         assert!(output.contains("FactoryInputs < 'frame >"));
         assert!(output.contains("take :: < Database >"));
         assert!(output.contains("take_optional :: < dyn Audit >"));
-        assert!(output.contains("let __nestrs_factory_input_0 ="));
-        assert!(output.contains("let __nestrs_factory_input_1 ="));
+        assert!(output.contains("let make = ("));
+        assert!(!output.contains("__nestrs_factory_context"));
+        assert!(!output.contains("__nestrs_factory_input_"));
+        assert!(!output.contains("__nestrs_factory_service"));
+        assert!(!output.contains("__nestrs_factory_error"));
         assert!(output.contains("ensure_all_consumed ()"));
         let first_input = output
-            .find("let __nestrs_factory_input_0")
-            .expect("the first parameter should be materialized into a private local");
+            .find("take :: < Database >")
+            .expect("the first parameter should be materialized into the tuple");
         let second_input = output
-            .find("let __nestrs_factory_input_1")
-            .expect("the second parameter should be materialized into a private local");
+            .find("take_optional :: < dyn Audit >")
+            .expect("the second parameter should be materialized into the tuple");
         let ensure = output
             .find("ensure_all_consumed ()")
             .expect("the factory adapter should validate input coverage");
         let invoke = output
             .find("self :: make")
             .expect("the user factory should only be invoked after input validation");
-        assert!(first_input < second_input && second_input < ensure && ensure < invoke);
+        let release_inputs = output
+            .find("mem :: drop")
+            .expect("the empty input buffer must not overlap user allocations");
+        assert!(first_input < second_input && second_input < ensure);
+        assert!(ensure < release_inputs && release_inputs < invoke);
         assert!(output.contains("CompilerKey :: Named"));
         assert!(!output.contains("ServiceIdentifier"));
         assert!(output.contains("\"audit\""));
@@ -452,14 +450,15 @@ mod tests {
             let output = render(source);
             assert!(output.contains("take_lazy :: < Dependency >"), "{output}");
             assert!(!output.contains("take :: < Dependency >"), "{output}");
-            assert!(
-                output.contains("prepare_lazy_required :: < Dependency >"),
-                "{output}"
-            );
-            let bind = output.find("let __nestrs_factory_input_0").unwrap();
+            assert!(output.contains("InputKind :: LazyRequired"), "{output}");
+            let bind = output.find("let make = (").unwrap();
             let verify = output.find("ensure_all_consumed ()").unwrap();
             let invoke = output.find("self :: make").unwrap();
-            assert!(bind < verify && verify < invoke, "{output}");
+            let release_inputs = output.find("mem :: drop").unwrap();
+            assert!(
+                bind < verify && verify < release_inputs && release_inputs < invoke,
+                "{output}"
+            );
         }
     }
 }

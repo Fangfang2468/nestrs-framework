@@ -358,17 +358,11 @@ fn lazy_fields_lower_to_typed_handles_without_losing_keys_or_optional_routes() {
         rendered.contains("take_optional_lazy :: < dyn Audit >"),
         "{rendered}"
     );
+    assert!(rendered.contains("InputKind :: LazyRequired"), "{rendered}");
+    assert!(rendered.contains("InputKind :: LazyOptional"), "{rendered}");
     assert!(
-        rendered.contains("prepare_lazy_required :: < Report < T > >"),
-        "{rendered}"
-    );
-    assert!(
-        rendered.contains("prepare_lazy_optional :: < dyn Audit >"),
-        "{rendered}"
-    );
-    assert!(
-        rendered.contains("prepare_optional_absent :: < dyn Audit >"),
-        "trait projection must remain intact"
+        rendered.contains("project_required :: < Database >"),
+        "ordinary concrete inputs must receive a typed projector"
     );
     assert!(
         rendered.contains("CompilerKey :: Indexed (7"),
@@ -506,14 +500,8 @@ fn lazy_factory_parameters_lower_to_owned_handles_and_keep_dependency_metadata()
         rendered.contains("take_optional_lazy :: < dyn Audit >"),
         "{rendered}"
     );
-    assert!(
-        rendered.contains("prepare_lazy_required :: < Report < User > >"),
-        "{rendered}"
-    );
-    assert!(
-        rendered.contains("prepare_lazy_optional :: < dyn Audit >"),
-        "{rendered}"
-    );
+    assert!(rendered.contains("InputKind :: LazyRequired"), "{rendered}");
+    assert!(rendered.contains("InputKind :: LazyOptional"), "{rendered}");
     assert!(
         rendered.contains("compiler_plan_input :: < Report < User > , 0usize , false , true >"),
         "{rendered}"
@@ -527,7 +515,7 @@ fn lazy_factory_parameters_lower_to_owned_handles_and_keep_dependency_metadata()
         "{rendered}"
     );
     assert!(rendered.contains("CompilerKey :: Named"));
-    assert!(rendered.contains("prepare_optional_absent :: < dyn Audit >"));
+    assert!(!rendered.contains("prepare_"));
 }
 
 #[test]

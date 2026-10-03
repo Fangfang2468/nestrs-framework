@@ -183,6 +183,37 @@ fn emit<'tcx>(
     body.basic_blocks = mir::BasicBlocks::new(blocks);
     body
 }
+/// 即使 check 不触发链接、图没有 provider，也必须拒绝旧版 core 输入协议。
+/// 使用已有 options sink 的版本和完整签名握手，不增加运行时回调或读取布局。
+pub(super) fn validate_protocol(tcx: TyCtxt<'_>) {
+    let available = helpers(tcx);
+    let Some(&definition) = available.get(&PlanSink::Options) else {
+        tcx.dcx().fatal(
+            "Nestrs 工具链与 nestrs-core 内部协议版本不匹配：需要 plan_set_options_v2；请同步更新并重编译工具链与 core",
+        );
+    };
+    let signature = tcx
+        .fn_sig(definition)
+        .instantiate_identity()
+        .skip_normalization()
+        .skip_binder();
+    let inputs_match = matches!(signature.inputs(), [output, eager, concurrency]
+        if matches!(output.kind(), ty::RawPtr(element, mutability)
+            if *element == tcx.types.unit && mutability.is_mut())
+        && *eager == tcx.types.bool && *concurrency == tcx.types.usize);
+    if tcx.generics_of(definition).count() != 0
+        || signature.safety().is_safe()
+        || signature.abi() != ExternAbi::Rust
+        || signature.c_variadic()
+        || signature.output() != tcx.types.unit
+        || !inputs_match
+    {
+        tcx.dcx().fatal(
+            "Nestrs 工具链与 nestrs-core 内部协议签名不匹配：plan_set_options_v2；请同步更新并重编译工具链与 core",
+        );
+    }
+}
+
 fn helpers(tcx: TyCtxt<'_>) -> HashMap<PlanSink, DefId> {
     let mut result = HashMap::new();
     let mut crates = tcx.crates(()).to_vec();

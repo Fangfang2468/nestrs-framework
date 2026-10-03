@@ -41,6 +41,7 @@ pub(super) fn expand(
     let activate = super::reflection::ident(constructor::ACTIVATE);
     let mut dependencies = Vec::new();
     let mut arguments = Vec::new();
+    let mut acquisitions = Vec::new();
     for parameter in &analysis.parameters {
         dependencies.push(
             EmitDependencyRequest {
@@ -61,9 +62,11 @@ pub(super) fn expand(
             },
             zyn::proc_macro2::Span::call_site(),
         );
-        arguments.push(
-            quote!(__nestrs_inputs.#take::<#ty>(::nestrs_core::activation::InputSlot::new(#slot))?),
-        );
+        acquisitions.push(quote!(
+            __nestrs_inputs.#take::<#ty>(::nestrs_core::activation::InputSlot::new(#slot))?
+        ));
+        let index = syn::Index::from(slot);
+        arguments.push(quote!(__nestrs_inputs.#index));
     }
     let call = quote!(Self::#method(#(#arguments),*));
     let construct = match analysis.result_kind {
@@ -74,6 +77,23 @@ pub(super) fn expand(
             provider_source: ::nestrs_core::service::ServiceSource::new(file!(), line!(), column!()),
             detail: ::std::format!("{error:?}"),
         })?)
+        }
+    };
+    let acquire_inputs = if analysis.parameters.is_empty() {
+        quote! {
+            __nestrs_inputs.ensure_all_consumed()?;
+            ::core::mem::drop(__nestrs_inputs);
+        }
+    } else {
+        // 复用已有参数绑定名，避免逐参数临时量与调用点同名 const 冲突。
+        quote! {
+            let __nestrs_inputs = (
+                #(#acquisitions,)*
+                {
+                    __nestrs_inputs.ensure_all_consumed()?;
+                    ::core::mem::drop(__nestrs_inputs);
+                },
+            );
         }
     };
     let reflection = super::reflection::support(false);
@@ -98,8 +118,8 @@ pub(super) fn expand(
         pub(crate) fn #activate(
             #mutable __nestrs_inputs: ::nestrs_core::activation::ConstructionInputs,
         ) -> ::core::result::Result<::nestrs_core::activation::ErasedService, ::nestrs_core::activation::ConstructionError> {
+            #acquire_inputs
             let __nestrs_instance = #construct;
-            __nestrs_inputs.ensure_all_consumed()?;
             ::core::result::Result::Ok(::nestrs_core::activation::ErasedService::new(__nestrs_instance))
         }
     })

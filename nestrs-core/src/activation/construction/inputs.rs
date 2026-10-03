@@ -1,229 +1,279 @@
-//! 已准备输入的交付与消费，不包含准备阶段的写入权限。
+//! 已选输入的直接类型化交付，不存放逐参数装箱的中间令牌。
 //!
-//! [`PreparedInput`] 保存一个已经校验类型、带有真实 lease 的注入令牌；
-//! [`ConstructionInputs`] 则是一组只能各消费一次的固定槽位。必选与可选只在载荷形态
-//! 上不同，统一经过“检查形态和类型，再移出载荷”的流程。任何检查失败都保留原槽位，
-//! 因而诊断错误不会顺带销毁一个仍可正确读取的输入。
+//! [`ConstructionInputs`] 拥有固定槽位里的实例凭证或延迟请求描述。生成的 adapter
+//! 用准确的业务类型读取输入：普通依赖由既定 projector 直接写入栈上令牌，延迟依赖
+//! 只交付句柄。形态、类型和投影全部成功后才消费槽位；失败不会改变原输入。
 
-use std::{any::Any, mem};
+use std::mem;
 
 use crate::{
     activation::{DependencyLease, Injection, LazyInjection},
-    service::Injectable,
+    service::{Injectable, ServiceType},
 };
 
-use super::{error::ConstructionError, slot::InputSlot};
+use super::{ConstructionError, InputSlot, LazyDependency, ProjectionTarget, ServiceProjector};
 
-/// 已经完成类型化准备、但尚未写入固定槽位的一个输入。
+/// 一个输入的准确交付形态；与槽位是否已消费分别记录。
 ///
-/// `InputPreparer` 只会产生此值；实际写入缓冲区与收纳依赖 lease 的动作
-/// 由 `ActivationPreparation` 集中完成，因此 preparer 无法留下半写入状态。
+/// 编译器在描述中固定此值。即使 optional 缺席或 lazy 尚未请求目标，也必须先检查
+/// 形态和服务类型，不能把不同类型的 None 或尚未初始化的句柄相互替换。
 #[doc(hidden)]
-pub struct PreparedInput {
-    kind: InputKind,
-    value: Box<dyn Any + Send + Sync>,
-    service_type_name: &'static str,
-    // 令牌自身持有一份 lease；这一份供准备阶段交给实例或工厂帧独立保活。
-    // 不能根据 preparer 的入参推断 owner，因为返回令牌可能来自它保留的另一实例。
-    lease: Option<DependencyLease>,
-}
-
-/// 输入载荷的交付形态，与“槽位是否已消费”是两个不同维度。
-///
-/// 只有本模块的私有构造函数能组合形态、真实载荷类型与 lease，生成适配器不能伪造。
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum InputKind {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputKind {
     Required,
     Optional,
     LazyRequired,
     LazyOptional,
 }
 
-impl PreparedInput {
-    /// 包装已经带有真实 owner lease 的必选注入 token。
-    pub(super) fn required<T>(token: Injection<T>) -> Self
-    where
-        T: Injectable + ?Sized,
-    {
+impl InputKind {
+    pub(crate) fn is_optional(self) -> bool {
+        matches!(self, Self::Optional | Self::LazyOptional)
+    }
+
+    pub(crate) fn is_lazy(self) -> bool {
+        matches!(self, Self::LazyRequired | Self::LazyOptional)
+    }
+
+    fn expected_error(self, slot: InputSlot) -> ConstructionError {
+        match self {
+            Self::Required => ConstructionError::RequiredInputExpected { slot },
+            Self::Optional => ConstructionError::OptionalInputExpected { slot },
+            Self::LazyRequired => ConstructionError::LazyRequiredInputExpected { slot },
+            Self::LazyOptional => ConstructionError::LazyOptionalInputExpected { slot },
+        }
+    }
+}
+
+/// 一个槽位已经选定的执行数据；不包含候选查找、缓存或图分析能力。
+///
+/// 只有 runtime 能提供真实 lease 或当前 owner 的弱请求能力。创建整个输入集合时
+/// 验证数据与交付形态一致，之后 adapter 只能读取，不能替换来源。
+pub(crate) struct ConstructionInput {
+    service_type: ServiceType,
+    kind: InputKind,
+    source: InputSource,
+}
+
+enum InputSource {
+    Absent,
+    Immediate {
+        lease: DependencyLease,
+        project: ServiceProjector,
+    },
+    Lazy(LazyDependency),
+}
+
+impl ConstructionInput {
+    pub(crate) fn absent(service_type: ServiceType, kind: InputKind) -> Self {
         Self {
-            lease: Some(token.lease()),
-            kind: InputKind::Required,
-            value: Box::new(token),
-            service_type_name: std::any::type_name::<T>(),
+            service_type,
+            kind,
+            source: InputSource::Absent,
         }
     }
 
-    /// 包装可选 token；`None` 是已准备的缺席值，而非未填充槽位。
-    pub(super) fn optional<T>(token: Option<Injection<T>>) -> Self
-    where
-        T: Injectable + ?Sized,
-    {
+    pub(crate) fn immediate(
+        service_type: ServiceType,
+        kind: InputKind,
+        lease: DependencyLease,
+        project: ServiceProjector,
+    ) -> Self {
         Self {
-            lease: token.as_ref().map(Injection::lease),
-            kind: InputKind::Optional,
-            value: Box::new(token),
-            service_type_name: std::any::type_name::<T>(),
+            service_type,
+            kind,
+            source: InputSource::Immediate { lease, project },
         }
     }
 
-    /// 延迟句柄尚无实例 lease；成功获取时由句柄自己收纳真实 token。
-    pub(super) fn lazy_required<T>(token: LazyInjection<T>) -> Self
-    where
-        T: Injectable + ?Sized,
-    {
+    pub(crate) fn lazy(
+        service_type: ServiceType,
+        kind: InputKind,
+        dependency: LazyDependency,
+    ) -> Self {
         Self {
-            lease: None,
-            kind: InputKind::LazyRequired,
-            value: Box::new(token),
-            service_type_name: std::any::type_name::<T>(),
+            service_type,
+            kind,
+            source: InputSource::Lazy(dependency),
         }
     }
 
-    pub(super) fn lazy_optional<T>(token: Option<LazyInjection<T>>) -> Self
-    where
-        T: Injectable + ?Sized,
-    {
-        Self {
-            lease: None,
-            kind: InputKind::LazyOptional,
-            value: Box::new(token),
-            service_type_name: std::any::type_name::<T>(),
+    fn validate_source(&self, slot: InputSlot) -> Result<(), ConstructionError> {
+        match &self.source {
+            InputSource::Absent if !self.kind.is_optional() => {
+                Err(ConstructionError::RequiredDependencyAbsent { slot })
+            }
+            InputSource::Immediate { .. } if self.kind.is_lazy() => {
+                Err(self.kind.expected_error(slot))
+            }
+            InputSource::Lazy(_) if !self.kind.is_lazy() => Err(self.kind.expected_error(slot)),
+            InputSource::Lazy(dependency) if dependency.plan.input != slot => {
+                Err(ConstructionError::InputSlotMismatch {
+                    slot,
+                    actual: dependency.plan.input,
+                })
+            }
+            _ => Ok(()),
         }
     }
 
-    pub(super) fn dependency(&self) -> Option<DependencyLease> {
-        self.lease.clone()
-    }
-
-    /// 直接消费一个已准备的必选载荷，供构造协议的隔离校验使用。
-    /// 根查询与延迟目标交付使用 ProjectionTarget::project，不再经过此装箱输入路径。
-    pub(crate) fn into_required<T>(self, slot: InputSlot) -> Result<Injection<T>, ConstructionError>
-    where
-        T: Injectable + ?Sized,
-    {
-        self.validate::<Injection<T>>(slot, InputKind::Required, std::any::type_name::<T>())?;
-        Ok(self.into_value())
-    }
-
-    /// 直接消费一个已准备的可选载荷；缺席和存在都必须匹配准确的 Option 类型。
-    pub(crate) fn into_optional<T>(
-        self,
-        slot: InputSlot,
-    ) -> Result<Option<Injection<T>>, ConstructionError>
-    where
-        T: Injectable + ?Sized,
-    {
-        self.validate::<Option<Injection<T>>>(
-            slot,
-            InputKind::Optional,
-            std::any::type_name::<T>(),
-        )?;
-        Ok(self.into_value())
-    }
-
-    /// 只读验证；调用者确认成功后，才可以改变槽位的消费状态。
-    fn validate<Value: Any>(
+    fn validate<T: Injectable + ?Sized>(
         &self,
         slot: InputSlot,
         kind: InputKind,
-        expected: &'static str,
     ) -> Result<(), ConstructionError> {
         if self.kind != kind {
-            return Err(match kind {
-                InputKind::Required => ConstructionError::RequiredInputExpected { slot },
-                InputKind::Optional => ConstructionError::OptionalInputExpected { slot },
-                InputKind::LazyRequired => ConstructionError::LazyRequiredInputExpected { slot },
-                InputKind::LazyOptional => ConstructionError::LazyOptionalInputExpected { slot },
-            });
+            return Err(kind.expected_error(slot));
         }
-        if !self.value.is::<Value>() {
+        if self.service_type != ServiceType::create::<T>() {
             return Err(ConstructionError::InputTypeMismatch {
                 slot,
-                expected,
-                actual: self.service_type_name,
+                expected: std::any::type_name::<T>(),
+                actual: self.service_type.name,
             });
         }
         Ok(())
     }
 
-    /// 仅接收已经通过 `validate::<Value>` 的载荷；令牌自己的 lease 随值一起移出。
-    fn into_value<Value: Any>(self) -> Value {
-        *self
-            .value
-            .downcast::<Value>()
-            .expect("输入载荷必须在移出前完成准确类型检查")
+    fn project<T: Injectable + ?Sized>(
+        &self,
+        slot: InputSlot,
+    ) -> Result<Option<Injection<T>>, ConstructionError> {
+        match &self.source {
+            InputSource::Absent => Ok(None),
+            InputSource::Immediate { lease, project } => {
+                // 原输入先保留自己的 lease。只有准确投影成功，调用者才消费槽位；
+                // projector 的临时失败不会丢失输入，也不能替换 frame 保活的实例。
+                ProjectionTarget::project(slot, lease.clone(), *project).map(Some)
+            }
+            InputSource::Lazy(_) => unreachable!("普通输入必须先完成形态检查"),
+        }
     }
 }
 
-/// 已完成绑定的构造输入。
+/// 已完成来源验证、仅供生成构造 adapter 消费的固定输入集合。
 ///
-/// class 适配器直接消费它；factory 适配器仅通过持有真实 lease 的
-/// [`super::FactoryInputs`] 消费它。该类型不提供写入 API；adapter 只能按 slot 取得
-/// 匹配的必选或可选令牌，并在构造完成前通过
-/// [`Self::ensure_all_consumed`] 验证描述中的依赖与适配器实际读取一致。
+/// 每个槽位只能读取一次。adapter 必须先把全部输入取到准确类型的局部变量并调用
+/// [`Self::ensure_all_consumed`]，随后才执行用户 constructor、factory、Default 或 value。
 #[doc(hidden)]
 pub struct ConstructionInputs {
     slots: Vec<ConsumptionSlot>,
 }
 
 enum ConsumptionSlot {
-    // 可选输入的 None 也属于 Available；它和已经取走的 Consumed 不同。
-    Available(PreparedInput),
+    Available(ConstructionInput),
     Consumed,
 }
 
 impl ConstructionInputs {
-    /// 创建没有依赖的合法构造输入，供零依赖 adapter 使用。
+    /// 零依赖 adapter 的合法输入。
     pub fn empty() -> Self {
         Self { slots: Vec::new() }
     }
 
-    /// 仅供准备阶段使用；每个元素都对应已填满且校验过边界的固定槽位。
-    pub(super) fn from_prepared(inputs: Vec<PreparedInput>) -> Self {
-        Self {
+    /// 一次验证完整输入，不暴露可留下半填槽位的写入器。
+    ///
+    /// 失败时整个输入集合按 Rust 所有权释放；不会执行 projector、用户构造或 lazy 请求。
+    pub(crate) fn new(inputs: Vec<ConstructionInput>) -> Result<Self, ConstructionError> {
+        for (index, input) in inputs.iter().enumerate() {
+            input.validate_source(InputSlot::new(index))?;
+        }
+        Ok(Self {
             slots: inputs.into_iter().map(ConsumptionSlot::Available).collect(),
+        })
+    }
+
+    /// 从准确输入来源派生保活集合，供实例或 factory frame 持有。
+    ///
+    /// 只能在 adapter 消费前调用。普通投影随后必须保留同一 lease 身份；lazy 目标尚未
+    /// 存在，不加入集合。重复依赖仍逐槽保留，不按静态图的去重边替代真实参数。
+    pub(crate) fn dependency_leases(&self) -> Vec<DependencyLease> {
+        // 该数组随发布实例存活到释放；filter_map().collect() 对单参数按容量 4
+        // 分配会使每个存活实例长期多占三份 lease 的空间。只为实际立即输入分配。
+        let count = self
+            .slots
+            .iter()
+            .filter(|slot| {
+                matches!(
+                    slot,
+                    ConsumptionSlot::Available(ConstructionInput {
+                        source: InputSource::Immediate { .. },
+                        ..
+                    })
+                )
+            })
+            .count();
+        let mut dependencies = Vec::with_capacity(count);
+        for slot in &self.slots {
+            match slot {
+                ConsumptionSlot::Available(ConstructionInput {
+                    source: InputSource::Immediate { lease, .. },
+                    ..
+                }) => dependencies.push(lease.clone()),
+                ConsumptionSlot::Available(_) => {}
+                ConsumptionSlot::Consumed => {
+                    panic!("构造输入的保活集合必须在 adapter 消费前取得")
+                }
+            }
+        }
+        dependencies
+    }
+
+    /// 直接取得持有真实实例 lease 的必选令牌。
+    pub fn take<T: Injectable + ?Sized>(
+        &mut self,
+        slot: InputSlot,
+    ) -> Result<Injection<T>, ConstructionError> {
+        let input = self.available(slot)?;
+        input.validate::<T>(slot, InputKind::Required)?;
+        let token = input
+            .project::<T>(slot)?
+            .ok_or(ConstructionError::RequiredDependencyAbsent { slot })?;
+        self.consume(slot);
+        Ok(token)
+    }
+
+    /// 直接取得可选令牌；None 是准确的已交付缺席值。
+    pub fn take_optional<T: Injectable + ?Sized>(
+        &mut self,
+        slot: InputSlot,
+    ) -> Result<Option<Injection<T>>, ConstructionError> {
+        let input = self.available(slot)?;
+        input.validate::<T>(slot, InputKind::Optional)?;
+        let token = input.project::<T>(slot)?;
+        self.consume(slot);
+        Ok(token)
+    }
+
+    /// 只交付延迟句柄，不请求目标或收纳目标 lease。
+    pub fn take_lazy<T: Injectable + ?Sized>(
+        &mut self,
+        slot: InputSlot,
+    ) -> Result<LazyInjection<T>, ConstructionError> {
+        self.available(slot)?
+            .validate::<T>(slot, InputKind::LazyRequired)?;
+        let InputSource::Lazy(dependency) = self.consume(slot).source else {
+            unreachable!("必选延迟输入必须在创建时完成来源检查");
+        };
+        Ok(LazyInjection::new(dependency, slot))
+    }
+
+    /// 缺席来自冻结计划；未来目标的初始化错误不会变成 None。
+    pub fn take_optional_lazy<T: Injectable + ?Sized>(
+        &mut self,
+        slot: InputSlot,
+    ) -> Result<Option<LazyInjection<T>>, ConstructionError> {
+        self.available(slot)?
+            .validate::<T>(slot, InputKind::LazyOptional)?;
+        match self.consume(slot).source {
+            InputSource::Absent => Ok(None),
+            InputSource::Lazy(dependency) => Ok(Some(LazyInjection::new(dependency, slot))),
+            InputSource::Immediate { .. } => {
+                unreachable!("可选延迟输入必须在创建时完成来源检查")
+            }
         }
     }
 
-    /// 取走一个必选字段注入 token。
-    pub fn take<T>(&mut self, slot: InputSlot) -> Result<Injection<T>, ConstructionError>
-    where
-        T: Injectable + ?Sized,
-    {
-        self.take_value(slot, InputKind::Required, std::any::type_name::<T>())
-    }
-
-    /// 取走一个可选字段注入 token。
-    pub fn take_optional<T>(
-        &mut self,
-        slot: InputSlot,
-    ) -> Result<Option<Injection<T>>, ConstructionError>
-    where
-        T: Injectable + ?Sized,
-    {
-        self.take_value(slot, InputKind::Optional, std::any::type_name::<T>())
-    }
-
-    /// 移交必选延迟字段；读取句柄本身不会启动目标构造。
-    pub fn take_lazy<T>(&mut self, slot: InputSlot) -> Result<LazyInjection<T>, ConstructionError>
-    where
-        T: Injectable + ?Sized,
-    {
-        self.take_value(slot, InputKind::LazyRequired, std::any::type_name::<T>())
-    }
-
-    /// 移交可选延迟字段；缺席只由冻结图决定，目标初始化失败不会伪装成 `None`。
-    pub fn take_optional_lazy<T>(
-        &mut self,
-        slot: InputSlot,
-    ) -> Result<Option<LazyInjection<T>>, ConstructionError>
-    where
-        T: Injectable + ?Sized,
-    {
-        self.take_value(slot, InputKind::LazyOptional, std::any::type_name::<T>())
-    }
-
-    /// 拒绝仍遗留在 adapter 输入中的槽位。
     pub fn ensure_all_consumed(&self) -> Result<(), ConstructionError> {
         let Some(index) = self
             .slots
@@ -232,48 +282,31 @@ impl ConstructionInputs {
         else {
             return Ok(());
         };
-
         Err(ConstructionError::UnconsumedSlot {
             slot: InputSlot::new(index),
         })
     }
 
-    /// 必选和可选共享此流程，保证所有错误检查都发生在消费槽位之前。
-    fn take_value<Value: Any>(
-        &mut self,
-        slot: InputSlot,
-        kind: InputKind,
-        expected: &'static str,
-    ) -> Result<Value, ConstructionError> {
-        self.available(slot)?
-            .validate::<Value>(slot, kind, expected)?;
-        Ok(self.take_available(slot).into_value())
-    }
-
-    fn available(&self, slot: InputSlot) -> Result<&PreparedInput, ConstructionError> {
+    fn available(&self, slot: InputSlot) -> Result<&ConstructionInput, ConstructionError> {
         let slot_count = self.slots.len();
-        let Some(value) = self.slots.get(slot.index()) else {
-            return Err(ConstructionError::SlotOutOfBounds { slot, slot_count });
-        };
-
-        match value {
-            ConsumptionSlot::Available(input) => Ok(input),
-            ConsumptionSlot::Consumed => Err(ConstructionError::SlotAlreadyConsumed { slot }),
+        match self.slots.get(slot.index()) {
+            Some(ConsumptionSlot::Available(input)) => Ok(input),
+            Some(ConsumptionSlot::Consumed) => Err(ConstructionError::SlotAlreadyConsumed { slot }),
+            None => Err(ConstructionError::SlotOutOfBounds { slot, slot_count }),
         }
     }
 
-    fn take_available(&mut self, slot: InputSlot) -> PreparedInput {
+    /// 只在形态、类型及可能的投影均成功后执行。
+    fn consume(&mut self, slot: InputSlot) -> ConstructionInput {
         let value = mem::replace(
             self.slots
                 .get_mut(slot.index())
                 .expect("槽位必须在消费前完成范围检查"),
             ConsumptionSlot::Consumed,
         );
-
         let ConsumptionSlot::Available(input) = value else {
             unreachable!("槽位必须在消费前确认尚未被消费");
         };
-
         input
     }
 }

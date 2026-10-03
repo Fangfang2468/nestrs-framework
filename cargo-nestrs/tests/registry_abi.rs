@@ -49,6 +49,87 @@ fn run(directory: &Path, arguments: &[&str], log_name: &str) -> Output {
 }
 
 #[test]
+fn check_rejects_an_older_core_protocol_even_without_service_declarations() {
+    fn copy_sources(source: &Path, target: &Path) {
+        fs::create_dir_all(target).unwrap();
+        for entry in fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let destination = target.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_sources(&entry.path(), &destination);
+            } else {
+                fs::copy(entry.path(), destination).unwrap();
+            }
+        }
+    }
+
+    let directory = artifacts("old-core-protocol");
+    fs::create_dir_all(directory.join("src")).unwrap();
+    let core = directory.join("core");
+    copy_sources(&workspace().join("nestrs-core/src"), &core.join("src"));
+    fs::copy(
+        workspace().join("nestrs-core/Cargo.toml"),
+        core.join("Cargo.toml"),
+    )
+    .unwrap();
+    // Model a mismatched installation using real core source and an older sink
+    // name. No declarations are needed to load the core dependency in rustc.
+    let plan_path = core.join("src/graph/plan.rs");
+    let source = fs::read_to_string(&plan_path).unwrap();
+    assert!(source.contains("plan_set_options_v2"));
+    fs::write(
+        &plan_path,
+        source.replace("plan_set_options_v2", "plan_set_options"),
+    )
+    .unwrap();
+    let original: toml::Value =
+        toml::from_str(&fs::read_to_string(workspace().join("Cargo.toml")).unwrap()).unwrap();
+    let mut manifest: toml::Value = toml::from_str(
+        r#"
+[package]
+name = "old-core-protocol"
+version = "0.0.0"
+edition = "2024"
+[dependencies]
+nestrs-core = { path = "core" }
+[workspace]
+members = ["core"]
+resolver = "3"
+"#,
+    )
+    .unwrap();
+    let workspace = manifest["workspace"].as_table_mut().unwrap();
+    workspace.insert("package".into(), original["workspace"]["package"].clone());
+    workspace.insert(
+        "dependencies".into(),
+        original["workspace"]["dependencies"].clone(),
+    );
+    fs::write(
+        directory.join("Cargo.toml"),
+        toml::to_string(&manifest).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        directory.join("src/main.rs"),
+        "fn main() { let _ = std::mem::size_of::<nestrs_core::ServiceProvider>(); }",
+    )
+    .unwrap();
+
+    let output = run(&directory, &["check", "--offline"], "old-protocol");
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "check accepted an incompatible core"
+    );
+    assert!(diagnostic.contains("内部协议版本不匹配"), "{diagnostic}");
+    assert!(diagnostic.contains("plan_set_options_v2"), "{diagnostic}");
+    assert!(
+        !diagnostic.contains("internal compiler error"),
+        "{diagnostic}"
+    );
+}
+
+#[test]
 fn explicit_binding_satisfies_automatic_demand_without_a_duplicate_pair() {
     let directory = artifacts("explicit-binding-demand");
     fs::create_dir_all(directory.join("src")).unwrap();
@@ -213,23 +294,23 @@ fn source_cannot_call_reflection_entry_or_forge_declaration_callbacks() {
     let cases = [
         (
             "direct",
-            "fn main() { __nestrs_reflect_v1(std::ptr::null_mut()); }",
+            "fn main() { __nestrs_reflect_v2(std::ptr::null_mut()); }",
         ),
         (
             "address",
-            "fn main() { let _entry: fn(*mut ()) = __nestrs_reflect_v1; }",
+            "fn main() { let _entry: fn(*mut ()) = __nestrs_reflect_v2; }",
         ),
         (
             "constant",
-            "const ENTRY: fn(*mut ()) = __nestrs_reflect_v1; fn main() {}",
+            "const ENTRY: fn(*mut ()) = __nestrs_reflect_v2; fn main() {}",
         ),
         (
             "alias",
-            "use crate::__nestrs_reflect_v1 as hidden; fn main() {}",
+            "use crate::__nestrs_reflect_v2 as hidden; fn main() {}",
         ),
         (
             "glob-dormant",
-            "mod hidden { use super::*; fn dormant() { __nestrs_reflect_v1(std::ptr::null_mut()); } } fn main() {}",
+            "mod hidden { use super::*; fn dormant() { __nestrs_reflect_v2(std::ptr::null_mut()); } } fn main() {}",
         ),
     ];
     for (case, source) in cases {
@@ -529,13 +610,13 @@ pub fn keep(_: TokenStream, item: TokenStream) -> TokenStream { item }
 
 #[proc_macro]
 pub fn collect(_: TokenStream) -> TokenStream {
-    "let _ = ::nestrs_core::graph::plan::load();".parse().unwrap()
+    "let _ = ::nestrs_core::graph::plan::CompiledApplication::load();".parse().unwrap()
 }
 
 #[proc_macro_attribute]
 pub fn injectable(_: TokenStream, item: TokenStream) -> TokenStream {
     let mut output = item;
-    output.extend("fn private_access() { let _ = ::nestrs_core::graph::plan::load(); }".parse::<TokenStream>().unwrap());
+    output.extend("fn private_access() { let _ = ::nestrs_core::graph::plan::CompiledApplication::load(); }".parse::<TokenStream>().unwrap());
     output
 }
 "#,
@@ -585,6 +666,12 @@ async fn main() {
         assert!(
             !output.status.success(),
             "{name}: a different bridge artifact received compiler-internal access"
+        );
+        // The target must resolve: a missing symbol would only test spelling,
+        // not whether the compiler rejects a different macro artifact's access.
+        assert!(
+            !stderr.contains("E0425"),
+            "{name}: stale attack target: {stderr}"
         );
         assert!(stderr.contains("Nestrs 内部实现"), "{name}: {stderr}");
     }

@@ -41,7 +41,7 @@ impl CompiledApplication {
             // SAFETY: driver 验证入口与下面全部 sink 的真实签名，只将当前 assembly 地址
             // 同步传给这些函数；业务源码不能引用入口，地址也不会被保存到程序全局状态。
             unsafe {
-                __nestrs_reflect_v1((&mut assembly as *mut PlanAssembly).cast());
+                __nestrs_reflect_v2((&mut assembly as *mut PlanAssembly).cast());
             }
             assembly.finish()
         })
@@ -187,15 +187,20 @@ impl PlanAssembly {
         let adapter = self.nodes[provider].adapters[slot]
             .take()
             .expect("Nestrs 编译计划重复写入输入");
+        assert_eq!(
+            optional,
+            adapter.kind.is_optional(),
+            "Nestrs 编译计划的可选性与输入适配器不一致"
+        );
         let target = (target != ABSENT).then_some(target);
         if let Some(target) = target {
             assert!(target < self.nodes.len(), "Nestrs 编译计划的目标节点越界");
         } else {
             assert!(optional, "Nestrs 编译计划将必选输入标记为缺席");
         }
-        // 此处没有候选选择：编译器已经用 binding 编号指定唯一投影。optional 只决定
-        // 使用该 binding 的哪个经 Rust 类型检查的 adapter，不影响服务目标。
-        let (prepare, project) = if binding != ABSENT {
+        // 此处没有候选选择：编译器已经用 binding 编号指定唯一投影。普通和延迟交付
+        // 共用同一个经 Rust 检查的 projector；optional 不影响目标或投影选择。
+        let project = if binding != ABSENT {
             let binding = self.bindings[binding];
             let target = target.expect("Nestrs 编译计划的投影输入没有目标");
             assert_eq!(
@@ -206,19 +211,15 @@ impl PlanAssembly {
                 binding.concrete_type, self.nodes[target].node.identifier.service_type,
                 "Nestrs 编译计划的投影来源不一致"
             );
-            (
-                if optional {
-                    binding.prepare_optional
-                } else {
-                    binding.prepare_required
-                },
-                Some(binding.project),
-            )
+            Some(binding.project)
         } else {
-            let prepare = adapter
-                .prepare
-                .expect("Nestrs 编译计划没有提供必选接口投影");
-            (prepare, adapter.project)
+            if let Some(target) = target {
+                assert_eq!(
+                    adapter.service_type, self.nodes[target].node.identifier.service_type,
+                    "Nestrs 编译计划的直接输入类型不一致"
+                );
+            }
+            adapter.project
         };
         // 描述在程序计划首次装载时创建一次。所有运行期 occurrence 只克隆 Arc，
         // 不再重复复制消费者名称、key、源码位置与投影协议；状态仍属于各自字段。
@@ -230,12 +231,15 @@ impl PlanAssembly {
         );
         // 可选字段只存在于编译器装配协议。此处一次确定最终交付分支，worker 随后
         // 直接匹配该分支；不会再遇到“有延迟标记但没有对应计划”的半完成执行节点。
-        // 缺席延迟输入保留专用 preparer，保证写入 Option<LazyInjection<T>> 的 None。
-        let input = match (target, adapter.lazy) {
-            (None, None) => DependencyInput::Absent(AbsentInput::Immediate(prepare)),
-            (None, Some(prepare)) => DependencyInput::Absent(AbsentInput::Lazy(prepare)),
-            (Some(target), None) => DependencyInput::Immediate { target, prepare },
-            (Some(target), Some(prepare)) => {
+        // 缺席保留普通/延迟类别，准确 T 则由 requested 保留，读取 None 时仍核对两者。
+        let input = match (target, adapter.kind.is_lazy()) {
+            (None, false) => DependencyInput::Absent(AbsentInput::Immediate),
+            (None, true) => DependencyInput::Absent(AbsentInput::Lazy),
+            (Some(target), false) => DependencyInput::Immediate {
+                target,
+                project: project.expect("Nestrs 编译计划的普通输入缺少直接类型化投影"),
+            },
+            (Some(target), true) => {
                 let consumer = &self.nodes[provider].node;
                 DependencyInput::Lazy {
                     plan: Arc::new(LazyInputPlan {
@@ -246,7 +250,6 @@ impl PlanAssembly {
                         input: input_slot,
                         project: project.expect("Nestrs 编译计划的延迟输入缺少直接类型化投影"),
                     }),
-                    prepare,
                 }
             }
         };
@@ -332,14 +335,14 @@ impl PlanAssembly {
 
 #[cfg(nestrs_compiler)]
 unsafe extern "Rust" {
-    fn __nestrs_reflect_v1(output: *mut ());
+    fn __nestrs_reflect_v2(output: *mut ());
 }
 
 /// 将最终入口的编译时配置写入计划，不读取部署环境中的 Cargo.toml。
 ///
 /// # Safety
 /// output 必须满足本模块的编译器装配协议。
-pub unsafe fn plan_set_options(output: *mut (), eager: bool, concurrency: usize) {
+pub unsafe fn plan_set_options_v2(output: *mut (), eager: bool, concurrency: usize) {
     // SAFETY: 入口同步调用，且 output 仍然唯一指向当前装配器。
     unsafe { PlanAssembly::from_output(output) }.set_options(eager, concurrency);
 }

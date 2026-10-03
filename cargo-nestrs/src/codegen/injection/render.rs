@@ -27,6 +27,12 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
     let optional = request.optional;
     let lazy = request.lazy;
     let input_slot = request.input_slot;
+    let kind = ident(match (lazy, optional) {
+        (false, false) => "Required",
+        (false, true) => "Optional",
+        (true, false) => "LazyRequired",
+        (true, true) => "LazyOptional",
+    });
     let span = service_type.span();
     let label = syn::LitStr::new(
         &request
@@ -58,83 +64,24 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
                 {{ key_origin }}
                 ::nestrs_core::service::ServiceType::create::<{{ service_type.clone() }}>()
             },
-            lazy: @RenderLazyInput(service_type = service_type.clone(), optional = optional, lazy = lazy),
-            project: @RenderLazyProjection(service_type = service_type.clone(), lazy = lazy, is_trait_object = is_trait_object),
-            prepare: @RenderDelivery(service_type = service_type.clone(), optional = optional, is_trait_object = is_trait_object),
+            kind: ::nestrs_core::activation::InputKind::{{ kind }},
+            project: @RenderInputProjection(service_type = service_type.clone(), is_trait_object = is_trait_object),
         }
     }
 }
 
-/// 延迟 concrete 输入直接交付 token；显式 dyn 等待 binding 提供真实 coercion。
+/// 所有 concrete 输入共享直接交付 token 的投影；显式 dyn 等待 binding 提供真实 coercion。
 /// 类型别名先携带直接投影，计划选择 trait 路由时覆盖它，不能按源码拼写猜类型身份。
 #[zyn::element]
-fn render_lazy_projection(
-    service_type: syn::Type,
-    lazy: bool,
-    is_trait_object: bool,
-) -> zyn::TokenStream {
+fn render_input_projection(service_type: syn::Type, is_trait_object: bool) -> zyn::TokenStream {
     zyn! {
-        @if (*lazy && !*is_trait_object) {
+        @if (!*is_trait_object) {
             ::core::option::Option::Some(
                 ::nestrs_core::activation::project_required::<{{ service_type }}>
                     as ::nestrs_core::activation::ServiceProjector
             )
         } @else {
             ::core::option::Option::None
-        }
-    }
-}
-
-/// 延迟包装和真实实例的投影是两个不同的阶段，不能用 lazy preparer 替换 delivery。
-/// 前者创建可 await 的句柄；后者在目标完成后仍负责准确的 concrete/trait 类型恢复。
-#[zyn::element]
-fn render_lazy_input(service_type: syn::Type, optional: bool, lazy: bool) -> zyn::TokenStream {
-    zyn! {
-        @if (*lazy) {
-            ::core::option::Option::Some(
-                @if (*optional) {
-                    ::nestrs_core::activation::prepare_lazy_optional::<{{ service_type }}>
-                } @else {
-                    ::nestrs_core::activation::prepare_lazy_required::<{{ service_type }}>
-                }
-                as ::nestrs_core::activation::LazyInputPreparer
-            )
-        } @else {
-            ::core::option::Option::None
-        }
-    }
-}
-
-/// 渲染依赖值准备为构造输入槽位载荷的方式。
-///
-/// 已知 dyn 写法使用 binding；其余类型路径可能是别名或泛型参数，由冻结后的实际
-/// 路由选择准确的 concrete preparer 或 binding。typed address 检查支持 ?Sized，
-/// 不需要从源码拼写猜测一个路径是否代表 trait object。
-#[zyn::element]
-fn render_delivery(
-    service_type: syn::Type,
-    optional: bool,
-    is_trait_object: bool,
-) -> zyn::TokenStream {
-    zyn! {
-        @if (*is_trait_object) {
-            @if (*optional) {
-                ::core::option::Option::Some(
-                    ::nestrs_core::activation::prepare_optional_absent::<{{ service_type }}>
-                        as ::nestrs_core::activation::InputPreparer
-                )
-            } @else {
-                ::core::option::Option::None
-            }
-        } @else {
-            ::core::option::Option::Some(
-                @if (*optional) {
-                    ::nestrs_core::activation::prepare_optional::<{{ service_type }}>
-                } @else {
-                    ::nestrs_core::activation::prepare_required::<{{ service_type }}>
-                }
-                as ::nestrs_core::activation::InputPreparer
-            )
         }
     }
 }

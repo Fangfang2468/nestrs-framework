@@ -20,11 +20,70 @@ fn erased_service_ref_validates_the_concrete_type_before_casting() {
 }
 
 #[test]
-fn moving_the_envelope_keeps_its_typed_address_stable() {
+fn moved_and_failed_downcast_envelope_resolves_from_its_published_value() {
     let service = ErasedService::new(String::from("stable"));
-    let before = service.pointer::<String>().unwrap();
+    // 构造结果在 worker / 结果消息 / journal 之间移动时不能缓存早先借出的指针。
+    // 失败的 downcast 也会移动 Box；之后仍应能从最终 lease 中恢复准确类型。
     let moved = Box::new(service);
-    assert_eq!(moved.pointer::<String>(), Some(before));
-    assert!(moved.pointer::<str>().is_none());
-    assert_eq!(moved.downcast::<String>().ok().as_deref(), Some("stable"));
+    let Err(service) = moved.downcast::<u64>() else {
+        panic!("wrong concrete type must not be accepted");
+    };
+    let lease = DependencyLease::new(service, vec![], ReleaseDomain::new());
+    assert!(lease.pointer::<str>().is_none());
+    assert!(lease.pointer::<u64>().is_none());
+    let pointer = lease.pointer::<String>().unwrap();
+    let retained = lease.clone();
+    drop(lease);
+    // SAFETY: retained 固定同一个最终实例；此后只移动 lease，不移动服务 Box。
+    let value = unsafe { pointer.as_ref() };
+    let repeated = retained.pointer::<String>().unwrap();
+    assert_eq!(pointer, repeated);
+    // SAFETY: 再次恢复指针只产生共享借用，不撤销仍合法的 value 借用。
+    assert_eq!(unsafe { repeated.as_ref() }, value);
+    assert_eq!(value, "stable");
+    drop(retained);
+}
+
+#[test]
+fn published_value_resolves_across_threads_and_drops_once() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct Tracked(Arc<AtomicUsize>);
+    impl Drop for Tracked {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let drops = Arc::new(AtomicUsize::new(0));
+    let service = ErasedService::new(Tracked(drops.clone()));
+    let lease = DependencyLease::new(service, vec![], ReleaseDomain::new());
+    let retained = lease.clone();
+    std::thread::spawn(move || {
+        let pointer = retained.pointer::<Tracked>().unwrap();
+        // SAFETY: retained 在读取期间保活未移动的最终服务。
+        assert_eq!(unsafe { pointer.as_ref() }.0.load(Ordering::SeqCst), 0);
+    })
+    .join()
+    .unwrap();
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    drop(lease);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn zero_sized_values_keep_exact_type_and_unpublished_downcast() {
+    struct Empty;
+    let lease = DependencyLease::new(ErasedService::new(Empty), vec![], ReleaseDomain::new());
+    let pointer = lease.pointer::<Empty>().unwrap();
+    assert!(lease.pointer::<()>().is_none());
+    // SAFETY: ZST 指针同样来自真实类型的共享借用，并由 lease 保活。
+    let _: &Empty = unsafe { pointer.as_ref() };
+    assert!(matches!(
+        ErasedService::new(Empty).downcast::<Empty>(),
+        Ok(Empty)
+    ));
 }

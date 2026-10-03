@@ -41,7 +41,9 @@ pub(crate) struct FactoryLeaseFrame {
 }
 
 impl FactoryLeaseFrame {
-    pub(super) fn new(inputs: ConstructionInputs, dependencies: Vec<DependencyLease>) -> Self {
+    pub(crate) fn new(inputs: ConstructionInputs) -> Self {
+        // 保活对象只能来自这些尚未消费的准确输入，调用者不能另传不匹配的 lease。
+        let dependencies = inputs.dependency_leases();
         Self {
             inputs: Some(inputs),
             dependencies,
@@ -68,8 +70,8 @@ impl<'frame> FactoryInputs<'frame> {
     {
         let token = self.inputs.take::<T>(slot)?;
 
-        // SAFETY: 只有 FactoryLeaseFrame 能构造此输入，且为 'frame 保留令牌所属实例的
-        // 真实 lease。即使消费 token 释放了它自己的 lease，帧仍保证实例地址有效。
+        // SAFETY: frame 从这些输入派生全部真实 lease；take 的投影还验证返回令牌与
+        // 原输入属于同一实例。frame 的借用保持到 'frame，释放临时 token 不影响地址。
         Ok(unsafe { token.into_ptr().as_ref() })
     }
 
@@ -84,7 +86,7 @@ impl<'frame> FactoryInputs<'frame> {
         let token = self.inputs.take_optional::<T>(slot)?;
 
         Ok(token.map(|token| {
-            // SAFETY: 与 take 相同，帧为 'frame 保留准确实例；缺席输入不包含地址。
+            // SAFETY: 与 take 相同，投影核对同一实例且帧为 'frame 保活；缺席没有地址。
             unsafe { token.into_ptr().as_ref() }
         }))
     }

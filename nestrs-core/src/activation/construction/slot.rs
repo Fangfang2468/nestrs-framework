@@ -2,7 +2,7 @@
 
 /// 宏生成 adapter 与 provider descriptor 共享的固定输入槽位标识。
 ///
-/// 槽位的有效范围由 [`super::preparation::InputBuffer`] 的长度决定；调用方不能依靠
+/// 槽位的有效范围由 [`super::ConstructionInputs`] 的长度决定；调用方不能依靠
 /// 构造该值绕过范围检查。
 #[doc(hidden)]
 #[repr(transparent)]

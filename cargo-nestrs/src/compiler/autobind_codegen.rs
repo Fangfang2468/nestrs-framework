@@ -37,7 +37,7 @@ pub struct SourceInsertion {
 /// Reuse the existing audited binding ABI; rustc checks each ordinary coercion.
 ///
 /// The local alias gives the trait object its normal `'static` alias lifetime.
-/// Input preparers keep the existing strong leases; no raw vtable construction
+/// Typed projectors keep the existing strong leases; no raw vtable construction
 /// or reference-lifetime conversion is introduced by the compiler adapter.
 /// Capabilities remain separate from explicit registrations until graph
 /// compilation activates an interface demanded by the actual link unit.
@@ -79,22 +79,6 @@ const _: () = {{
         ::nestrs_core::activation::adapter::ProjectionAdapter {{
             trait_type: ::nestrs_core::service::ServiceType::create::<__NestrsBoundInterface>(),
             concrete_type: ::nestrs_core::service::ServiceType::create::<{concrete}>(),
-            prepare_required: (|
-                slot: ::nestrs_core::activation::InputSlot,
-                input: ::core::option::Option<::nestrs_core::activation::ErasedServiceRef>,
-            | {{
-                ::nestrs_core::activation::prepare_bound_required::<
-                    {concrete}, __NestrsBoundInterface,
-                >(slot, input, __nestrs_project_bound_service)
-            }}) as ::nestrs_core::activation::InputPreparer,
-            prepare_optional: (|
-                slot: ::nestrs_core::activation::InputSlot,
-                input: ::core::option::Option<::nestrs_core::activation::ErasedServiceRef>,
-            | {{
-                ::nestrs_core::activation::prepare_bound_optional::<
-                    {concrete}, __NestrsBoundInterface,
-                >(slot, input, __nestrs_project_bound_service)
-            }}) as ::nestrs_core::activation::InputPreparer,
             project: (|
                 slot: ::nestrs_core::activation::InputSlot,
                 input: ::nestrs_core::activation::ErasedServiceRef,

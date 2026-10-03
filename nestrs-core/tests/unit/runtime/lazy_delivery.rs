@@ -11,9 +11,8 @@ use crate::{
     ServiceLifetime,
     activation::{
         ConstructionError, ConstructionInputs, DependencyLease, ErasedService, FactoryFuture,
-        FactoryInputs, InputSlot, LazyInjection, LazyInputPlan, LazyInputPreparer,
-        ServiceProjector, adapter::FactoryInvoker, prepare_lazy_optional, prepare_lazy_required,
-        prepare_optional, prepare_required, project_bound, project_required,
+        FactoryInputs, InputSlot, LazyInjection, LazyInputPlan, ServiceProjector,
+        adapter::FactoryInvoker, project_bound, project_required,
     },
     graph::{
         AbsentInput, CompiledDependency, CompiledNode, Constructor, DependencyInput, NodePolicy,
@@ -46,7 +45,6 @@ fn lazy<T: Injectable + ?Sized>(
     consumer: &CompiledNode,
     slot: usize,
     target: usize,
-    prepare: LazyInputPreparer,
     project: ServiceProjector,
 ) -> CompiledDependency {
     let slot = InputSlot::new(slot);
@@ -56,7 +54,6 @@ fn lazy<T: Injectable + ?Sized>(
         optional: false,
         label: None,
         input: DependencyInput::Lazy {
-            prepare,
             plan: Arc::new(LazyInputPlan {
                 provider: target,
                 consumer: consumer.identifier.clone(),
@@ -177,40 +174,26 @@ async fn worker_delivers_mixed_slots_for_classes_and_both_factory_kinds() {
                 label: None,
                 input: DependencyInput::Immediate {
                     target: 0,
-                    prepare: prepare_required::<u32>,
+                    project: project_required::<u32>,
                 },
             },
-            lazy::<dyn Port>(
-                &consumer,
-                1,
-                1,
-                prepare_lazy_required::<dyn Port>,
-                |slot, value, output| {
-                    project_bound::<Target, dyn Port>(slot, value, output, |target| target)
-                },
-            ),
+            lazy::<dyn Port>(&consumer, 1, 1, |slot, value, output| {
+                project_bound::<Target, dyn Port>(slot, value, output, |target| target)
+            }),
             CompiledDependency {
                 slot: InputSlot::new(2),
                 requested: identifier::<Missing>(),
                 optional: true,
                 label: None,
-                input: DependencyInput::Absent(AbsentInput::Immediate(prepare_optional::<Missing>)),
+                input: DependencyInput::Absent(AbsentInput::Immediate),
             },
-            lazy::<Target>(
-                &consumer,
-                3,
-                1,
-                prepare_lazy_required::<Target>,
-                project_required::<Target>,
-            ),
+            lazy::<Target>(&consumer, 3, 1, project_required::<Target>),
             CompiledDependency {
                 slot: InputSlot::new(4),
                 requested: identifier::<dyn MissingPort>(),
                 optional: true,
                 label: None,
-                input: DependencyInput::Absent(AbsentInput::Lazy(
-                    prepare_lazy_optional::<dyn MissingPort>,
-                )),
+                input: DependencyInput::Absent(AbsentInput::Lazy),
             },
         ];
         let plan = graph(vec![
@@ -269,13 +252,7 @@ async fn worker_lazy_capability_follows_actual_owner_without_keeping_scopes_aliv
                 Ok(ErasedService::new(Consumer { target }))
             }),
         );
-        consumer.dependencies = vec![lazy::<Target>(
-            &consumer,
-            0,
-            0,
-            prepare_lazy_required::<Target>,
-            project_required::<Target>,
-        )];
+        consumer.dependencies = vec![lazy::<Target>(&consumer, 0, 0, project_required::<Target>)];
         let (runtime, root) = Runtime::start(
             graph(vec![
                 node::<Target>(

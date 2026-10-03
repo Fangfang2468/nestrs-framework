@@ -236,8 +236,8 @@ impl<'owner> ServiceProviderRef<'owner> {
             return Ok(None);
         };
         let lease = self.runtime.resolve(self.owner, route.provider).await?;
-        // concrete 查询复用实例保存的准确地址；trait 查询与延迟交付共用直接投影，
-        // 不为一次根查询构造 PreparedInput 的临时堆载荷。ProjectionTarget 同时核对
+        // concrete 查询从实例当前的共享借用恢复准确地址；trait 查询与构造输入、延迟交付
+        // 共用直接写入 typed 栈槽的投影。ProjectionTarget 同时核对
         // 结果类型与实例 lease；投影只能创建当前实例的视图，不能更换它的所有者。
         let pointer = if let Some(project) = route.projection {
             let token = ProjectionTarget::project::<T>(InputSlot::new(0), lease, project)

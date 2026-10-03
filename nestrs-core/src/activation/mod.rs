@@ -25,14 +25,12 @@ mod instance;
 pub(crate) mod lazy;
 mod release;
 
-pub(crate) use construction::{ActivationPreparation, LazyDependency, LazyInputPlan};
 pub use construction::{
     AsyncConstructor, ClassConstructor, ConstructionError, ConstructionInputs, FactoryConstructor,
-    FactoryFuture, FactoryInputs, InputPreparer, InputSlot, LazyInputPreparer, PreparedInput,
-    ProjectionTarget, ServiceProjector, prepare_bound_optional, prepare_bound_required,
-    prepare_lazy_optional, prepare_lazy_required, prepare_optional, prepare_optional_absent,
-    prepare_required, project_bound, project_required,
+    FactoryFuture, FactoryInputs, InputKind, InputSlot, ProjectionTarget, ServiceProjector,
+    project_bound, project_required,
 };
+pub(crate) use construction::{ConstructionInput, LazyDependency, LazyInputPlan};
 pub use erased_service::{ErasedService, ErasedServiceRef};
 pub use injection::Injection;
 pub(crate) use instance::DependencyLease;

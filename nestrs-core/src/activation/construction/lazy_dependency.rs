@@ -69,7 +69,7 @@ impl LazyDependency {
         )
     }
 
-    /// 投影直接写入真实栈上类型化接收槽，不经通用构造输入的 Box<dyn Any>。
+    /// 投影直接写入真实栈上类型化接收槽，与普通构造输入共用相同边界。
     /// 返回的 Injection 自带准确 lease，既不借用临时接收端，也不依赖 owner 存活。
     pub(crate) fn prepare<T: Injectable + ?Sized>(
         &self,

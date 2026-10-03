@@ -6,10 +6,7 @@
 
 use std::{future::Future, pin::Pin};
 
-use super::{
-    AsyncConstructor, ClassConstructor, FactoryConstructor, InputPreparer, LazyInputPreparer,
-    ServiceProjector,
-};
+use super::{AsyncConstructor, ClassConstructor, FactoryConstructor, InputKind, ServiceProjector};
 use crate::service::ServiceType;
 
 /// cleanup 返回的独立 future；执行引擎按 owner 顺序等待它完成。
@@ -45,11 +42,9 @@ pub struct ActivationAdapter {
 #[derive(Debug, Clone, Copy)]
 pub struct InputAdapter {
     pub service_type: ServiceType,
-    /// 直接输入或确定缺席时的准备函数；接口输入由计划指定的投影提供。
-    pub prepare: Option<InputPreparer>,
-    /// 构造阶段只交付延迟句柄时使用，不执行目标服务构造。
-    pub lazy: Option<LazyInputPreparer>,
-    /// 延迟目标就绪后的直接类型化交付；接口输入使用已选投影的对应入口。
+    /// 编译器固定的准确交付形态，缺席和延迟输入同样必须验证。
+    pub kind: InputKind,
+    /// 普通或延迟目标的直接类型化交付；接口输入使用已选投影的对应入口。
     pub project: Option<ServiceProjector>,
 }
 
@@ -58,7 +53,5 @@ pub struct InputAdapter {
 pub struct ProjectionAdapter {
     pub trait_type: ServiceType,
     pub concrete_type: ServiceType,
-    pub prepare_required: InputPreparer,
-    pub prepare_optional: InputPreparer,
     pub project: ServiceProjector,
 }

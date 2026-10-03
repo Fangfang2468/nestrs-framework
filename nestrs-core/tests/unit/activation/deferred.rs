@@ -10,7 +10,7 @@ use tokio::sync::OnceCell;
 use super::{DeferredSlot, LazyReceiver, LazyResolver};
 use crate::{
     ResolveError,
-    activation::{Injection, InputPreparer, InputSlot, LazyInputPlan},
+    activation::{Injection, InputSlot, LazyInputPlan},
     service::{ServiceIdentifier, ServiceSource},
 };
 
@@ -23,7 +23,7 @@ struct PreviousDependency {
     consumer: ServiceIdentifier,
     source: ServiceSource,
     label: Option<&'static str>,
-    preparer: InputPreparer,
+    preparer: fn(), // 历史单个函数指针的布局；不恢复已删除的构造协议。
     optional: bool,
 }
 

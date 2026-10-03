@@ -1,8 +1,8 @@
 //! 已构造服务的类型擦除容器与带 lease 的构造期引用。
 //!
-//! 运行时可以统一存放不同服务，但不能因此丢失准确类型信息。服务值与 typed address
-//! 分别放进 Box：前者拥有实例，后者记录它的准确 `NonNull<T>` 类型。移动这个容器不
-//! 会移动服务；恢复指针时仍通过 `Any` 检查完整类型，不能只比较字符串名称。
+//! 运行时可以统一存放不同服务，但不能因此丢失准确类型信息。服务值与类型化地址恢复器
+//! 分别放进 Box；恢复器只保存函数，不缓存从尚可能移动的 Box 派生的裸指针。
+//! 实例被 lease 固定在共享记录之后，才从当前值的共享借用恢复准确地址。
 
 use std::{any::Any, ptr::NonNull};
 
@@ -11,34 +11,33 @@ use crate::service::{Injectable, ServiceType};
 
 type AnyService = Box<dyn Any + Send + Sync>;
 
-/// 仅保存准确类型的稳定地址，不提供独立解引用入口。
-struct TypedAddress<T: ?Sized>(NonNull<T>);
+/// 保留准确 T 的恢复能力，支持 pointer 的 ?Sized 请求而不伪造宽指针。
+/// 函数指针天然 Send + Sync，不持有服务地址，也不需要手写自动 trait 的安全实现。
+struct TypedAddressResolver<T: ?Sized>(fn(&AnyService) -> Option<NonNull<T>>);
 
-// SAFETY: T 满足 Injectable 的 Send + Sync 约束。此类型只传递地址，不提供解引用；
-// 实际读取必须持有对应不可变 Box 实例的 lease，跨线程传递不会提前释放实例。
-unsafe impl<T: Injectable + ?Sized> Send for TypedAddress<T> {}
-// SAFETY: 所有读取都是共享不可变访问，且每次读取的存活期都由对应实例的 lease 覆盖。
-unsafe impl<T: Injectable + ?Sized> Sync for TypedAddress<T> {}
+impl<T: Injectable> TypedAddressResolver<T> {
+    fn new() -> Self {
+        Self(|value| value.downcast_ref::<T>().map(NonNull::from))
+    }
+}
 
 /// 拥有服务值的类型擦除容器；发布后由实例记录持有，不能再移出其中的值。
 pub struct ErasedService {
     service_type: ServiceType,
     value: AnyService,
-    address: AnyService,
+    address_resolver: AnyService,
 }
 
 impl ErasedService {
-    /// 擦除一个成功构造的 concrete service，并固定其地址。
+    /// 擦除一个成功构造的 concrete service，记录其真实类型与地址恢复能力。
     pub fn new<T>(value: T) -> Self
     where
         T: Injectable,
     {
-        let value = Box::new(value);
-        let address = Box::new(TypedAddress(NonNull::from(value.as_ref())));
         Self {
             service_type: ServiceType::create::<T>(),
-            value,
-            address,
+            value: Box::new(value),
+            address_resolver: Box::new(TypedAddressResolver::<T>::new()),
         }
     }
 
@@ -54,25 +53,30 @@ impl ErasedService {
         let Self {
             service_type,
             value,
-            address,
+            address_resolver,
         } = self;
         match value.downcast::<T>() {
             Ok(value) => Ok(*value),
             Err(value) => Err(Self {
                 service_type,
                 value,
-                address,
+                address_resolver,
             }),
         }
     }
 
+    /// 从当前值的共享借用派生指针，而非复用 envelope 移动之前的借用权限。
+    ///
+    /// 生产调用由 DependencyLease 提供已固定在 Arc<InstanceRecord> 内的 envelope。
+    /// 指针被使用期间不能移动或独占借用服务 Box；最后 lease 才允许移走并释放载荷。
     pub(crate) fn pointer<T>(&self) -> Option<NonNull<T>>
     where
         T: Injectable + ?Sized,
     {
-        self.address
-            .downcast_ref::<TypedAddress<T>>()
-            .map(|address| address.0)
+        let resolver = self
+            .address_resolver
+            .downcast_ref::<TypedAddressResolver<T>>()?;
+        (resolver.0)(&self.value)
     }
 }
 

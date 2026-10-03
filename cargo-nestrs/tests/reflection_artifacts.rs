@@ -92,7 +92,7 @@ fn main() { panic!("must not execute main") }
     assert_eq!(plans.len(), 1, "one immutable manifest per final entry");
     let plan = plans[0];
     assert_eq!(plan["format"], "nestrs-reflect");
-    assert_eq!(plan["entry"], "__nestrs_reflect_v1");
+    assert_eq!(plan["entry"], "__nestrs_reflect_v2");
     let nodes = plan["nodes"].as_array().unwrap();
     assert_eq!(
         nodes.len(),

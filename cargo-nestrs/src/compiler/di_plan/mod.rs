@@ -282,6 +282,7 @@ fn read_binding<'tcx>(
     ))
 }
 fn compile<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Compiled<'tcx>, String> {
+    emission::validate_protocol(tcx);
     let mut types = Vec::new();
     let mut indices = HashMap::new();
     let mut providers = Vec::new();

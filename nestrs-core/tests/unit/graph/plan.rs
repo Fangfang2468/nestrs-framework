@@ -2,15 +2,14 @@
 
 use super::{
     ABSENT, CompiledApplication, PlanAssembly, plan_push_binding, plan_push_dependent,
-    plan_push_order, plan_push_trait_route, plan_set_input, plan_set_options,
+    plan_push_order, plan_push_trait_route, plan_set_input, plan_set_options_v2,
 };
 use crate::activation::adapter::{ActivationAdapter, Constructor, InputAdapter, ProjectionAdapter};
 use crate::{
     InitializationMode, ServiceKey, ServiceLifetime,
     activation::{
-        ActivationPreparation, ConstructionError, ConstructionInputs, ErasedService, InputSlot,
-        prepare_bound_optional, prepare_bound_required, prepare_lazy_optional,
-        prepare_optional_absent, prepare_required,
+        ConstructionError, ConstructionInput, ConstructionInputs, ErasedService, InputKind,
+        InputSlot, project_required,
     },
     graph::{AbsentInput, DependencyInput},
     service::{ServiceIdentifier, ServiceSource, ServiceType},
@@ -48,12 +47,6 @@ fn binding() -> ProjectionAdapter {
     ProjectionAdapter {
         trait_type: ServiceType::create::<dyn Port>(),
         concrete_type: ServiceType::create::<Dependency>(),
-        prepare_required: |slot, value| {
-            prepare_bound_required::<Dependency, dyn Port>(slot, value, |value| value)
-        },
-        prepare_optional: |slot, value| {
-            prepare_bound_optional::<Dependency, dyn Port>(slot, value, |value| value)
-        },
         project: |slot, value, output| {
             crate::activation::project_bound::<Dependency, dyn Port>(slot, value, output, |value| {
                 value
@@ -66,20 +59,17 @@ fn inputs() -> Vec<InputAdapter> {
     vec![
         InputAdapter {
             service_type: ServiceType::create::<Dependency>(),
-            prepare: Some(prepare_required::<Dependency>),
-            lazy: None,
-            project: None,
+            kind: InputKind::Required,
+            project: Some(project_required::<Dependency>),
         },
         InputAdapter {
             service_type: ServiceType::create::<dyn Port>(),
-            prepare: None,
-            lazy: None,
+            kind: InputKind::Required,
             project: None,
         },
         InputAdapter {
             service_type: ServiceType::create::<dyn Missing>(),
-            prepare: Some(prepare_optional_absent::<dyn Missing>),
-            lazy: Some(prepare_lazy_optional::<dyn Missing>),
+            kind: InputKind::LazyOptional,
             project: None,
         },
     ]
@@ -111,7 +101,7 @@ fn compiled_indices_load_exact_routes_all_slots_and_typed_adapters_without_const
     let output = (&mut assembly as *mut PlanAssembly).cast();
     // SAFETY: output 唯一指向本测试中的装配器，所有调用同步完成，没有保存或逃逸借用。
     unsafe {
-        plan_set_options(output, true, 7);
+        plan_set_options_v2(output, true, 7);
         plan_push_binding(output, binding());
         push_transient(output, adapter::<Consumer>(inputs()), "");
         push_transient(output, adapter::<Dependency>(vec![]), "primary");
@@ -146,15 +136,15 @@ fn compiled_indices_load_exact_routes_all_slots_and_typed_adapters_without_const
     );
     assert!(!graph.routes.contains_key(&identifier::<dyn Port>(None)));
     assert!(!graph.routes.contains_key(&identifier::<dyn Missing>(None)));
-    let DependencyInput::Absent(AbsentInput::Lazy(prepare)) = graph.nodes[0].dependencies[2].input
-    else {
+    let DependencyInput::Absent(AbsentInput::Lazy) = graph.nodes[0].dependencies[2].input else {
         panic!("缺席的延迟输入必须交付 Option<LazyInjection<T>>")
     };
-    let mut preparation = ActivationPreparation::new(1);
-    preparation
-        .prepare_lazy(InputSlot::new(0), prepare, None)
-        .unwrap();
-    let (mut inputs, leases) = preparation.finish_class().unwrap();
+    let mut inputs = ConstructionInputs::new(vec![ConstructionInput::absent(
+        graph.nodes[0].dependencies[2].requested.service_type,
+        graph.nodes[0].dependencies[2].kind(),
+    )])
+    .unwrap();
+    let leases = inputs.dependency_leases();
     assert!(
         inputs
             .take_optional_lazy::<dyn Missing>(InputSlot::new(0))
@@ -168,7 +158,7 @@ fn compiled_indices_load_exact_routes_all_slots_and_typed_adapters_without_const
 #[test]
 fn absent_immediate_and_lazy_slots_deliver_distinct_optional_token_types() {
     let mut requests = vec![inputs().remove(2); 2];
-    requests[0].lazy = None;
+    requests[0].kind = InputKind::Optional;
     let mut assembly = PlanAssembly::default();
     let output = (&mut assembly as *mut PlanAssembly).cast();
     // SAFETY: 一个 provider 的两个连续槽位均由编译器决定缺席，没有外部地址或回调执行。
@@ -180,22 +170,21 @@ fn absent_immediate_and_lazy_slots_deliver_distinct_optional_token_types() {
     }
     let application = assembly.finish();
     let dependencies = &application.graph.nodes[0].dependencies;
-    let DependencyInput::Absent(AbsentInput::Immediate(immediate)) = dependencies[0].input else {
+    let DependencyInput::Absent(AbsentInput::Immediate) = dependencies[0].input else {
         panic!("普通 optional 缺席必须固定为立即输入")
     };
-    let DependencyInput::Absent(AbsentInput::Lazy(lazy)) = dependencies[1].input else {
+    let DependencyInput::Absent(AbsentInput::Lazy) = dependencies[1].input else {
         panic!("延迟 optional 缺席必须保留延迟令牌类型")
     };
-    // 两个 None 在业务上都表示缺席，在 ABI 上却是不同的 Rust 类型；同时走真实
-    // 准备事务和 typed extraction，避免仅比较 enum 分支而漏掉错误准备函数。
-    let mut preparation = ActivationPreparation::new(2);
-    preparation
-        .prepare(InputSlot::new(0), immediate, None)
-        .unwrap();
-    preparation
-        .prepare_lazy(InputSlot::new(1), lazy, None)
-        .unwrap();
-    let (mut inputs, leases) = preparation.finish_class().unwrap();
+    // 两个 None 仍须通过准确类型/形态检查，不能只比较 enum 分支。
+    let mut inputs = ConstructionInputs::new(
+        dependencies
+            .iter()
+            .map(|input| ConstructionInput::absent(input.requested.service_type, input.kind()))
+            .collect(),
+    )
+    .unwrap();
+    let leases = inputs.dependency_leases();
     let immediate: Option<crate::Injection<dyn Missing>> =
         inputs.take_optional(InputSlot::new(0)).unwrap();
     let lazy: Option<crate::LazyInjection<dyn Missing>> =
@@ -223,7 +212,7 @@ fn provider_initialization_overrides_survive_plan_loading_without_global_folding
         // 因为未来的 build_with_options 可以让另一个 root 使用不同默认值。
         // SAFETY: output 是当前唯一装配器，每个无输入 provider 有唯一 key 和有效编号。
         unsafe {
-            plan_set_options(output, default_eager, 3);
+            plan_set_options_v2(output, default_eager, 3);
             for (index, lazy) in [None, Some(true), Some(false)].into_iter().enumerate() {
                 let initialization = match lazy {
                     None => 0,
@@ -269,9 +258,9 @@ fn provider_initialization_overrides_survive_plan_loading_without_global_folding
 #[test]
 fn lazy_edges_freeze_selected_projection_and_absence_once() {
     let mut requests = inputs();
-    requests[0].lazy = Some(crate::activation::prepare_lazy_required::<Dependency>);
+    requests[0].kind = InputKind::LazyRequired;
     requests[0].project = Some(crate::activation::project_required::<Dependency>);
-    requests[1].lazy = Some(crate::activation::prepare_lazy_required::<dyn Port>);
+    requests[1].kind = InputKind::LazyRequired;
     // trait 输入的直接投影必须来自已经选定的 binding，而不是消费点的 fallback。
     requests[1].project = Some(crate::activation::project_required::<Dependency>);
     let binding = binding();
@@ -316,8 +305,7 @@ async fn lazy_metadata_is_shared_across_occurrences_and_survives_owner_and_graph
     }
     let request = InputAdapter {
         service_type: ServiceType::create::<Dependency>(),
-        prepare: Some(prepare_required::<Dependency>),
-        lazy: Some(crate::activation::prepare_lazy_required::<Dependency>),
+        kind: InputKind::LazyRequired,
         project: Some(crate::activation::project_required::<Dependency>),
     };
     let mut consumer = adapter::<LazyConsumer>(vec![request]);
@@ -398,7 +386,7 @@ async fn lazy_metadata_is_shared_across_occurrences_and_survives_owner_and_graph
 fn incompatible_lazy_plan_rejects_a_missing_direct_projection() {
     let mut requests = inputs();
     requests.truncate(1);
-    requests[0].lazy = Some(crate::activation::prepare_lazy_required::<Dependency>);
+    requests[0].kind = InputKind::LazyRequired;
     requests[0].project = None;
     let mut assembly = PlanAssembly::default();
     let output = (&mut assembly as *mut PlanAssembly).cast();

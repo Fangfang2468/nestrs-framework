@@ -1,3 +1,5 @@
+use crate::activation::construction::FactoryLeaseFrame;
+
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -7,10 +9,11 @@ use super::{LazyDependency, LazyInjection};
 use crate::{
     ResolveError,
     activation::{
-        ActivationPreparation, ConstructionError, DependencyLease, ErasedService, ErasedServiceRef,
-        Injection, InputSlot, LazyInputPlan, ProjectionTarget, ReleaseDomain, ServiceProjector,
+        ConstructionError, ConstructionInput, ConstructionInputs, DependencyLease, ErasedService,
+        ErasedServiceRef, Injection, InputKind, InputSlot, LazyInputPlan, ProjectionTarget,
+        ReleaseDomain, ServiceProjector,
         deferred::{LazyReceiver, LazyResolver},
-        prepare_lazy_optional, prepare_lazy_required, project_bound, project_required,
+        project_bound, project_required,
     },
     service::{ServiceIdentifier, ServiceKey, ServiceSource, ServiceType},
 };
@@ -114,28 +117,24 @@ fn lazy_injection_preserves_send_sync_coinduction_for_cyclic_service_types() {
 #[tokio::test]
 async fn factory_lazy_arguments_own_their_slots_after_the_borrow_frame_is_dropped() {
     let resolver = resolver();
-    let mut preparation = ActivationPreparation::new(3);
     let required = InputSlot::new(0);
     let optional = InputSlot::new(1);
     let absent = InputSlot::new(2);
-    preparation
-        .prepare_lazy(
-            required,
-            prepare_lazy_required::<Reports>,
-            Some(dependency(&resolver, project_required::<Reports>, required)),
-        )
-        .unwrap();
-    preparation
-        .prepare_lazy(
-            optional,
-            prepare_lazy_optional::<Reports>,
-            Some(dependency(&resolver, project_required::<Reports>, optional)),
-        )
-        .unwrap();
-    preparation
-        .prepare_lazy(absent, prepare_lazy_optional::<Reports>, None)
-        .unwrap();
-    let mut frame = preparation.finish_factory().unwrap();
+    let inputs = ConstructionInputs::new(vec![
+        ConstructionInput::lazy(
+            ServiceType::create::<Reports>(),
+            InputKind::LazyRequired,
+            dependency(&resolver, project_required::<Reports>, required),
+        ),
+        ConstructionInput::lazy(
+            ServiceType::create::<Reports>(),
+            InputKind::LazyOptional,
+            dependency(&resolver, project_required::<Reports>, optional),
+        ),
+        ConstructionInput::absent(ServiceType::create::<Reports>(), InputKind::LazyOptional),
+    ])
+    .unwrap();
+    let mut frame = FactoryLeaseFrame::new(inputs);
     let (first, second) = {
         let mut inputs = frame.inputs();
         // 错误的读取形态或类型不能消费参数，正确适配器仍可继续取出原句柄。
@@ -321,19 +320,13 @@ async fn an_unrequested_handle_does_not_keep_its_resolver_alive() {
 async fn input_preparation_is_lazy_and_concurrent_gets_share_a_typed_token() {
     let resolver = resolver();
     let slot = InputSlot::new(0);
-    let mut preparation = ActivationPreparation::new(1);
-    preparation
-        .prepare_lazy(
-            slot,
-            prepare_lazy_required::<Reports>,
-            Some(dependency(
-                &resolver,
-                project_required::<Reports>,
-                InputSlot::new(0),
-            )),
-        )
-        .unwrap();
-    let (mut inputs, leases) = preparation.finish_class().unwrap();
+    let mut inputs = ConstructionInputs::new(vec![ConstructionInput::lazy(
+        ServiceType::create::<Reports>(),
+        InputKind::LazyRequired,
+        dependency(&resolver, project_required::<Reports>, slot),
+    )])
+    .unwrap();
+    let leases = inputs.dependency_leases();
     assert!(leases.is_empty());
     assert_eq!(resolver.calls.load(Ordering::SeqCst), 0);
     // 普通读取不能误消费延迟载荷；失败后仍能取出原来的延迟句柄。
@@ -375,18 +368,16 @@ async fn optional_lazy_targets_preserve_absence_and_trait_projection() {
         project_bound::<Reports, dyn ReportPort>(slot, input, target, |value| value)
     }
     let resolver = resolver();
-    let mut preparation = ActivationPreparation::new(2);
-    preparation
-        .prepare_lazy(InputSlot::new(0), prepare_lazy_optional::<Reports>, None)
-        .unwrap();
-    preparation
-        .prepare_lazy(
-            InputSlot::new(1),
-            prepare_lazy_optional::<dyn ReportPort>,
-            Some(dependency(&resolver, project, InputSlot::new(1))),
-        )
-        .unwrap();
-    let (mut inputs, leases) = preparation.finish_class().unwrap();
+    let mut inputs = ConstructionInputs::new(vec![
+        ConstructionInput::absent(ServiceType::create::<Reports>(), InputKind::LazyOptional),
+        ConstructionInput::lazy(
+            ServiceType::create::<dyn ReportPort>(),
+            InputKind::LazyOptional,
+            dependency(&resolver, project, InputSlot::new(1)),
+        ),
+    ])
+    .unwrap();
+    let leases = inputs.dependency_leases();
     assert!(leases.is_empty());
     assert!(inputs.take_optional::<Reports>(InputSlot::new(0)).is_err());
     assert!(
@@ -495,8 +486,23 @@ async fn a_safe_failing_projector_may_retain_a_token_without_dangling_or_double_
     ) -> Result<(), ConstructionError> {
         // 手写 adapter 可通过现有安全准备 API 获得真实 token，然后选择拒绝交付。
         // 运行时不能假设 Err 表示业务代码没有保留该实例的 lease。
-        let token = crate::activation::prepare_required::<TrackedReports>(slot, Some(input))?
-            .into_required::<TrackedReports>(slot)?;
+        let mut token: Option<Injection<TrackedReports>> = None;
+        // 通过另一个带真实 lease 的交付槽接收输入；此处只模拟安全 adapter 保留 token。
+        // 直接使用输入的强 lease，不从临时裸地址延长借用。
+        let lease = input
+            .cast::<TrackedReports>()
+            .map_err(|actual| ConstructionError::InputTypeMismatch {
+                slot,
+                expected: std::any::type_name::<TrackedReports>(),
+                actual: actual.name,
+            })?
+            .1;
+        token.replace(ProjectionTarget::project(
+            slot,
+            lease,
+            project_required::<TrackedReports>,
+        )?);
+        let token = token.unwrap();
         *RETAINED.lock().unwrap() = Some(token);
         Err(ConstructionError::UnfilledSlot { slot })
     }
@@ -566,7 +572,10 @@ async fn a_wrong_projector_cannot_create_a_forged_typed_reference() {
 #[test]
 fn a_missing_required_lazy_dependency_fails_preparation() {
     assert!(matches!(
-        prepare_lazy_required::<Reports>(InputSlot::new(0), None),
+        ConstructionInputs::new(vec![ConstructionInput::absent(
+            ServiceType::create::<Reports>(),
+            InputKind::LazyRequired
+        )]),
         Err(ConstructionError::RequiredDependencyAbsent { .. })
     ));
 }

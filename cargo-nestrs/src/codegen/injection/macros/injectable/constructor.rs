@@ -118,12 +118,30 @@ fn construct_automatic_injectable(
     context: syn::Ident,
 ) -> zyn::TokenStream {
     zyn! {
+        @if (analysis.has_injected_fields()) {
+            // 重用现有输入绑定名，避免新临时量与调用点 const 发生模式解析冲突。
+            // tuple 全部求值成功并通过消费检查后，才执行下面的业务字段表达式。
+            let {{ context }} = (
+                @for (spec in analysis.specs.iter().filter(|spec| spec.is_injected())) {
+                    @TakeInjectedFieldValue(
+                        spec = spec.clone(),
+                        context = context.clone(),
+                    ),
+                }
+                {
+                    {{ context }}.ensure_all_consumed()?;
+                    ::core::mem::drop({{ context }});
+                },
+            );
+        } @else {
+            {{ context }}.ensure_all_consumed()?;
+            ::core::mem::drop({{ context }});
+        }
         let __nestrs_injectable_instance = @ConstructInjectableInstance(
             analysis = analysis.clone(),
             service = service.clone(),
             context = context.clone(),
         );
-        {{ context }}.ensure_all_consumed()?;
         ::core::result::Result::Ok(
             ::nestrs_core::activation::ErasedService::new(__nestrs_injectable_instance)
         )
@@ -175,7 +193,7 @@ fn construct_injectable_instance(
 /// 为一个结构体字段选择其构造表达式。
 ///
 /// 字段保持在最终 struct literal 中，因而 `#[value(...)]` 的表达式仍在字段类型
-/// 上下文中按声明顺序求值，也不会引入可遮蔽调用点名称的临时变量。
+/// 上下文中按声明顺序求值。注入字段从类型化 tuple 移出，不增加调用点可见的变量名。
 #[zyn::element]
 fn construct_injectable_field(
     field_type: syn::Type,
@@ -184,10 +202,7 @@ fn construct_injectable_field(
 ) -> zyn::TokenStream {
     zyn! {
         @if (spec.is_injected()) {
-            @TakeInjectedFieldValue(
-                spec = spec.clone(),
-                context = context.clone(),
-            )
+            {{ context }}.{{ syn::Index::from(spec.input_slot.expect("injected field")) }}
         } @else {
             @RewriteValueField(
                 field_type = field_type.clone(),
@@ -386,7 +401,14 @@ mod tests {
         let erase = generated
             .find("ErasedService :: new (__nestrs_injectable_instance)")
             .expect("the validated instance should be erased last");
-        assert!(construct < ensure && ensure < erase);
+        let last_input = generated
+            .find("take_optional :: < dyn Audit >")
+            .expect("all typed inputs should be acquired first");
+        let release_inputs = generated
+            .find("mem :: drop")
+            .expect("the consumed input buffer must be released before business construction");
+        assert!(last_input < ensure);
+        assert!(ensure < release_inputs && release_inputs < construct && construct < erase);
         assert!(!generated.contains("unsafe"));
     }
 

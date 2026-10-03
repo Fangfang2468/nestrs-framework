@@ -96,6 +96,22 @@ impl FromArg for ServiceKeySpec {
 }
 
 #[cfg(test)]
+impl ServiceKeySpec {
+    pub(crate) fn named(value: &str) -> Self {
+        Self {
+            kind: ServiceKeyKind::Named(value.to_owned()),
+            span: Span::call_site(),
+        }
+    }
+    pub(crate) fn indexed(value: usize) -> Self {
+        Self {
+            kind: ServiceKeyKind::Indexed(value),
+            span: Span::call_site(),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use zyn::syn::parse_quote;
@@ -125,22 +141,6 @@ mod tests {
                     .contains("key 必须是字符串或非负整数值字面量"),
                 "unexpected diagnostic: {error}"
             );
-        }
-    }
-}
-
-#[cfg(test)]
-impl ServiceKeySpec {
-    pub(crate) fn named(value: &str) -> Self {
-        Self {
-            kind: ServiceKeyKind::Named(value.to_owned()),
-            span: Span::call_site(),
-        }
-    }
-    pub(crate) fn indexed(value: usize) -> Self {
-        Self {
-            kind: ServiceKeyKind::Indexed(value),
-            span: Span::call_site(),
         }
     }
 }

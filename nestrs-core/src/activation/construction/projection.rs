@@ -1,9 +1,9 @@
 //! 将已经就绪的实例直接交付给调用者的类型化令牌槽位。
 //!
-//! 普通 trait 查询与延迟字段交付都只需要一个 `Injection<T>`，不需要普通构造输入
-//! 使用的装箱载荷。这里借用调用者栈上的 `Option<Injection<T>>`，用 `Any::downcast_mut` 验证完整
+//! 构造输入、普通 trait 查询与延迟目标交付共用一个 `Injection<T>` 传递协议。
+//! 这里借用调用者栈上的 `Option<Injection<T>>`，用 `Any::downcast_mut` 验证完整
 //! 类型后写入。擦除的只是短暂借用，不擦除所有权、不延长生命周期，也不拼装裸指针。
-//! 普通 preparer 和这条直接交付路径复用 ServiceProjection，确保 concrete 类型检查、
+//! 所有直接交付路径复用 ServiceProjection，确保 concrete 类型检查、
 //! trait coercion 和真实实例 lease 的规则始终只有一份。
 
 use std::{any::Any, ptr::NonNull};

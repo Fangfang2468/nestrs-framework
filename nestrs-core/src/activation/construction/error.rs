@@ -17,6 +17,12 @@ pub enum ConstructionError {
     #[error("构造输入槽位 {slot:?} 超出范围（槽位总数：{slot_count}）")]
     SlotOutOfBounds { slot: InputSlot, slot_count: usize },
 
+    #[error("构造输入槽位 {slot:?} 的描述指向了槽位 {actual:?}")]
+    InputSlotMismatch { slot: InputSlot, actual: InputSlot },
+
+    #[error("构造输入槽位 {slot:?} 不应包含已构造的依赖实例")]
+    UnexpectedDependencyPresent { slot: InputSlot },
+
     #[error("构造输入槽位 {slot:?} 已经准备")]
     SlotAlreadyPrepared { slot: InputSlot },
 

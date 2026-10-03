@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::{Owner, Runtime};
 use crate::{
     InitializationMode, ServiceLifetime,
-    activation::{ConstructionInputs, ErasedService, InputSlot, prepare_required},
+    activation::{ConstructionInputs, ErasedService, InputSlot, project_required},
     graph::NodePolicy,
     graph::{CompiledDependency, CompiledNode, Constructor, DependencyInput, ValidatedGraph},
     service::{ServiceIdentifier, ServiceKey, ServiceSource, ServiceType},
@@ -167,7 +167,7 @@ async fn an_ordinary_dependency_constructs_a_lazy_provider_before_its_eager_cons
         optional: false,
         input: DependencyInput::Immediate {
             target: 0,
-            prepare: prepare_required::<u32>,
+            project: project_required::<u32>,
         },
         label: Some("ordinary"),
     });

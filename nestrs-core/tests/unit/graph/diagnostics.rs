@@ -7,7 +7,7 @@ use super::*;
 use crate::{
     activation::{
         ConstructionError, ConstructionInputs, ErasedService, FactoryFuture, FactoryInputs,
-        InputSlot, prepare_required,
+        InputSlot, project_required,
     },
     graph::{
         AbsentInput, CompiledDependency, CompiledNode, DependencyInput, NodePolicy, ProviderId,
@@ -59,11 +59,9 @@ fn dependency(
         input: match target {
             Some(target) => DependencyInput::Immediate {
                 target,
-                prepare: prepare_required::<()>,
+                project: project_required::<()>,
             },
-            None => DependencyInput::Absent(AbsentInput::Immediate(
-                crate::activation::prepare_optional_absent::<()>,
-            )),
+            None => DependencyInput::Absent(AbsentInput::Immediate),
         },
         label: Some(label),
     }

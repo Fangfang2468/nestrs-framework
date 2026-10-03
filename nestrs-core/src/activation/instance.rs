@@ -99,6 +99,8 @@ impl DependencyLease {
     where
         T: Injectable + ?Sized,
     {
+        // 从 Arc 记录内不再移动的 envelope 恢复地址。移动/克隆 lease 不移动服务 Box；
+        // 只有最后一个 lease 释放时才取走载荷，此时已没有可合法解引用该地址的持有者。
         self.service().pointer::<T>()
     }
 }

@@ -3,7 +3,7 @@
 use crate::{
     ServiceLifetime,
     activation::{
-        ConstructionError, ConstructionInputs, ErasedService, InputSlot, prepare_required,
+        ConstructionError, ConstructionInputs, ErasedService, InputSlot, project_required,
     },
     graph::{
         CompiledDependency, CompiledNode, Constructor, DependencyInput, NodePolicy, ValidatedGraph,
@@ -126,7 +126,7 @@ mod escaped_adapter {
                 optional: false,
                 input: DependencyInput::Immediate {
                     target: 0,
-                    prepare: prepare_required::<Dependency>,
+                    project: project_required::<Dependency>,
                 },
                 label: Some("captured_dependency"),
             }],

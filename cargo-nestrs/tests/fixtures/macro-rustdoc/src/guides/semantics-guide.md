@@ -2,7 +2,7 @@ This code block comes from `include_str!` inside a macro-generated item. The cra
 `no_crate_inject` setting lets it declare a local module with the library's name.
 The included service is compiled through the same generated reflection and
 automatic binding path as an application. This example contributes its own
-validated `__nestrs_reflect_v1` entry; the ordinary query method below requires
+validated `__nestrs_reflect_v2` entry; the ordinary query method below requires
 no registration call or runtime metadata file.
 
 ```rust
