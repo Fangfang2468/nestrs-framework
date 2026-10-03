@@ -105,7 +105,7 @@ fn plan_mir(tcx: TyCtxt<'_>, def: LocalDefId) -> &Steal<mir::Body<'_>> {
     if !is_entry(tcx, def) || !ENABLED.load(Ordering::Relaxed) || !has_core(tcx) {
         return original;
     }
-    let plan = compile(tcx).unwrap_or_else(|error| tcx.dcx().fatal(error));
+    let plan = compile(tcx).unwrap_or_else(|error| crate::diagnostics::internal(tcx, error));
     let body = emit(tcx, original.steal(), &plan);
     tcx.alloc_steal_mir(body)
 }

@@ -31,7 +31,13 @@ pub(super) fn expand(
     })
     .expect("constructor metadata contains only a string and boolean");
     let metadata = super::reflection::ident(constructor::METADATA);
-    let dependencies_helper = super::reflection::ident(constructor::DEPENDENCIES);
+    let dependencies_helper = syn::Ident::new(constructor::DEPENDENCIES, method.span());
+    let origin = super::source::origin(
+        crate::protocol::OriginKind::Constructor,
+        0,
+        &method.to_string(),
+        method.span(),
+    );
     let activate = super::reflection::ident(constructor::ACTIVATE);
     let mut dependencies = Vec::new();
     let mut arguments = Vec::new();
@@ -83,6 +89,7 @@ pub(super) fn expand(
         #[allow(dead_code)]
         pub(crate) fn #dependencies_helper() -> ::std::vec::Vec<::nestrs_core::activation::adapter::InputAdapter> {
             #reflection
+            #origin
             ::std::vec![#(#dependencies),*]
         }
 

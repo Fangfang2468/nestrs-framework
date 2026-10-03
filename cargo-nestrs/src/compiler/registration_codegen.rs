@@ -243,6 +243,8 @@ pub(crate) struct DescriptorCall<'tcx> {
     pub(crate) arguments: ty::GenericArgsRef<'tcx>,
     pub(crate) operands: &'tcx [Spanned<Operand<'tcx>>],
     pub(crate) body: &'tcx mir::Body<'tcx>,
+    /// marker 的调用位置保留原字段/参数 token；不能用描述函数位置替代。
+    pub(crate) span: Span,
 }
 
 /// 读取已经选中的类型化声明，按需进入工具生成的 constructor 依赖描述 helper。
@@ -290,6 +292,7 @@ pub(crate) fn descriptor_calls<'tcx>(
                 arguments,
                 operands: args.as_ref(),
                 body,
+                span: block.terminator().source_info.span,
             });
         }
     }

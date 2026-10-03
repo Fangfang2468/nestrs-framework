@@ -1,0 +1,12 @@
+[package]
+name = "nestrs-diagnostics-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+members = ["library"]
+
+[dependencies]
+nestrs-core = { path = "../../../../nestrs-core" }
+diagnostics-library = { path = "library" }

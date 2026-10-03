@@ -305,11 +305,11 @@ mod tests {
         assert_eq!(key_of(parse_quote!(#[inject])).expect("bare"), None);
         assert_eq!(
             key_of(parse_quote!(#[inject("named")])).expect("positional string"),
-            Some(ServiceKeySpec::Named("named".to_owned()))
+            Some(ServiceKeySpec::named("named"))
         );
         assert_eq!(
             key_of(parse_quote!(#[inject(7)])).expect("positional integer"),
-            Some(ServiceKeySpec::Indexed(7))
+            Some(ServiceKeySpec::indexed(7))
         );
     }
 

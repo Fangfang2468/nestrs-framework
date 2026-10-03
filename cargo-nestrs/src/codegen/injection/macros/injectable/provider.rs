@@ -33,12 +33,14 @@ pub(crate) fn collect_injectable_provider(
     config: InjectableConfig,
     primary: bool,
     lazy: Option<bool>,
+    source: crate::codegen::source::ProviderOrigin,
     mode: ConstructorMode,
 ) -> zyn::TokenStream {
     let service = analysis.item.ident.clone();
     let service_type = quote!(#service);
     let reflection_module = reflection::ident(protocol::REFLECTION_MODULE);
     let provider_marker = reflection::ident(Marker::Provider.name());
+    let origins = source.render();
 
     zyn! {
         #[allow(dead_code)]
@@ -46,6 +48,7 @@ pub(crate) fn collect_injectable_provider(
             {{ reflection_module }}::{{ provider_marker }}::<{{ service_type.clone() }}>(
                 @EmitCompilerKey(key = config.key.clone())
             );
+            {{ origins }}
             @EmitPlanProvider(
                 service_type = service_type.clone(),
                 key = config.key.clone(),
@@ -141,6 +144,11 @@ mod tests {
         lazy: Option<bool>,
     ) -> String {
         CollectInjectableProvider {
+            source: crate::codegen::source::ProviderOrigin::from_args(
+                item.ident.clone(),
+                &syn::parse_quote!(),
+                None,
+            ),
             analysis: AnalyzedFields { item, specs },
             config,
             primary,
@@ -164,6 +172,11 @@ mod tests {
             })
             .unwrap();
             let rendered = CollectInjectableProvider {
+                source: crate::codegen::source::ProviderOrigin::from_args(
+                    analysis.item.ident.clone(),
+                    &syn::parse_quote!(),
+                    None,
+                ),
                 analysis,
                 config: InjectableConfig {
                     lifetime: ServiceLifetime::Singleton,
@@ -218,7 +231,7 @@ mod tests {
         let specs = collect_field_specs(&item.fields).expect("fields should be valid");
         let config = InjectableConfig {
             lifetime: ServiceLifetime::Scoped,
-            key: Some(ServiceKeySpec::Named("controller".to_owned())),
+            key: Some(ServiceKeySpec::named("controller")),
             cleanup: None,
         };
 

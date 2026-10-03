@@ -28,14 +28,54 @@ use crate::registration_codegen::definition_path;
 /// 避免等到分配无限类型或耗尽编译线程栈时才失败。
 pub const MAX_QUERY_TYPES: usize = 100_000;
 
-pub fn validate_type_complexity(tcx: TyCtxt<'_>, value: Ty<'_>) -> Result<(), String> {
+pub(crate) fn validate_type_complexity_at(
+    tcx: TyCtxt<'_>,
+    value: Ty<'_>,
+    span: Span,
+    origin: Span,
+) -> Result<(), String> {
     let limit = (tcx.recursion_limit().0 * 8).max(1024);
     if value.walk().take(limit + 1).count() > limit {
-        return Err(format!(
-            "DI 泛型类型不断增长或过于复杂：单个类型树超过 {limit} 个节点；请终止递归泛型查询或拆分类型"
-        ));
+        expansion_error(
+            tcx,
+            span,
+            origin,
+            "single_type_tree_nodes",
+            limit,
+            format!(
+                "DI 泛型类型不断增长或过于复杂：单个类型树超过 {limit} 个节点；请终止递归泛型查询或拆分类型"
+            ),
+        );
     }
     Ok(())
+}
+
+pub(crate) fn expansion_error(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    origin: Span,
+    metric: &str,
+    limit: usize,
+    detail: String,
+) -> ! {
+    let mut diagnostic = crate::diagnostics::Diagnostic::new(
+        "NESTRS-DI008",
+        "服务类型的泛型展开超过分析上限".into(),
+        span,
+    );
+    diagnostic.labels.push((
+        span,
+        "此处引入的类型或调用需要继续展开过于复杂的泛型类型".into(),
+    ));
+    if origin != span && !origin.is_dummy() {
+        diagnostic
+            .labels
+            .push((origin, "此处提供这条展开链的闭合起点".into()));
+    }
+    diagnostic.notes.push("已编译的查询与调用都参与类型分析，即使它们尚未执行或位于 if false 分支。此上限按类型复杂度或实例数量计数，不是普通依赖链深度。".into());
+    diagnostic.help.push("检查是否有每次递归都改变类型参数的调用；使用固定的有限类型集合，或用运行期数据结构表达递归层次。".into());
+    diagnostic.cause = format!("TypeExpansionLimit\nmetric={metric}; limit={limit}\n{detail}");
+    crate::diagnostics::emit(tcx, vec![diagnostic]);
 }
 
 pub const SUMMARY_NAME: &str = crate::protocol::Marker::QuerySummary.name();
@@ -103,10 +143,10 @@ impl<'tcx> QueryValue<'tcx> {
         }
     }
 
-    fn normalize(self, tcx: TyCtxt<'tcx>) -> Result<Self, String> {
+    fn normalize(self, tcx: TyCtxt<'tcx>, span: Span, origin: Span) -> Result<Self, String> {
         match self {
             Self::Service(value) | Self::Callable(value) => {
-                validate_type_complexity(tcx, value)?;
+                validate_type_complexity_at(tcx, value, span, origin)?;
                 let normalized = tcx
                     .try_normalize_erasing_regions(
                         ty::TypingEnv::fully_monomorphized(),
@@ -121,7 +161,7 @@ impl<'tcx> QueryValue<'tcx> {
             }
             Self::Constant(id, args) => {
                 for value in args.types() {
-                    validate_type_complexity(tcx, value)?;
+                    validate_type_complexity_at(tcx, value, span, origin)?;
                 }
                 let args = tcx
                     .try_normalize_erasing_regions(
@@ -609,7 +649,7 @@ pub fn collect_with_providers<'tcx>(
         let owner = id.as_local().unwrap_or(fallback);
         for &record in records {
             if relevant_record(&record) && record.value.closed() {
-                pending.push_back((record, owner, 0usize));
+                pending.push_back((record, owner, 0usize, record.span));
             }
         }
     }
@@ -630,7 +670,7 @@ pub fn collect_with_providers<'tcx>(
                 let owner = method.as_local().unwrap_or(fallback);
                 for &record in records.iter().filter(|record| relevant_record(record)) {
                     let value = record.value.instantiate(tcx, args);
-                    pending.push_back((Record { value, ..record }, owner, 0));
+                    pending.push_back((Record { value, ..record }, owner, 0, record.span));
                 }
             }
         }
@@ -639,14 +679,19 @@ pub fn collect_with_providers<'tcx>(
     let mut seen_roots = HashSet::new();
     let mut roots = Vec::new();
     let mut count = 0usize;
-    while let Some((mut record, owner, depth)) = pending.pop_front() {
+    while let Some((mut record, owner, depth, origin)) = pending.pop_front() {
         count += 1;
         if count > MAX_QUERY_TYPES {
-            return Err(
+            expansion_error(
+                tcx,
+                record.span,
+                origin,
+                "query_instances",
+                MAX_QUERY_TYPES,
                 "DI 查询泛型实例展开超过有限分析上限，可能存在不断增长的递归泛型调用".into(),
             );
         }
-        record.value = record.value.normalize(tcx)?;
+        record.value = record.value.normalize(tcx, record.span, origin)?;
         if !record.value.closed() {
             continue;
         }
@@ -697,7 +742,7 @@ pub fn collect_with_providers<'tcx>(
         };
         for &nested in records.iter().filter(|record| relevant_record(record)) {
             let value = nested.value.instantiate(tcx, args);
-            pending.push_back((Record { value, ..nested }, owner, depth + 1));
+            pending.push_back((Record { value, ..nested }, owner, depth + 1, origin));
         }
     }
     roots.sort_by_key(|root| (root.service.to_string(), format!("{:?}", root.service)));

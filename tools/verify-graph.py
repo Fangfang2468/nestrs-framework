@@ -115,7 +115,7 @@ def fixture_entries(project):
     assert len(macro_main["graph"]["nodes"]) == 1, macro_main
     assert macro_main["graph"]["nodes"][0]["name"].endswith("::MacroMainService"), macro_main
     assert entries["invalid_graph"]["status"] == "error", entries
-    assert "DI 依赖图编译失败" in entries["invalid_graph"]["diagnostic"], entries
+    assert "[NESTRS-DI001]" in entries["invalid_graph"]["diagnostic"], entries
     for binary in ["no_main", "cfg_no_main"]:
         # 静态图从编译器 metadata 导出，无需执行或替换自定义 main。
         assert entries[binary]["status"] == "ok", entries[binary]
@@ -220,7 +220,7 @@ def main():
         assert verify_graph(output / "relative.html", "beta") == second
 
         for name, package, binary, diagnostic in [
-            ("invalid-graph", "nestrs-graph-fixture", "invalid_graph", "DI 依赖图编译失败"),
+            ("invalid-graph", "nestrs-graph-fixture", "invalid_graph", "[NESTRS-DI001]"),
             ("missing-core", "nestrs-graph-without-core", "nestrs-graph-without-core", "depend directly on nestrs-core"),
             ("missing-feature", "nestrs-graph-fixture", "feature_app", "extras"),
         ]:

@@ -245,9 +245,9 @@ mod tests {
         );
         assert_eq!(
             analysis.parameters[1].key,
-            Some(ServiceKeySpec::Named("audit".into()))
+            Some(ServiceKeySpec::named("audit"))
         );
-        assert_eq!(analysis.parameters[2].key, Some(ServiceKeySpec::Indexed(7)));
+        assert_eq!(analysis.parameters[2].key, Some(ServiceKeySpec::indexed(7)));
         let dependency = analysis.parameters[1].dependency_request();
         assert!(dependency.optional && dependency.lazy);
         assert_eq!(dependency.input_slot, 1);

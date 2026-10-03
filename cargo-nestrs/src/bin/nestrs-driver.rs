@@ -28,6 +28,8 @@ mod autobind_semantic;
 mod constructor;
 #[path = "../compiler/di_plan/mod.rs"]
 mod di_plan;
+#[path = "../compiler/diagnostics.rs"]
+mod diagnostics;
 #[path = "../compiler/documentation.rs"]
 mod documentation;
 #[path = "../compiler/graph_entry.rs"]

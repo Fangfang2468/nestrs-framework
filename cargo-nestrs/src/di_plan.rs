@@ -96,10 +96,73 @@ pub enum DiagnosticKind {
     ScopeRequired,
 }
 
+/// 错误涉及的真实输入边。索引对应本次 `compile` 的输入模型，不是跨阶段身份。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DependencyEdge {
+    pub consumer: usize,
+    /// `providers[consumer].inputs` 中的位置。有效模型中等于 `Input::slot`；
+    /// 非法元数据仍用数组位置保留可访问的证据，不跟随错误的槽位值。
+    pub slot: usize,
+    pub target: usize,
+}
+
+/// 交给编译前端关联源码的错误事实，不从诊断文本反推类型、候选或依赖关系。
+///
+/// provider/binding 索引均来自本次编译输入；属性及输入修饰直接读取原始声明。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiagnosticEvidence {
+    InvalidMetadata,
+    DuplicateProvider {
+        first: usize,
+        duplicate: usize,
+    },
+    DuplicateBinding {
+        first: usize,
+        duplicate: usize,
+    },
+    OrphanBinding {
+        binding: usize,
+    },
+    AmbiguousTrait {
+        type_id: usize,
+        key: Key,
+        candidates: Vec<usize>,
+    },
+    MissingDependency {
+        consumer: usize,
+        slot: usize,
+    },
+    Cycle {
+        edges: Vec<DependencyEdge>,
+    },
+    ScopeRequired {
+        singleton: usize,
+        scoped: usize,
+        edges: Vec<DependencyEdge>,
+    },
+}
+
+impl DiagnosticEvidence {
+    fn kind(&self) -> DiagnosticKind {
+        match self {
+            Self::InvalidMetadata => DiagnosticKind::InvalidMetadata,
+            Self::DuplicateProvider { .. } => DiagnosticKind::DuplicateProvider,
+            Self::DuplicateBinding { .. } => DiagnosticKind::DuplicateBinding,
+            Self::OrphanBinding { .. } => DiagnosticKind::OrphanBinding,
+            Self::AmbiguousTrait { .. } => DiagnosticKind::AmbiguousTrait,
+            Self::MissingDependency { .. } => DiagnosticKind::MissingDependency,
+            Self::Cycle { .. } => DiagnosticKind::Cycle,
+            Self::ScopeRequired { .. } => DiagnosticKind::ScopeRequired,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub kind: DiagnosticKind,
+    /// 内部完整说明，供最终诊断的 cause 使用；用户正文由 evidence 与真实源码组成。
     pub message: String,
+    pub evidence: DiagnosticEvidence,
 }
 
 /// 编译已展开的全部声明；未被其他 provider 使用的声明也接受完整检查。
@@ -117,7 +180,7 @@ pub fn compile(
         if names.insert(ty.id, ty.name.as_str()).is_some() {
             diagnostic(
                 &mut diagnostics,
-                DiagnosticKind::InvalidMetadata,
+                DiagnosticEvidence::InvalidMetadata,
                 format!("类型 ID {} 重复：{}", ty.id, ty.name),
             );
         }
@@ -131,7 +194,7 @@ pub fn compile(
             if input.slot != position {
                 diagnostic(
                     &mut diagnostics,
-                    DiagnosticKind::InvalidMetadata,
+                    DiagnosticEvidence::InvalidMetadata,
                     format!(
                         "输入槽位必须连续且唯一：{location}，声明槽位 {}，期望 {position}",
                         input.slot
@@ -151,15 +214,19 @@ pub fn compile(
             .push(id);
         let key = (provider.type_id, provider.key.clone());
         if let Some(previous) = routes.get(&key) {
-            let first = previous.as_ref().map_or_else(
-                || context.provider(id),
-                |route| context.provider(route.provider),
-            );
+            let first = previous
+                .as_ref()
+                .expect("concrete 路由总是唯一候选")
+                .provider;
             diagnostic(
                 &mut diagnostics,
-                DiagnosticKind::DuplicateProvider,
+                DiagnosticEvidence::DuplicateProvider {
+                    first,
+                    duplicate: id,
+                },
                 format!(
-                    "同一 concrete 类型与 key 存在重复 provider：{first}；{}",
+                    "同一 concrete 类型与 key 存在重复 provider：{}；{}",
+                    context.provider(first),
                     context.provider(id)
                 ),
             );
@@ -184,7 +251,7 @@ pub fn compile(
         if binding.concrete == binding.interface {
             diagnostic(
                 &mut diagnostics,
-                DiagnosticKind::InvalidMetadata,
+                DiagnosticEvidence::InvalidMetadata,
                 format!(
                     "binding 的 concrete 与 interface 类型相同：{}（{}）",
                     context.ty(binding.concrete),
@@ -192,10 +259,13 @@ pub fn compile(
                 ),
             );
         }
-        if let Some(previous) = pairs.insert((binding.concrete, binding.interface), binding_id) {
+        if let Some(&previous) = pairs.get(&(binding.concrete, binding.interface)) {
             diagnostic(
                 &mut diagnostics,
-                DiagnosticKind::DuplicateBinding,
+                DiagnosticEvidence::DuplicateBinding {
+                    first: previous,
+                    duplicate: binding_id,
+                },
                 format!(
                     "重复 binding：{} -> {}（{}；{}）",
                     context.ty(binding.concrete),
@@ -206,6 +276,7 @@ pub fn compile(
             );
             continue;
         }
+        pairs.insert((binding.concrete, binding.interface), binding_id);
         if let Some(matched) = providers_by_type.get(&binding.concrete) {
             for &provider_id in matched {
                 candidates
@@ -216,7 +287,9 @@ pub fn compile(
         } else {
             diagnostic(
                 &mut diagnostics,
-                DiagnosticKind::OrphanBinding,
+                DiagnosticEvidence::OrphanBinding {
+                    binding: binding_id,
+                },
                 format!(
                     "binding 找不到对应 concrete provider：{} -> {}（{}）",
                     context.ty(binding.concrete),
@@ -230,7 +303,7 @@ pub fn compile(
         if routes.contains_key(&(type_id, key.clone())) {
             diagnostic(
                 &mut diagnostics,
-                DiagnosticKind::InvalidMetadata,
+                DiagnosticEvidence::InvalidMetadata,
                 format!(
                     "类型同时作为 concrete provider 与 trait 路由：{} {}",
                     context.ty(type_id),
@@ -257,7 +330,11 @@ pub fn compile(
                 };
                 diagnostic(
                     &mut diagnostics,
-                    DiagnosticKind::AmbiguousTrait,
+                    DiagnosticEvidence::AmbiguousTrait {
+                        type_id,
+                        key: key.clone(),
+                        candidates: candidates.iter().map(|(provider, _)| *provider).collect(),
+                    },
                     format!(
                         "trait 候选歧义：{} {}，{reason}；候选：{}",
                         context.ty(type_id),
@@ -291,7 +368,10 @@ pub fn compile(
             if route.is_none() && !input.optional {
                 diagnostic(
                     &mut diagnostics,
-                    DiagnosticKind::MissingDependency,
+                    DiagnosticEvidence::MissingDependency {
+                        consumer: provider_id,
+                        slot: position,
+                    },
                     format!("缺少必选依赖：{}", context.input(provider_id, position)),
                 );
             }
@@ -306,7 +386,7 @@ pub fn compile(
 
     let (order, dependents) = topology(&inputs);
     if order.len() != providers.len() {
-        report_cycles(&context, &inputs, &mut diagnostics);
+        report_cycles(&context, &inputs, &dependents, &mut diagnostics);
     }
     let requires_scope = scope_requirements(&context, &inputs, &dependents, &mut diagnostics);
     diagnostics
@@ -353,12 +433,60 @@ fn topology(inputs: &[Vec<InputPlan>]) -> (Vec<usize>, Vec<Vec<usize>>) {
     (order, dependents)
 }
 
-/// 显式 DFS 栈记录当前路径与到达它的输入槽位，只报告真实回边形成的环。
+/// 迭代 Kosaraju 标记强连通分量，让同一根因只报告一个代表闭环。
+fn components(inputs: &[Vec<InputPlan>], dependents: &[Vec<usize>]) -> Vec<usize> {
+    let mut seen = vec![false; inputs.len()];
+    let mut finished = Vec::with_capacity(inputs.len());
+    for start in 0..inputs.len() {
+        if seen[start] {
+            continue;
+        }
+        let mut stack = vec![(start, 0)];
+        seen[start] = true;
+        while let Some(&(node, next)) = stack.last() {
+            if next == inputs[node].len() {
+                finished.push(node);
+                stack.pop();
+                continue;
+            }
+            stack.last_mut().expect("当前栈帧存在").1 += 1;
+            if let Some(target) = inputs[node][next].target
+                && !seen[target]
+            {
+                seen[target] = true;
+                stack.push((target, 0));
+            }
+        }
+    }
+    let mut components = vec![usize::MAX; inputs.len()];
+    for start in finished.into_iter().rev() {
+        if components[start] != usize::MAX {
+            continue;
+        }
+        let mut stack = vec![start];
+        components[start] = start;
+        while let Some(node) = stack.pop() {
+            for &target in &dependents[node] {
+                if components[target] == usize::MAX {
+                    components[target] = start;
+                    stack.push(target);
+                }
+            }
+        }
+    }
+    components
+}
+
+/// 显式 DFS 栈记录真实输入边。每个有环分量只发出首条回边形成的闭环，
+/// 不把拓扑排序残留的下游节点当成环，也不合并 optional/lazy 的交付槽位。
 fn report_cycles(
     context: &Context<'_>,
     inputs: &[Vec<InputPlan>],
+    dependents: &[Vec<usize>],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let component = components(inputs, dependents);
+    let mut reported = vec![false; inputs.len()];
     let mut state = vec![0_u8; inputs.len()];
     let mut positions = vec![0; inputs.len()];
     for start in 0..inputs.len() {
@@ -383,18 +511,28 @@ fn report_cycles(
                     state[target] = 1;
                     stack.push((target, 0, Some(next)));
                 }
-                1 => {
-                    let mut path = Vec::new();
+                1 if !reported[component[target]] => {
+                    reported[component[target]] = true;
+                    let mut edges = Vec::new();
                     for index in positions[target]..stack.len() - 1 {
-                        path.push(context.input(
-                            stack[index].0,
-                            stack[index + 1].2.expect("非根帧有输入槽位"),
-                        ));
+                        edges.push(DependencyEdge {
+                            consumer: stack[index].0,
+                            slot: stack[index + 1].2.expect("非根帧有输入槽位"),
+                            target: stack[index + 1].0,
+                        });
                     }
-                    path.push(context.input(node, next));
+                    edges.push(DependencyEdge {
+                        consumer: node,
+                        slot: next,
+                        target,
+                    });
+                    let path = edges
+                        .iter()
+                        .map(|edge| context.input(edge.consumer, edge.slot))
+                        .collect::<Vec<_>>();
                     diagnostic(
                         diagnostics,
-                        DiagnosticKind::Cycle,
+                        DiagnosticEvidence::Cycle { edges },
                         format!(
                             "循环依赖：{} -> {}",
                             path.join(" -> "),
@@ -444,23 +582,37 @@ fn scope_requirements(
             continue;
         }
         let mut path = Vec::new();
+        let mut edges = Vec::new();
         let mut current = provider;
         while let Some((dependency, slot)) = witness[current] {
             path.push(context.input(current, slot));
+            edges.push(DependencyEdge {
+                consumer: current,
+                slot,
+                target: dependency,
+            });
             current = dependency;
         }
         path.push(context.provider(current));
         diagnostic(
             diagnostics,
-            DiagnosticKind::ScopeRequired,
+            DiagnosticEvidence::ScopeRequired {
+                singleton: provider,
+                scoped: current,
+                edges,
+            },
             format!("Singleton 的激活依赖需要 Scope：{}", path.join(" -> ")),
         );
     }
     needed
 }
 
-fn diagnostic(output: &mut Vec<Diagnostic>, kind: DiagnosticKind, message: String) {
-    output.push(Diagnostic { kind, message });
+fn diagnostic(output: &mut Vec<Diagnostic>, evidence: DiagnosticEvidence, message: String) {
+    output.push(Diagnostic {
+        kind: evidence.kind(),
+        message,
+        evidence,
+    });
 }
 
 fn key_text(key: &Key) -> String {
@@ -507,7 +659,7 @@ impl Context<'_> {
         if !self.names.contains_key(&id) {
             diagnostic(
                 output,
-                DiagnosticKind::InvalidMetadata,
+                DiagnosticEvidence::InvalidMetadata,
                 format!("未知类型 ID {id}（{source}）"),
             );
         }

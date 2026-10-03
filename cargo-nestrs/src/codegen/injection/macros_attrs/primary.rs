@@ -30,6 +30,7 @@ const DEFERRED_FACTORY_PRIMARY_ATTRIBUTE: &str = "__nestrs_factory_primary";
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PrimaryConfig {
     primary: bool,
+    source_span: Option<zyn::proc_macro2::Span>,
     consumed_attribute_path: Option<syn::Path>,
 }
 
@@ -55,6 +56,10 @@ impl PrimaryConfig {
         }
     }
 
+    pub(crate) fn source_span(&self) -> Option<zyn::proc_macro2::Span> {
+        self.source_span
+    }
+
     pub(crate) fn is_primary(&self) -> bool {
         self.primary
     }
@@ -72,6 +77,7 @@ impl PrimaryConfig {
     fn enabled() -> Self {
         Self {
             primary: true,
+            source_span: Some(zyn::proc_macro2::Span::call_site()),
             consumed_attribute_path: None,
         }
     }
@@ -79,6 +85,7 @@ impl PrimaryConfig {
     fn consumed(path: syn::Path) -> Self {
         Self {
             primary: true,
+            source_span: Some(path.span()),
             consumed_attribute_path: Some(path),
         }
     }
@@ -171,7 +178,9 @@ fn take_primary_for_provider(
         let config = if attribute_is_named(&attribute, "primary") {
             PrimaryConfig::from_attribute(&attribute)?
         } else if attribute_is_named(&attribute, deferred_attribute) {
-            PrimaryConfig::enabled()
+            let mut config = PrimaryConfig::enabled();
+            config.source_span = Some(attribute.span());
+            config
         } else {
             retained.push(attribute);
             continue;

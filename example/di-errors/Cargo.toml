@@ -1,0 +1,43 @@
+# 错误示例独立成 workspace，避免加入框架和正常业务示例的默认构建。
+[workspace]
+resolver = "3"
+members = [
+    "01-missing-concrete",
+    "02-missing-trait",
+    "03-missing-default-key",
+    "04-missing-named-key",
+    "05-key-kind-mismatch",
+    "06-ambiguous-trait",
+    "07-multiple-primary",
+    "08-primary-other-key",
+    "09-optional-ambiguity",
+    "10-lazy-ambiguity",
+    "11-self-cycle",
+    "12-dependency-cycle",
+    "13-optional-cycle",
+    "14-lazy-cycle",
+    "15-singleton-scoped",
+    "16-transitive-scoped",
+    "17-optional-scoped",
+    "18-lazy-scoped",
+    "19-factory-missing",
+    "20-factory-cycle",
+    "21-factory-scoped",
+    "22-factory-lazy-missing",
+    "23-constructor-missing",
+    "24-duplicate-provider",
+    "25-generic-missing",
+    "26-generic-growth",
+    "27-duplicate-binding",
+    "28-orphan-binding",
+    "29-provider-lazy-missing",
+    "30-multiple-errors",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+nestrs-core = { path = "../../nestrs-core" }

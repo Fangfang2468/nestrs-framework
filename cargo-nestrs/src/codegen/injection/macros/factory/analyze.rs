@@ -452,7 +452,7 @@ mod tests {
         assert_eq!(analysis.parameters[1].key, None);
         assert_eq!(
             analysis.parameters[2].key,
-            Some(ServiceKeySpec::Named("audit".to_owned()))
+            Some(ServiceKeySpec::named("audit"))
         );
         assert!(analysis.parameters[2].optional);
         let rewritten = analysis.item.to_token_stream().to_string();
@@ -485,7 +485,7 @@ mod tests {
                 .iter()
                 .all(|parameter| parameter.dependency_request().lazy)
         );
-        assert_eq!(analysis.parameters[1].key, Some(ServiceKeySpec::Indexed(7)));
+        assert_eq!(analysis.parameters[1].key, Some(ServiceKeySpec::indexed(7)));
         assert!(analysis.parameters[1].optional);
         let rewritten = analysis.item.to_token_stream().to_string();
         assert!(!rewritten.contains("__nestrs_factory_frame"));

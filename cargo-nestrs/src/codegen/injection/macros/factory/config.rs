@@ -70,10 +70,7 @@ mod tests {
         let config = parse_factory_config(&args).expect("factory configuration should parse");
 
         assert_eq!(config.lifetime, ServiceLifetime::Scoped);
-        assert_eq!(
-            config.key,
-            Some(ServiceKeySpec::Named("replica".to_owned()))
-        );
+        assert_eq!(config.key, Some(ServiceKeySpec::named("replica")));
         assert_eq!(
             config
                 .cleanup

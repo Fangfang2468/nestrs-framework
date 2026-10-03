@@ -16,7 +16,7 @@ use crate::{
     codegen::reflection,
     protocol::{self, Marker},
 };
-use zyn::{quote::quote, syn, zyn};
+use zyn::{quote::quote_spanned, syn, zyn};
 
 /// 为一个开放泛型 provider 输出其按需具体化的 provider definition。
 ///
@@ -29,17 +29,19 @@ pub(crate) fn define_generic_injectable_provider(
     config: InjectableConfig,
     primary: bool,
     lazy: Option<bool>,
+    source: crate::codegen::source::ProviderOrigin,
     mode: ConstructorMode,
 ) -> zyn::TokenStream {
     let service = analysis.item.ident.clone();
     let provider_definition_generics = provider_definition_generics(analysis);
     let (impl_generics, type_generics, where_clause) =
         provider_definition_generics.split_for_impl();
-    let service_type = quote!(Self);
+    let service_type = quote_spanned!(service.span()=> Self);
     let reflection = reflection::support(true);
     let reflection_module = reflection::ident(protocol::REFLECTION_MODULE);
     let provider_definition = reflection::ident(protocol::PROVIDER_DEFINITION);
     let provider_marker = reflection::ident(Marker::Provider.name());
+    let origins = source.render();
 
     zyn! {
         #[allow(clippy::unused_unit)]
@@ -52,6 +54,7 @@ pub(crate) fn define_generic_injectable_provider(
                     {{ reflection_module }}::{{ provider_marker }}::<Self>(
                         @EmitCompilerKey(key = config.key.clone())
                     );
+                    {{ origins }}
                     @EmitPlanProvider(
                         service_type = service_type.clone(),
                         key = config.key.clone(),
@@ -122,6 +125,11 @@ mod tests {
     fn render_definition_in_mode(item: syn::ItemStruct, mode: ConstructorMode) -> String {
         let analysis = analyze_fields(item).expect("generic item should analyze");
         DefineGenericInjectableProvider {
+            source: crate::codegen::source::ProviderOrigin::from_args(
+                analysis.item.ident.clone(),
+                &syn::parse_quote!(),
+                None,
+            ),
             analysis,
             config: InjectableConfig {
                 lifetime: ServiceLifetime::Singleton,

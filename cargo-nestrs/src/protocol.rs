@@ -26,6 +26,7 @@ pub(crate) enum Inputs {
     None,
     Key,
     KeyLabel,
+    Label,
 }
 
 #[derive(Clone, Copy)]
@@ -37,13 +38,14 @@ pub(crate) enum Marker {
     PlanProvider,
     PlanInput,
     PlanFactory,
+    PlanOrigin,
     QueryRoot,
     QueryCall,
     QuerySummary,
 }
 
 impl Marker {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::Provider,
         Self::Dependency,
         Self::Binding,
@@ -51,6 +53,7 @@ impl Marker {
         Self::PlanProvider,
         Self::PlanInput,
         Self::PlanFactory,
+        Self::PlanOrigin,
         Self::QueryRoot,
         Self::QueryCall,
         Self::QuerySummary,
@@ -65,6 +68,7 @@ impl Marker {
             Self::PlanProvider => "compiler_plan_provider",
             Self::PlanInput => "compiler_plan_input",
             Self::PlanFactory => "compiler_plan_factory",
+            Self::PlanOrigin => "compiler_plan_origin",
             Self::QueryRoot => "compiler_query_root",
             Self::QueryCall => "compiler_query_call",
             Self::QuerySummary => "__nestrs_query_summary_v1",
@@ -84,10 +88,25 @@ impl Marker {
             Self::PlanProvider => (&[Type, U8, Bool, U8], Inputs::Key),
             Self::PlanInput => (&[Type, Usize, Bool, Bool], Inputs::KeyLabel),
             Self::PlanFactory => (&[Bool], Inputs::None),
+            Self::PlanOrigin => (&[U8, Usize], Inputs::Label),
             Self::QueryRoot | Self::QueryCall => (&[Type], Inputs::None),
             Self::QuerySummary => (&[], Inputs::None),
         }
     }
+}
+
+/// 诊断来源附着到同一个已认证描述回调；不会进入运行时计划 ABI。
+#[derive(Clone, Copy)]
+#[repr(u8)]
+pub(crate) enum OriginKind {
+    Declaration = 0,
+    Lifetime = 1,
+    Primary = 2,
+    ProviderKey = 3,
+    InputKey = 4,
+    InputTypeEnd = 5,
+    ProviderTypeEnd = 6,
+    Constructor = 7,
 }
 
 #[derive(Clone, Copy)]

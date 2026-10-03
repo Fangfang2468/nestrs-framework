@@ -11,6 +11,7 @@ extern crate rustc_infer;
 extern crate rustc_trait_selection;
 
 mod artifact;
+mod diagnostics;
 mod emission;
 
 use crate::autobind_semantic::{CompilerKey, external_key, provider_blueprint};
@@ -34,6 +35,7 @@ struct Provider<'tcx> {
     data: model::Provider,
     kind: &'static str,
     source: Span,
+    origin: diagnostics::Origin,
 }
 struct Binding<'tcx> {
     instance: ty::Instance<'tcx>,
@@ -69,7 +71,7 @@ pub fn validate(tcx: TyCtxt<'_>) -> Result<(), String> {
             },
         );
     }
-    let plan = compile(tcx)?;
+    let plan = compile(tcx).unwrap_or_else(|error| crate::diagnostics::internal(tcx, error));
     artifact::write(tcx, &plan)
 }
 fn entry(tcx: TyCtxt<'_>) -> bool {
@@ -102,10 +104,10 @@ fn source(tcx: TyCtxt<'_>, span: Span) -> String {
         pos.col.0 + 1
     )
 }
-fn normalize<'tcx>(tcx: TyCtxt<'tcx>, service: Ty<'tcx>) -> Result<Ty<'tcx>, String> {
+fn normalize<'tcx>(tcx: TyCtxt<'tcx>, service: Ty<'tcx>, span: Span) -> Result<Ty<'tcx>, String> {
     // 有限声明闭包允许很深的普通 DAG，但不能允许 A<T> -> A<Vec<T>> 这类无限
     // 类型族耗尽编译器内存。检查的是单个类型表达式，不是服务图的路径深度。
-    crate::query_roots::validate_type_complexity(tcx, service)?;
+    crate::query_roots::validate_type_complexity_at(tcx, service, span, span)?;
     let result = tcx
         .try_normalize_erasing_regions(
             ty::TypingEnv::fully_monomorphized(),
@@ -164,10 +166,20 @@ fn read_provider<'tcx>(
     let mut identity = None;
     let mut inputs = Vec::new();
     let mut kind = "class";
+    let mut origin = diagnostics::Origin::new(tcx.def_span(instance.def_id()));
     for call in descriptor_calls(tcx, instance)? {
         let (def, args, operands, body) =
             (call.definition, call.arguments, call.operands, call.body);
-        if reflect_item(tcx, def, Marker::PlanProvider.name()) {
+        if reflect_item(tcx, def, Marker::PlanOrigin.name()) {
+            let kind = const_number(tcx, args.const_at(0))?;
+            let slot = usize::try_from(const_number(tcx, args.const_at(1))?)
+                .map_err(|_| "诊断来源槽位溢出")?;
+            let [label] = operands else {
+                return Err("诊断来源 metadata 版本不匹配".into());
+            };
+            origin.record(kind, slot, call.span, text_literal(tcx, &label.node)?)?;
+        } else if reflect_item(tcx, def, Marker::PlanProvider.name()) {
+            origin.service = call.span;
             let constants: Vec<_> = args
                 .consts()
                 .map(|c| const_number(tcx, c))
@@ -180,7 +192,7 @@ fn read_provider<'tcx>(
             };
             // 初始化策略属于 Provider 声明；不能与输入槽位的 LAZY 边标记混合。
             let lazy = policy.initialization.lazy();
-            let service = normalize(tcx, args.type_at(0))?;
+            let service = normalize(tcx, args.type_at(0), call.span)?;
             let id = intern(types, indices, service);
             let [value] = operands else {
                 return Err("DI provider key metadata 版本不匹配".into());
@@ -212,8 +224,9 @@ fn read_provider<'tcx>(
             let [value, label] = operands else {
                 return Err("DI input 字面量 metadata 版本不匹配".into());
             };
+            origin.inputs.insert(policy.slot, call.span);
             inputs.push(model::Input {
-                type_id: intern(types, indices, normalize(tcx, args.type_at(0))?),
+                type_id: intern(types, indices, normalize(tcx, args.type_at(0), call.span)?),
                 key: key(external_key(tcx, body, &value.node)?),
                 slot: policy.slot,
                 optional: policy.optional,
@@ -229,6 +242,7 @@ fn read_provider<'tcx>(
         )
     })?;
     inputs.sort_by_key(|input| input.slot);
+    origin.finish(tcx);
     let span = tcx.def_span(instance.def_id());
     Ok(Provider {
         instance,
@@ -243,6 +257,7 @@ fn read_provider<'tcx>(
         },
         kind,
         source: span,
+        origin,
     })
 }
 fn read_binding<'tcx>(
@@ -256,8 +271,8 @@ fn read_binding<'tcx>(
         {
             return Ok(Binding {
                 instance,
-                concrete: normalize(tcx, args.type_at(0))?,
-                interface: normalize(tcx, args.type_at(1))?,
+                concrete: normalize(tcx, args.type_at(0), call.span)?,
+                interface: normalize(tcx, args.type_at(1), call.span)?,
             });
         }
     }
@@ -272,7 +287,8 @@ fn compile<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Compiled<'tcx>, String> {
     let mut providers = Vec::new();
     let mut bindings = Vec::new();
     let mut passive = Vec::new();
-    let mut requests: VecDeque<(Ty<'tcx>, Option<model::Key>)> = VecDeque::new();
+    let mut requests: VecDeque<(Ty<'tcx>, Option<model::Key>, Span)> = VecDeque::new();
+    let mut request_origins: HashMap<Ty<'tcx>, Vec<Span>> = HashMap::new();
     for (kind, callback) in collect_callbacks(tcx) {
         let instance = ty::Instance::mono(tcx, callback);
         match kind {
@@ -284,10 +300,14 @@ fn compile<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Compiled<'tcx>, String> {
         }
     }
     for root in crate::query_roots::collect(tcx)? {
-        requests.push_back((root.service, None));
+        requests.push_back((root.service, None, root.span));
     }
     for binding in &bindings {
-        requests.push_back((binding.concrete, None));
+        requests.push_back((
+            binding.concrete,
+            None,
+            tcx.def_span(binding.instance.def_id()),
+        ));
     }
     let explicit: BTreeSet<_> = providers
         .iter()
@@ -303,9 +323,15 @@ fn compile<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Compiled<'tcx>, String> {
     let mut method_roots = HashSet::new();
     // 同一个类型的多个key、重复Transient槽位仍完整留在 provider model 中；这里只将
     // 有限声明闭包去重。循环声明由下游 Kahn/显式栈诊断，不递归物化。
+    let mut expansion_span = rustc_span::DUMMY_SP;
     loop {
         if types.len() > crate::query_roots::MAX_QUERY_TYPES {
-            return Err(
+            crate::query_roots::expansion_error(
+                tcx,
+                expansion_span,
+                expansion_span,
+                "closed_service_types",
+                crate::query_roots::MAX_QUERY_TYPES,
                 "DI 闭合类型集合超过编译分析上限，请检查持续增长的泛型查询或服务蓝图".into(),
             );
         }
@@ -319,20 +345,29 @@ fn compile<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Compiled<'tcx>, String> {
             let known_types: Vec<_> = providers.iter().map(|p| types[p.data.type_id]).collect();
             for root in crate::query_roots::collect_with_providers(tcx, &known_types)? {
                 if method_roots.insert(root.service) {
-                    requests.push_back((root.service, None));
+                    requests.push_back((root.service, None, root.span));
                 }
             }
             if requests.is_empty() {
                 break;
             }
         }
-        if let Some((service, requested_key)) = requests.pop_front() {
+        if let Some((service, requested_key, requested_at)) = requests.pop_front() {
+            expansion_span = requested_at;
+            let origins = request_origins.entry(service).or_default();
+            if !origins.contains(&requested_at) {
+                origins.push(requested_at);
+            }
             let id = intern(&mut types, &mut indices, service);
             if interfaces.insert(service) {
                 let mut rest = Vec::new();
                 for binding in passive.drain(..) {
                     if binding.interface == service {
-                        requests.push_back((binding.concrete, None));
+                        requests.push_back((
+                            binding.concrete,
+                            None,
+                            tcx.def_span(binding.instance.def_id()),
+                        ));
                         bindings.push(binding);
                     } else {
                         rest.push(binding);
@@ -359,8 +394,12 @@ fn compile<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Compiled<'tcx>, String> {
             }
             continue;
         }
-        for input in &providers[cursor].data.inputs {
-            requests.push_back((types[input.type_id], Some(input.key.clone())));
+        for (slot, input) in providers[cursor].data.inputs.iter().enumerate() {
+            requests.push_back((
+                types[input.type_id],
+                Some(input.key.clone()),
+                providers[cursor].origin.input(slot),
+            ));
         }
         cursor += 1;
     }
@@ -397,17 +436,16 @@ fn compile<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Compiled<'tcx>, String> {
         .collect();
     let provider_model: Vec<_> = providers.iter().map(|p| p.data.clone()).collect();
     let mut plan =
-        model::compile(&type_model, &provider_model, &binding_model).map_err(|diagnostics| {
-            format!(
-                "DI 依赖图编译失败（{} 项）\n{}",
-                diagnostics.len(),
-                diagnostics
-                    .iter()
-                    .map(|d| format!("- [{:?}] {}", d.kind, d.message))
-                    .collect::<Vec<_>>()
-                    .join("\n")
+        model::compile(&type_model, &provider_model, &binding_model).unwrap_or_else(|issues| {
+            diagnostics::report(
+                tcx,
+                &types,
+                &providers,
+                &bindings,
+                &request_origins,
+                &issues,
             )
-        })?;
+        });
 
     // 完整候选集先经过图验证，才能裁掉不参与实际执行的投影。提前裁剪会掩盖
     // 重复显式 binding、缺失 concrete provider 或候选歧义；这些错误必须继续拒绝。

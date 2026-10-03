@@ -24,6 +24,7 @@ pub(crate) fn support(generic: bool) -> TokenStream {
         plan_provider,
         plan_input,
         plan_factory,
+        plan_origin,
     ] = [
         Marker::Provider,
         Marker::Dependency,
@@ -32,6 +33,7 @@ pub(crate) fn support(generic: bool) -> TokenStream {
         Marker::PlanProvider,
         Marker::PlanInput,
         Marker::PlanFactory,
+        Marker::PlanOrigin,
     ]
     .map(|marker| ident(marker.name()));
     let blueprint = generic.then(|| quote! {
@@ -62,6 +64,8 @@ pub(crate) fn support(generic: bool) -> TokenStream {
             pub const fn #plan_input<T: ?Sized, const SLOT: usize, const OPTIONAL: bool, const LAZY: bool>(_key: #key, _label: &'static str) {}
             #[inline(never)]
             pub const fn #plan_factory<const ASYNC: bool>() {}
+            #[inline(never)]
+            pub const fn #plan_origin<const KIND: u8, const SLOT: usize>(_label: &'static str) {}
             #blueprint
         }
     }

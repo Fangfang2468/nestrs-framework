@@ -6,11 +6,27 @@
 
 use zyn::{
     Arg, FromArg,
+    proc_macro2::Span,
     syn::{self, Expr, ExprLit, Lit, spanned::Spanned},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum ServiceKeySpec {
+/// key 的身份与它在用户源码中的位置分别保存。位置只用于诊断，不参与匹配。
+#[derive(Debug, Clone)]
+pub(crate) struct ServiceKeySpec {
+    pub(crate) kind: ServiceKeyKind,
+    pub(crate) span: Span,
+}
+
+impl PartialEq for ServiceKeySpec {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+    }
+}
+
+impl Eq for ServiceKeySpec {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ServiceKeyKind {
     /// 属性字面量中声明的服务名称。
     Named(String),
 
@@ -41,10 +57,16 @@ pub(crate) fn from_literal(literal: &Lit) -> syn::Result<ServiceKeySpec> {
         Lit::Str(value) if value.value().is_empty() => {
             Err(syn::Error::new_spanned(value, "key 字符串不可为空"))
         }
-        Lit::Str(value) => Ok(ServiceKeySpec::Named(value.value())),
+        Lit::Str(value) => Ok(ServiceKeySpec {
+            kind: ServiceKeyKind::Named(value.value()),
+            span: value.span(),
+        }),
         Lit::Int(value) => value
             .base10_parse::<usize>()
-            .map(ServiceKeySpec::Indexed)
+            .map(|index| ServiceKeySpec {
+                kind: ServiceKeyKind::Indexed(index),
+                span: value.span(),
+            })
             .map_err(|_| {
                 syn::Error::new_spanned(value, "key 整数必须是可表示为 usize 的非负字面量")
             }),
@@ -82,11 +104,11 @@ mod tests {
     fn parses_string_and_integer_keys() {
         assert_eq!(
             from_expression(&parse_quote!("named")).expect("string key"),
-            ServiceKeySpec::Named("named".to_owned())
+            ServiceKeySpec::named("named")
         );
         assert_eq!(
             from_expression(&parse_quote!(7)).expect("integer key"),
-            ServiceKeySpec::Indexed(7)
+            ServiceKeySpec::indexed(7)
         );
     }
 
@@ -103,6 +125,22 @@ mod tests {
                     .contains("key 必须是字符串或非负整数值字面量"),
                 "unexpected diagnostic: {error}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+impl ServiceKeySpec {
+    pub(crate) fn named(value: &str) -> Self {
+        Self {
+            kind: ServiceKeyKind::Named(value.to_owned()),
+            span: Span::call_site(),
+        }
+    }
+    pub(crate) fn indexed(value: usize) -> Self {
+        Self {
+            kind: ServiceKeyKind::Indexed(value),
+            span: Span::call_site(),
         }
     }
 }

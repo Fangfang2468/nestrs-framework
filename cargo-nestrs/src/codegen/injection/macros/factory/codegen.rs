@@ -43,6 +43,7 @@ pub(crate) fn emit_factory_provider(
     config: FactoryConfig,
     primary: bool,
     lazy: Option<bool>,
+    source: crate::codegen::source::ProviderOrigin,
 ) -> zyn::TokenStream {
     let factory = analysis.item.sig.ident.clone();
     let success_type = &analysis.output.success_type;
@@ -52,6 +53,7 @@ pub(crate) fn emit_factory_provider(
     let reflection_module = ident(protocol::REFLECTION_MODULE);
     let factory_marker = ident(Marker::PlanFactory.name());
     let provider_marker = ident(Marker::Provider.name());
+    let origins = source.render();
     let provider_const = zyn::format_ident!("__nestrs_factory_provider_for_{factory}");
 
     zyn! {
@@ -68,6 +70,7 @@ pub(crate) fn emit_factory_provider(
                 {{ reflection_module }}::{{ provider_marker }}::<{{ analysis.output.success_type.clone() }}>(
                     @EmitCompilerKey(key = config.key.clone())
                 );
+                {{ origins }}
                 @EmitPlanProvider(
                     service_type = service_type.clone(),
                     key = config.key.clone(),
@@ -360,10 +363,15 @@ mod tests {
         let analysis = analyze_factory(syn::parse_str(source).expect("factory should parse"))
             .expect("factory should analyze");
         EmitFactoryProvider {
+            source: crate::codegen::source::ProviderOrigin::from_args(
+                analysis.item.sig.ident.clone(),
+                &syn::parse_quote!(),
+                None,
+            ),
             analysis,
             config: FactoryConfig {
                 lifetime: ServiceLifetime::Scoped,
-                key: Some(ServiceKeySpec::Named("writer".to_owned())),
+                key: Some(ServiceKeySpec::named("writer")),
                 cleanup: None,
             },
             primary: true,

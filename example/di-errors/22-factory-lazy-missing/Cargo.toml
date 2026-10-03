@@ -1,0 +1,9 @@
+[package]
+name = "nestrs-error-factory-lazy-missing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+nestrs-core.workspace = true

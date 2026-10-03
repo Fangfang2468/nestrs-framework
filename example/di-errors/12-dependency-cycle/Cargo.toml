@@ -1,0 +1,9 @@
+[package]
+name = "nestrs-error-dependency-cycle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+nestrs-core.workspace = true

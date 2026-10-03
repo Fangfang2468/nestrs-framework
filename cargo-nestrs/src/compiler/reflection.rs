@@ -165,6 +165,7 @@ fn marker(tcx: TyCtxt<'_>, definition: DefId, parameters: &[Parameter], inputs: 
     }
     match (inputs, signature.inputs()) {
         (Inputs::None, []) => true,
+        (Inputs::Label, [label]) => static_str(*label),
         (Inputs::Key, [key]) => key_type(tcx, *key, tcx.parent(definition)),
         (Inputs::KeyLabel, [key, label]) => {
             key_type(tcx, *key, tcx.parent(definition)) && static_str(*label)

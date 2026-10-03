@@ -13,6 +13,7 @@ mod constructor_codegen;
 mod constructor_ide;
 mod injection;
 mod reflection;
+mod source;
 
 mod utility;
 
@@ -104,6 +105,8 @@ fn injectable(item: syn::ItemStruct, args: Args) -> zyn::Output {
         Ok(primary) => primary,
         Err(error) => return error.into_compile_error().into(),
     };
+    let source =
+        source::ProviderOrigin::from_args(item.ident.clone(), &args, primary.source_span());
     let primary_attribute_use = primary.consumed_attribute_use();
     let lazy = match take_lazy_for_provider(&mut item.attrs) {
         Ok(lazy) => lazy,
@@ -147,6 +150,7 @@ fn injectable(item: syn::ItemStruct, args: Args) -> zyn::Output {
                     analysis = analyzed_fields,
                     config = config,
                     primary = primary.is_primary(),
+                    source = source.clone(),
                     lazy = lazy.value(),
                     mode = constructor_mode,
                 )
@@ -162,6 +166,7 @@ fn injectable(item: syn::ItemStruct, args: Args) -> zyn::Output {
                         analysis = analyzed_fields,
                         config = config,
                         primary = primary.is_primary(),
+                        source = source.clone(),
                         lazy = lazy.value(),
                         mode = constructor_mode,
                     )
@@ -190,6 +195,8 @@ fn factory(item: syn::ItemFn, args: Args) -> zyn::Output {
         Ok(primary) => primary,
         Err(error) => return error.into_compile_error().into(),
     };
+    let source =
+        source::ProviderOrigin::from_args(item.sig.ident.clone(), &args, primary.source_span());
     let primary_attribute_use = primary.consumed_attribute_use();
     let lazy = match take_lazy_for_provider(&mut item.attrs) {
         Ok(lazy) => lazy,
@@ -220,6 +227,7 @@ fn factory(item: syn::ItemFn, args: Args) -> zyn::Output {
                                 analysis = analysis.clone(),
                                 config = config,
                                 primary = primary.is_primary(),
+                                source = source.clone(),
                                 lazy = lazy.value(),
                             )
                         }

@@ -60,6 +60,8 @@ struct Marker<'tcx> {
     types: Vec<Ty<'tcx>>,
     owner: LocalDefId,
     span: Span,
+    /// 仅供诊断；不改变自动投影插入所用的词法位置。
+    diagnostic_span: Span,
     key: Option<CompilerKey>,
     passive: bool,
 }
@@ -95,6 +97,7 @@ impl<'tcx> Visitor<'tcx> for MarkerVisitor<'_, 'tcx> {
                     types: args.types().collect(),
                     owner: self.owner,
                     span: expr.span,
+                    diagnostic_span: marker_type_span(function).unwrap_or(expr.span),
                     key,
                     passive: false,
                 });
@@ -102,6 +105,23 @@ impl<'tcx> Visitor<'tcx> for MarkerVisitor<'_, 'tcx> {
         }
         intravisit::walk_expr(self, expr);
     }
+}
+
+/// 已认证 marker 的类型参数仍是原始 HIR 类型；即使整个生成调用没有可用的
+/// 用户范围，这里也能保留别名、泛型参数和完整 dyn bound 的源码范围。
+fn marker_type_span(function: &rustc_hir::Expr<'_>) -> Option<Span> {
+    let rustc_hir::ExprKind::Path(rustc_hir::QPath::Resolved(_, path)) = function.kind else {
+        return None;
+    };
+    path.segments
+        .last()?
+        .args?
+        .args
+        .iter()
+        .find_map(|arg| match arg {
+            rustc_hir::GenericArg::Type(ty) => Some(ty.span),
+            _ => None,
+        })
 }
 
 impl MarkerVisitor<'_, '_> {
@@ -166,8 +186,9 @@ fn normalized<'tcx>(
     tcx: TyCtxt<'tcx>,
     owner: LocalDefId,
     ty: Ty<'tcx>,
+    span: Span,
 ) -> Result<Ty<'tcx>, String> {
-    crate::query_roots::validate_type_complexity(tcx, ty)?;
+    crate::query_roots::validate_type_complexity_at(tcx, ty, span, span)?;
     tcx.try_normalize_erasing_regions(
         if tcx.def_kind(owner) == DefKind::Mod {
             ty::TypingEnv::fully_monomorphized()
@@ -337,6 +358,7 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
                 types: vec![root.service],
                 owner: tcx.parent_module_from_def_id(root.owner).to_local_def_id(),
                 span: root.span,
+                diagnostic_span: root.span,
                 key: None,
                 passive: false,
             }),
@@ -354,7 +376,7 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
         {
             if marker.kind == MarkerKind::Provider {
                 explicit_providers.insert((
-                    normalized(tcx, marker.owner, marker.types[0])?,
+                    normalized(tcx, marker.owner, marker.types[0], marker.diagnostic_span)?,
                     marker
                         .key
                         .clone()
@@ -397,9 +419,10 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
         if closed(concrete) {
             closed_impls.push(Marker {
                 kind: MarkerKind::Request,
-                types: vec![normalized(tcx, owner, concrete)?],
+                types: vec![normalized(tcx, owner, concrete, tcx.def_span(owner))?],
                 owner,
                 span: tcx.def_span(owner),
+                diagnostic_span: tcx.def_span(owner),
                 key: None,
                 passive: true,
             });
@@ -421,6 +444,7 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
                         types: vec![root.service],
                         owner: tcx.parent_module_from_def_id(root.owner).to_local_def_id(),
                         span: root.span,
+                        diagnostic_span: root.span,
                         key: None,
                         passive: false,
                     });
@@ -447,11 +471,15 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
             break;
         };
         for ty in &mut marker.types {
-            *ty = normalized(tcx, marker.owner, *ty)?;
+            *ty = normalized(tcx, marker.owner, *ty, marker.diagnostic_span)?;
             if all_types.insert(*ty) && all_types.len() > crate::query_roots::MAX_QUERY_TYPES {
-                return Err(
-                    "DI 查询/Provider 闭合类型超过 100000 个，可能存在不断增长的递归泛型声明"
-                        .into(),
+                crate::query_roots::expansion_error(
+                    tcx,
+                    marker.diagnostic_span,
+                    marker.diagnostic_span,
+                    "discovery_closed_types",
+                    crate::query_roots::MAX_QUERY_TYPES,
+                    "DI 查询/Provider 闭合类型超过 100000 个，可能存在不断增长的递归泛型声明".into(),
                 );
             }
         }
@@ -716,6 +744,7 @@ fn external_blueprint_markers<'tcx>(
             types: generic_args.types().collect(),
             owner,
             span: request_span,
+            diagnostic_span: request_span,
             key,
             passive: false,
         });

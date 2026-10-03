@@ -161,7 +161,7 @@ fn native_tools_compile_run_export_and_refresh_ide_in_paths_with_spaces() {
         .unwrap();
     assert!(!invalid_graph.status.success());
     assert!(
-        String::from_utf8_lossy(&invalid_graph.stderr).contains("DI 依赖图编译失败"),
+        String::from_utf8_lossy(&invalid_graph.stderr).contains("[NESTRS-DI001]"),
         "{}",
         String::from_utf8_lossy(&invalid_graph.stderr),
     );

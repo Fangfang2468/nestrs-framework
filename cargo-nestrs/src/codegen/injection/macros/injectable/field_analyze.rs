@@ -270,7 +270,14 @@ mod tests {
         match &specs[1].strategy {
             FieldStrategy::Inject {
                 service_type,
-                key: Some(ServiceKeySpec::Named(key)),
+                key:
+                    Some(ServiceKeySpec {
+                        kind:
+                            crate::codegen::injection::macros_attrs::service_key::ServiceKeyKind::Named(
+                                key,
+                            ),
+                        ..
+                    }),
                 optional,
                 ..
             } => {
@@ -309,7 +316,7 @@ mod tests {
         assert!(matches!(
             specs[0].strategy,
             FieldStrategy::Inject {
-                key: Some(ServiceKeySpec::Named(ref key)),
+                key: Some(ServiceKeySpec { kind: crate::codegen::injection::macros_attrs::service_key::ServiceKeyKind::Named(ref key), .. }),
                 optional: false,
                 ..
             } if key == "named"
@@ -317,7 +324,7 @@ mod tests {
         assert!(matches!(
             specs[1].strategy,
             FieldStrategy::Inject {
-                key: Some(ServiceKeySpec::Indexed(7)),
+                key: Some(ServiceKeySpec { kind: crate::codegen::injection::macros_attrs::service_key::ServiceKeyKind::Indexed(7), .. }),
                 optional: false,
                 ..
             }

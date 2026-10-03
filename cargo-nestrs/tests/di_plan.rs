@@ -1,7 +1,8 @@
 //! 独立于 rustc 与运行时的语义计划回归，覆盖选择规则及深图的迭代算法。
 
 use cargo_nestrs::di_plan::{
-    Binding, DiagnosticKind as Kind, Input, Key, Lifetime, Plan, Provider, Type, compile,
+    Binding, DependencyEdge, DiagnosticEvidence as Evidence, DiagnosticKind as Kind, Input, Key,
+    Lifetime, Plan, Provider, Type, compile,
 };
 
 fn types(count: usize) -> Vec<Type> {
@@ -556,6 +557,279 @@ fn diagnostics_are_repeatable_and_keep_independent_errors() {
             .any(|error| error.kind == Kind::MissingDependency)
     );
     assert_eq!(compile(&types(2), &providers, &[]).unwrap_err(), first);
+}
+
+#[test]
+fn missing_evidence_identifies_the_exact_input_without_parsing_names_or_slots() {
+    let mut consumer = provider(0, &[1, 2]);
+    consumer.inputs[1].key = Key::Indexed(7);
+    consumer.inputs[1].lazy = true;
+    // 即使展示名称和槽位元数据损坏，证据仍可访问原始输入；另有 InvalidMetadata。
+    consumer.inputs[0].label = "相同的字段描述".into();
+    consumer.inputs[1].label = consumer.inputs[0].label.clone();
+    consumer.inputs[1].slot = 500;
+    let providers = [provider(1, &[]), consumer];
+    let errors = compile(&types(3), &providers, &[]).unwrap_err();
+    let missing = errors
+        .iter()
+        .find(|error| error.kind == Kind::MissingDependency)
+        .unwrap();
+    assert_eq!(
+        missing.evidence,
+        Evidence::MissingDependency {
+            consumer: 1,
+            slot: 1
+        }
+    );
+    let input = &providers[1].inputs[1];
+    assert_eq!(input.type_id, 2);
+    assert_eq!(input.key, Key::Indexed(7));
+    assert!(input.lazy);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.evidence == Evidence::InvalidMetadata)
+    );
+}
+
+#[test]
+fn declaration_conflicts_keep_original_model_indices_and_first_declarations() {
+    let errors = compile(
+        &types(5),
+        &[
+            provider(1, &[]),
+            provider(0, &[]),
+            provider(0, &[]),
+            provider(0, &[]),
+        ],
+        &[
+            binding(1, 2),
+            binding(0, 3),
+            binding(0, 3),
+            binding(0, 3),
+            binding(4, 2),
+        ],
+    )
+    .unwrap_err();
+    for expected in [
+        Evidence::DuplicateProvider {
+            first: 1,
+            duplicate: 2,
+        },
+        Evidence::DuplicateProvider {
+            first: 1,
+            duplicate: 3,
+        },
+        Evidence::DuplicateBinding {
+            first: 1,
+            duplicate: 2,
+        },
+        Evidence::DuplicateBinding {
+            first: 1,
+            duplicate: 3,
+        },
+        Evidence::OrphanBinding { binding: 4 },
+    ] {
+        assert!(
+            errors.iter().any(|error| error.evidence == expected),
+            "缺少证据 {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn ambiguity_evidence_keeps_exact_key_candidates_and_shared_optional_lazy_uses() {
+    let mut consumer = provider(0, &[4, 4]);
+    for input in &mut consumer.inputs {
+        input.optional = true;
+        input.lazy = true;
+        input.key = Key::Named("mail".into());
+    }
+    let mut first = provider(1, &[]);
+    first.key = Key::Named("mail".into());
+    first.primary = true;
+    let mut second = provider(2, &[]);
+    second.key = first.key.clone();
+    second.primary = true;
+    let providers = [consumer, first, provider(3, &[]), second];
+    let errors = compile(
+        &types(5),
+        &providers,
+        &[binding(1, 4), binding(2, 4), binding(3, 4)],
+    )
+    .unwrap_err();
+    assert_eq!(errors.len(), 1, "同一歧义不应再派生缺失或按使用位置重复");
+    assert_eq!(
+        errors[0].evidence,
+        Evidence::AmbiguousTrait {
+            type_id: 4,
+            key: Key::Named("mail".into()),
+            candidates: vec![1, 3],
+        }
+    );
+    assert!(providers[1].primary && providers[3].primary);
+    assert!(
+        providers[0]
+            .inputs
+            .iter()
+            .all(|input| input.optional && input.lazy)
+    );
+}
+
+#[test]
+fn cycle_evidence_is_one_real_closed_path_per_component_with_original_slots() {
+    let mut first = provider(1, &[4, 2, 3]);
+    first.inputs[1].optional = true;
+    let mut second = provider(2, &[4, 1]);
+    second.inputs[1].lazy = true;
+    let providers = [
+        provider(0, &[1]), // 依赖环的尾部不能进入闭环证据。
+        first,
+        second,
+        provider(3, &[1]), // 与 1、2 同一分量，不能再发出第二条环诊断。
+        provider(4, &[]),
+        provider(5, &[5]), // 独立分量仍须单独报告。
+    ];
+    let errors = compile(&types(6), &providers, &[]).unwrap_err();
+    let cycles: Vec<_> = errors
+        .iter()
+        .filter_map(|error| match &error.evidence {
+            Evidence::Cycle { edges } => Some(edges),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cycles.len(), 2);
+    assert_eq!(
+        *cycles[0],
+        [
+            DependencyEdge {
+                consumer: 1,
+                slot: 1,
+                target: 2
+            },
+            DependencyEdge {
+                consumer: 2,
+                slot: 1,
+                target: 1
+            },
+        ]
+    );
+    assert_eq!(
+        *cycles[1],
+        [DependencyEdge {
+            consumer: 5,
+            slot: 0,
+            target: 5
+        }]
+    );
+    assert!(providers[cycles[0][0].consumer].inputs[cycles[0][0].slot].optional);
+    assert!(providers[cycles[0][1].consumer].inputs[cycles[0][1].slot].lazy);
+    for edges in cycles {
+        for (index, edge) in edges.iter().enumerate() {
+            assert_eq!(
+                providers[edge.consumer].inputs[edge.slot].type_id,
+                providers[edge.target].type_id
+            );
+            assert_eq!(edge.target, edges[(index + 1) % edges.len()].consumer);
+        }
+    }
+}
+
+#[test]
+fn every_three_node_graph_reports_exactly_its_cyclic_components() {
+    // 穷举小图，用传递闭包独立判断 SCC；避免只验证 DFS 恰好遇到的一种环形。
+    for mask in 0_u16..(1 << 9) {
+        let mut reachable = [[false; 3]; 3];
+        let providers: Vec<_> = (0..3)
+            .map(|consumer| {
+                let targets: Vec<_> = (0..3)
+                    .filter(|&target| {
+                        let exists = mask & (1 << (consumer * 3 + target)) != 0;
+                        reachable[consumer][target] = exists;
+                        exists
+                    })
+                    .collect();
+                provider(consumer, &targets)
+            })
+            .collect();
+        for through in 0..3 {
+            for consumer in 0..3 {
+                for target in 0..3 {
+                    reachable[consumer][target] |=
+                        reachable[consumer][through] && reachable[through][target];
+                }
+            }
+        }
+        let representative = |node: usize| {
+            (0..3)
+                .find(|&other| reachable[node][other] && reachable[other][node])
+                .unwrap()
+        };
+        let expected: std::collections::BTreeSet<_> = (0..3)
+            .filter(|&node| reachable[node][node])
+            .map(representative)
+            .collect();
+        let errors = compile(&types(3), &providers, &[])
+            .err()
+            .unwrap_or_default();
+        assert_eq!(errors.len(), expected.len(), "graph mask: {mask:b}");
+        let mut actual = std::collections::BTreeSet::new();
+        for error in errors {
+            let Evidence::Cycle { edges } = error.evidence else {
+                panic!("小图只可能包含环错误：{error:?}");
+            };
+            assert!(!edges.is_empty());
+            assert!(actual.insert(representative(edges[0].consumer)));
+            for (index, edge) in edges.iter().enumerate() {
+                assert_eq!(
+                    providers[edge.consumer].inputs[edge.slot].type_id,
+                    edge.target
+                );
+                assert_eq!(edge.target, edges[(index + 1) % edges.len()].consumer);
+            }
+        }
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn scope_evidence_keeps_optional_lazy_trait_path_to_the_actual_scoped_provider() {
+    let mut singleton = provider(0, &[3, 1]);
+    singleton.lifetime = Lifetime::Singleton;
+    singleton.inputs[1].lazy = true;
+    let mut transient = provider(1, &[3, 4]);
+    transient.inputs[1].optional = true;
+    let mut scoped = provider(2, &[]);
+    scoped.lifetime = Lifetime::Scoped;
+    let providers = [provider(3, &[]), singleton, transient, scoped];
+    let errors = compile(&types(5), &providers, &[binding(2, 4)]).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(
+        errors[0].evidence,
+        Evidence::ScopeRequired {
+            singleton: 1,
+            scoped: 3,
+            edges: vec![
+                DependencyEdge {
+                    consumer: 1,
+                    slot: 1,
+                    target: 2
+                },
+                DependencyEdge {
+                    consumer: 2,
+                    slot: 1,
+                    target: 3
+                },
+            ],
+        }
+    );
+    assert!(providers[1].inputs[1].lazy);
+    assert!(providers[2].inputs[1].optional);
+    assert_eq!(
+        providers[2].inputs[1].type_id, 4,
+        "请求接口不能冒充实际目标身份"
+    );
+    assert_eq!(providers[3].type_id, 2);
 }
 
 #[test]

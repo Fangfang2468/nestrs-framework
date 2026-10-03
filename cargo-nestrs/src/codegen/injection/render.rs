@@ -5,14 +5,18 @@
 //! 各自的宏期事实，避免同一份 ABI 出现两套实现。
 
 use crate::codegen::injection::{
-    macros_attrs::{cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKeySpec},
+    macros_attrs::{
+        cleanup::CleanupPath,
+        lifetime::ServiceLifetime,
+        service_key::{ServiceKeyKind, ServiceKeySpec},
+    },
     sub_macros::inject::{DependencyRequest, is_trait_object},
 };
 use crate::{
     codegen::reflection::ident,
-    protocol::{self, Initialization, Lifetime, Marker},
+    protocol::{self, Initialization, Lifetime, Marker, OriginKind},
 };
-use zyn::{syn, zyn};
+use zyn::{quote::quote_spanned, syn, syn::spanned::Spanned, zyn};
 
 /// 一条输入仅保留类型化执行能力；key、槽位策略和标签供编译器读 MIR 后消解。
 #[zyn::element]
@@ -23,17 +27,35 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
     let optional = request.optional;
     let lazy = request.lazy;
     let input_slot = request.input_slot;
-    let label = request.label.clone();
+    let span = service_type.span();
+    let label = syn::LitStr::new(
+        &request
+            .label
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        request.label.as_ref().map(syn::Ident::span).unwrap_or(span),
+    );
     let reflection = ident(protocol::REFLECTION_MODULE);
     let dependency = ident(Marker::Dependency.name());
-    let plan_input = ident(Marker::PlanInput.name());
+    let plan_input = syn::Ident::new(Marker::PlanInput.name(), span);
+    let source_module = syn::Ident::new(protocol::REFLECTION_MODULE, span);
+    let compiler_key = compiler_key_tokens(key.as_ref());
+    let type_end = crate::codegen::source::type_end(&service_type)
+        .map(|end| crate::codegen::source::origin(OriginKind::InputTypeEnd, input_slot, "", end));
+    let input_marker = quote_spanned!(span=>
+        #source_module::#plan_input::<#service_type, #input_slot, #optional, #lazy>(#compiler_key, #label);
+    );
+    let key_origin = key
+        .as_ref()
+        .map(|key| crate::codegen::source::origin(OriginKind::InputKey, input_slot, "", key.span));
     zyn! {
         ::nestrs_core::activation::adapter::InputAdapter {
             service_type: {
                 {{ reflection.clone() }}::{{ dependency }}::<{{ service_type.clone() }}, {{ input_slot }}>();
-                {{ reflection }}::{{ plan_input }}::<
-                    {{ service_type.clone() }}, {{ input_slot }}, {{ optional }}, {{ lazy }}
-                >(@EmitCompilerKey(key = key.clone()), {{ label.as_ref().map(ToString::to_string).unwrap_or_default() }});
+                {{ input_marker }}
+                {{ type_end }}
+                {{ key_origin }}
                 ::nestrs_core::service::ServiceType::create::<{{ service_type.clone() }}>()
             },
             lazy: @RenderLazyInput(service_type = service_type.clone(), optional = optional, lazy = lazy),
@@ -133,32 +155,44 @@ pub(crate) fn emit_plan_provider(
     } as u8;
     // 与工具内的初始化策略同源编码，driver 不从源码属性重新猜测策略。
     let initialization = Initialization::from_lazy(*lazy) as u8;
-    let reflection = ident(protocol::REFLECTION_MODULE);
-    let provider = ident(Marker::PlanProvider.name());
-    zyn! {
-        {{ reflection }}::{{ provider }}::<
-            {{ service_type }}, {{ lifetime_id }}, {{ primary }}, {{ initialization }}
-        >(@EmitCompilerKey(key = key.clone()));
+    let span = service_type.span();
+    let reflection = syn::Ident::new(protocol::REFLECTION_MODULE, span);
+    let provider = syn::Ident::new(Marker::PlanProvider.name(), span);
+    let compiler_key = compiler_key_tokens(key.as_ref());
+    let key_origin = key
+        .as_ref()
+        .map(|key| crate::codegen::source::origin(OriginKind::ProviderKey, 0, "", key.span));
+    let type_end = crate::codegen::source::type_end(service_type)
+        .map(|end| crate::codegen::source::origin(OriginKind::ProviderTypeEnd, 0, "", end));
+    quote_spanned! {span=>
+        #reflection::#provider::<#service_type, #lifetime_id, #primary, #initialization>(#compiler_key);
+        #type_end
+        #key_origin
     }
 }
 
 /// 将同一个静态 key 直接写入编译器 marker，供语义发现按精确身份选择蓝图。
 #[zyn::element]
 pub(crate) fn emit_compiler_key(key: Option<ServiceKeySpec>) -> zyn::TokenStream {
-    let reflection = ident(protocol::REFLECTION_MODULE);
-    let compiler_key = ident(protocol::COMPILER_KEY);
-    zyn! {
-        @match (key.as_ref()) {
-            Some(ServiceKeySpec::Named(name)) => {
-                {{ reflection.clone() }}::{{ compiler_key.clone() }}::Named({{ name }})
-            }
-            Some(ServiceKeySpec::Indexed(index)) => {
-                {{ reflection.clone() }}::{{ compiler_key.clone() }}::Indexed({{ index }})
-            }
-            None => {
-                {{ reflection }}::{{ compiler_key }}::Default
-            }
+    compiler_key_tokens(key.as_ref())
+}
+
+fn compiler_key_tokens(key: Option<&ServiceKeySpec>) -> zyn::TokenStream {
+    let span = key
+        .map(|key| key.span)
+        .unwrap_or_else(zyn::proc_macro2::Span::call_site);
+    let reflection = syn::Ident::new(protocol::REFLECTION_MODULE, span);
+    let compiler_key = syn::Ident::new(protocol::COMPILER_KEY, span);
+    match key.map(|key| &key.kind) {
+        Some(ServiceKeyKind::Named(name)) => {
+            let name = syn::LitStr::new(name, span);
+            quote_spanned!(span=> #reflection::#compiler_key::Named(#name))
         }
+        Some(ServiceKeyKind::Indexed(index)) => {
+            let index = syn::LitInt::new(&format!("{index}usize"), span);
+            quote_spanned!(span=> #reflection::#compiler_key::Indexed(#index))
+        }
+        None => quote_spanned!(span=> #reflection::#compiler_key::Default),
     }
 }
 

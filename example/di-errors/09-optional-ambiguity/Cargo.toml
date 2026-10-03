@@ -1,0 +1,9 @@
+[package]
+name = "nestrs-error-optional-ambiguity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+nestrs-core.workspace = true
