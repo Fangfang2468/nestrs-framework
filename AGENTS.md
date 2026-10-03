@@ -1,1384 +1,52 @@
-# Git Commit 规范
+# 仓库维护规范
 
-## 1. 概述
+## Git Commit
 
-本项目采用 **Conventional Commits** 规范管理 Git Commit。
-
-Commit Message 用于描述一次提交的目的和影响范围，使 Git History 保持清晰、可读、可追踪。
-
-本规范同时适用于：
-
-* 人工开发
-* AI Coding Agent
-* 自动化工具
-* CI/CD 相关提交
-
-所有提交都应遵循本文档定义的格式和约定。
-
----
-
-# 2. Commit Message 格式
-
-Commit Message 的基本格式：
-
-```text
-<type>(<scope>): <description>
-```
-
-例如：
-
-```text
-feat(nestrs-di): 增加依赖图构建功能
-fix(nestrs-core): 修复服务注册错误
-refactor(nestrs-runtime): 重构服务实例化流程
-test(nestrs-di): 增加循环依赖测试
-docs(nestrs-web): 补充路由使用文档
-```
-
-如果提交无法归属于某个明确的 package，可以省略 `scope`：
-
-```text
-chore: 更新许可证
-docs: 更新项目 README
-```
-
----
-
-# 3. Commit Message 组成
-
-Commit Message 由三个主要部分组成：
-
-```text
-type
-scope
-description
-```
-
-完整结构：
-
-```text
-<type>(<scope>): <description>
-```
-
-例如：
-
-```text
-feat(nestrs-di): 增加 Scoped 生命周期支持
-```
-
-其中：
-
-```text
-feat
-```
-
-表示提交类型。
-
-```text
-nestrs-di
-```
-
-表示受影响的 Cargo package。
-
-```text
-增加 Scoped 生命周期支持
-```
-
-表示本次提交的具体变化。
-
----
-
-# 4. Type
-
-`type` 用于表示本次提交的性质。
-
-本项目使用以下 Type：
-
-| Type       | 含义               |
-| ---------- | ---------------- |
-| `feat`     | 新增功能             |
-| `fix`      | 修复 Bug           |
-| `refactor` | 重构，不改变功能行为       |
-| `perf`     | 性能优化             |
-| `test`     | 测试相关修改           |
-| `docs`     | 文档相关修改           |
-| `build`    | 构建系统、Cargo、依赖等修改 |
-| `ci`       | CI/CD 相关修改       |
-| `chore`    | 其他维护性修改          |
-| `revert`   | 回滚提交             |
-
-除非确有必要，不应创建新的 Type。
-
----
-
-# 5. feat
-
-`feat` 用于新增功能。
-
-例如：
-
-```text
-feat(nestrs-di): 增加依赖注入功能
-feat(nestrs-web): 增加 Guard 支持
-feat(nestrs-config): 增加环境变量配置
-feat(nestrs-runtime): 增加 Scoped 生命周期支持
-```
-
-当提交的主要目的在于为用户增加新的能力时，应使用 `feat`。
-
----
-
-# 6. fix
-
-`fix` 用于修复已有功能中的 Bug 或错误行为。
-
-例如：
-
-```text
-fix(nestrs-di): 修复循环依赖检测错误
-fix(nestrs-web): 修复路由参数解析错误
-fix(nestrs-core): 修复服务注册失败问题
-```
-
-`fix` 应用于真正的错误修复，而不是普通代码修改。
-
----
-
-# 7. refactor
-
-`refactor` 用于代码重构。
-
-重构的主要特征是：
-
-> 改变代码结构，但不改变对外功能或行为。
-
-例如：
-
-```text
-refactor(nestrs-di): 分离服务注册与依赖解析
-refactor(nestrs-core): 简化服务注册流程
-refactor(nestrs-runtime): 重构服务实例化流程
-```
-
-如果修改同时引入了新功能，应优先使用 `feat`。
-
-如果修改主要用于修复 Bug，应使用 `fix`。
-
----
-
-# 8. perf
-
-`perf` 用于性能优化。
-
-例如：
-
-```text
-perf(nestrs-di): 减少依赖图构建过程中的内存分配
-perf(nestrs-web): 优化路由匹配性能
-perf(nestrs-core): 减少服务解析过程中的类型查找
-```
-
-只有当提交的主要目的为性能优化时，才使用 `perf`。
-
----
-
-# 9. test
-
-`test` 用于增加、修改或重构测试。
-
-例如：
-
-```text
-test(nestrs-di): 增加循环依赖测试
-test(nestrs-di): 增加服务生命周期测试
-test(nestrs-web): 增加路由参数测试
-```
-
-如果一次提交同时实现功能和测试，通常以功能作为 Type：
-
-```text
-feat(nestrs-di): 增加 Scoped 生命周期支持
-```
-
-而不是：
-
-```text
-test(nestrs-di): 增加 Scoped 生命周期支持
-```
-
----
-
-# 10. docs
-
-`docs` 用于纯文档修改。
-
-例如：
-
-```text
-docs(nestrs-di): 补充依赖注入生命周期说明
-docs(nestrs-web): 更新路由使用文档
-docs: 更新项目 README
-```
-
-如果提交同时修改代码和文档，应根据主要修改内容选择 Type。
-
----
-
-# 11. build
-
-`build` 用于构建系统、Cargo、依赖以及构建相关配置。
-
-例如：
-
-```text
-build(framework): 更新 workspace 依赖
-build(framework): 更新 Rust toolchain
-build(nestrs-di): 更新 crate 依赖
-```
-
-典型场景包括：
-
-* 修改 Cargo 配置
-* 更新依赖
-* 修改 workspace 配置
-* 修改构建脚本
-* 修改 Rust toolchain
-* 修改构建相关配置
-
----
-
-# 12. ci
-
-`ci` 用于 CI/CD 配置修改。
-
-例如：
-
-```text
-ci(framework): 增加 workspace CI 检查
-ci(framework): 增加 Clippy 检查
-ci(framework): 优化 GitHub Actions 构建流程
-```
-
----
-
-# 13. chore
-
-`chore` 用于无法合理归入其他类型的维护性修改。
-
-例如：
-
-```text
-chore(framework): 清理项目配置
-chore(framework): 更新项目元数据
-chore: 更新许可证
-```
-
-`chore` 不应成为默认 Type。
-
-如果修改明确属于 `feat`、`fix`、`refactor`、`build` 等类型，应使用对应类型。
-
----
-
-# 14. revert
-
-`revert` 用于回滚之前的提交。
-
-例如：
-
-```text
-revert(nestrs-di): 回滚依赖解析重构
-```
-
-如果需要，可以在 Commit Body 中说明被回滚的 Commit 以及回滚原因。
-
----
-
-# 15. Scope
-
-## 15.1 基本规则
-
-本项目是 Rust Monorepo，因此：
-
-> **Scope 默认使用 Rust workspace 中 Cargo package 的 package name。**
-
-Scope 表示：
-
-> 本次提交主要影响哪个 Cargo package。
-
-例如 workspace：
-
-```text
-nestrs/
-├── Cargo.toml
-└── crates/
-    ├── nestrs-core/
-    ├── nestrs-di/
-    ├── nestrs-macros/
-    ├── nestrs-runtime/
-    ├── nestrs-web/
-    ├── nestrs-config/
-    └── nestrs-logger/
-```
-
-对应的 Scope：
-
-```text
-nestrs-core
-nestrs-di
-nestrs-macros
-nestrs-runtime
-nestrs-web
-nestrs-config
-nestrs-logger
-```
-
-例如：
-
-```text
-feat(nestrs-di): 增加依赖图构建功能
-fix(nestrs-core): 修复服务注册错误
-feat(nestrs-macros): 增加 service 属性宏
-refactor(nestrs-runtime): 重构服务实例化流程
-feat(nestrs-web): 增加 Guard 支持
-```
-
----
-
-# 16. Scope 必须使用 Package Name
-
-Scope 应与 Cargo package 的名称保持一致。
-
-例如：
-
-```toml
-[package]
-name = "nestrs-di"
-```
-
-那么 Scope 应使用：
-
-```text
-nestrs-di
-```
-
-Commit：
-
-```text
-feat(nestrs-di): 增加依赖解析功能
-```
-
-而不是：
-
-```text
-feat(di): 增加依赖解析功能
-```
-
-也不是：
-
-```text
-feat(dependency): 增加依赖解析功能
-```
-
-这样可以让 Git History 与 Cargo workspace 的结构直接对应。
-
----
-
-# 17. Scope 不使用内部 Module
-
-Cargo package 内部可能存在：
-
-```text
-nestrs-di/
-└── src/
-    ├── graph/
-    ├── resolver/
-    ├── registry/
-    └── lifecycle/
-```
-
-即使只修改：
-
-```text
-src/graph/
-```
-
-Scope 仍然应该是：
-
-```text
-nestrs-di
-```
-
-例如：
-
-```text
-feat(nestrs-di): 增加依赖图构建功能
-```
-
-而不是：
-
-```text
-feat(graph): 增加依赖图构建功能
-```
-
-原因是：
-
-> `graph` 是内部 module，而 `nestrs-di` 是独立的 Cargo package。
-
-Scope 应优先反映 package 边界，而不是源码目录边界。
-
----
-
-# 18. Framework Scope
-
-如果一次提交针对整个 Rust Monorepo，而不是某一个独立 package，则使用：
-
-```text
-framework
-```
-
-`framework` 是一个特殊 Scope。
-
-它表示：
-
-> 整个 Nestrs framework workspace。
-
-`framework` 不代表某个具体 Cargo package。
-
----
-
-# 19. 什么时候使用 framework
-
-以下情况通常应该使用：
-
-```text
-framework
-```
-
-### 19.1 Workspace Cargo.toml
-
-例如修改根目录：
-
-```text
-Cargo.toml
-```
-
-Commit：
-
-```text
-build(framework): 调整 workspace 配置
-```
-
----
-
-### 19.2 Workspace Dependencies
-
-例如：
-
-```toml
-[workspace.dependencies]
-tokio = ...
-```
-
-Commit：
-
-```text
-build(framework): 更新 workspace 依赖
-```
-
----
-
-### 19.3 Rust Toolchain
-
-例如修改：
-
-```text
-rust-toolchain.toml
-```
-
-Commit：
-
-```text
-build(framework): 更新 Rust toolchain
-```
-
----
-
-### 19.4 Workspace CI
-
-例如修改整个 workspace 的 CI：
-
-```text
-.github/workflows/ci.yml
-```
-
-Commit：
-
-```text
-ci(framework): 增加 workspace CI 检查
-```
-
----
-
-### 19.5 全局工程配置
-
-例如：
-
-```text
-.gitignore
-rustfmt.toml
-clippy.toml
-```
-
-如果其影响范围是整个 workspace：
-
-```text
-chore(framework): 调整全局开发配置
-```
-
----
-
-# 20. 多 Package 修改
-
-如果一个提交同时修改多个 Cargo package，需要根据修改的性质决定 Scope。
-
-如果多个 package 的修改属于**同一个整体架构变更**，使用：
-
-```text
-framework
-```
-
-例如一次 DI 架构重构同时修改：
-
-```text
-nestrs-core
-nestrs-di
-nestrs-runtime
-```
-
-可以：
-
-```text
-refactor(framework): 重构服务解析架构
-```
-
----
-
-# 21. 多 Package 修改不代表一定使用 framework
-
-如果多个 package 的修改实际上属于不同逻辑，则应该拆分 Commit。
-
-不推荐：
-
-```text
-feat(framework): 增加 DI、修改 Logger、修复 Web 路由
-```
-
-应该拆分：
-
-```text
-feat(nestrs-di): 增加依赖注入功能
-refactor(nestrs-logger): 调整日志初始化流程
-fix(nestrs-web): 修复路由注册错误
-```
-
-因此：
-
-> `framework` 表示一个整体性的 workspace 级变更，而不是“这次修改碰了多个 package”。
-
----
-
-# 22. Scope 省略
-
-如果提交没有合理的 Scope，可以省略：
-
-```text
-chore: 更新许可证
-docs: 更新项目 README
-```
-
-不要为了填写 Scope 而强行指定一个不准确的 package。
-
----
-
-# 23. Description
-
-Description 必须：
-
-* 使用中文
-* 简洁
-* 准确
-* 描述实际变化
-* 避免无意义的表达
-* 避免过多实现细节
-
-推荐：
-
-```text
-feat(nestrs-di): 增加依赖图构建功能
-fix(nestrs-di): 修复循环依赖检测错误
-refactor(nestrs-core): 简化服务注册流程
-perf(nestrs-di): 减少依赖解析过程中的内存分配
-```
-
-不推荐：
-
-```text
-feat(nestrs-di): 做了一些修改
-fix(nestrs-di): 修复了一些问题
-refactor(nestrs-core): 改了一下代码
-```
-
----
-
-# 24. Description 必须使用中文
-
-本项目规定：
-
-> **Commit Message 的 Description 必须使用中文。**
-
-例如：
-
-正确：
-
-```text
-feat(nestrs-di): 增加依赖图构建功能
-```
-
-错误：
-
-```text
-feat(nestrs-di): add dependency graph
-```
-
-但是以下内容可以保留英文：
-
-* Cargo package name
-* Rust 类型名称
-* API 名称
-* crate 名称
-* 技术术语
-* 属性宏名称
-* 库名称
-
-例如：
-
-```text
-feat(nestrs-di): 增加 DependencyGraph 支持
-feat(nestrs-macros): 修复 #[service] 宏解析错误
-feat(nestrs-runtime): 增加 Tokio runtime 支持
-```
-
----
-
-# 25. Description 应描述“变化”
-
-Commit Message 应优先表达：
-
-> 这次提交改变了什么？
-
-而不是：
-
-> 修改了哪些代码？
-
-例如不推荐：
-
-```text
-refactor(nestrs-di): 将 Vec 修改为 BTreeSet
-```
-
-如果真正的目的在于解决重复依赖：
-
-```text
-refactor(nestrs-di): 消除依赖图中的重复节点
-```
-
-`BTreeSet` 是实现细节，而“消除重复节点”才是修改的实际目的。
-
----
-
-# 26. Description 使用明确动词
-
-推荐使用：
-
-```text
-增加
-支持
-修复
-移除
-重构
-优化
-简化
-调整
-补充
-```
-
-例如：
-
-```text
-feat(nestrs-di): 支持 Trait 类型注入
-fix(nestrs-web): 修复请求参数解析
-refactor(nestrs-core): 简化服务注册 API
-perf(nestrs-di): 优化依赖图遍历
-docs(nestrs-di): 补充服务生命周期说明
-```
-
----
-
-# 27. Description 长度
-
-Subject 应保持简洁。
-
-推荐控制在约 **72 个字符以内**。
-
-推荐：
-
-```text
-feat(nestrs-di): 增加 Scoped 生命周期支持
-```
-
-不推荐：
-
-```text
-feat(nestrs-di): 增加 Scoped 生命周期支持并重构服务解析流程同时修复多个生命周期相关问题
-```
-
-如果需要表达更多信息，应使用 Commit Body。
-
----
-
-# 28. 标点符号
-
-Description 末尾不添加句号。
-
-正确：
-
-```text
-feat(nestrs-di): 增加 Scoped 生命周期支持
-```
-
-不推荐：
-
-```text
-feat(nestrs-di): 增加 Scoped 生命周期支持。
-```
-
----
-
-# 29. Emoji
-
-Commit Message 默认不使用 Emoji。
-
-不推荐：
-
-```text
-✨ feat(nestrs-di): 增加依赖注入
-🐛 fix(nestrs-web): 修复路由错误
-```
-
-除非项目维护者明确要求，否则不要使用 Emoji。
-
----
-
-# 30. Commit Body
-
-当 Subject 无法完整表达修改内容时，可以增加 Commit Body。
-
-格式：
-
-```text
-<type>(<scope>): <description>
-
-<body>
-```
-
-例如：
-
-```text
-feat(nestrs-di): 增加依赖图拓扑排序
-
-使用 Kahn 算法对服务依赖关系进行拓扑排序，
-生成服务实例化所需的解析顺序。
-
-同时增加循环依赖检测。
-```
-
-Body 可以用于说明：
-
-* 为什么进行修改
-* 采用什么设计
-* 重要的行为变化
-* 兼容性问题
-* 需要特别注意的事项
-
-简单的修改不需要 Body。
-
----
-
-# 31. Breaking Change
-
-如果一次提交会破坏现有 API 或行为兼容性，应标记为 Breaking Change。
-
-格式：
-
-```text
-<type>(<scope>)!: <description>
-```
-
-例如：
-
-```text
-feat(nestrs-di)!: 重构服务注册 API
-```
-
-也可以在 Body 中使用：
-
-```text
-BREAKING CHANGE:
-```
-
-例如：
-
-```text
-feat(nestrs-di)!: 重构服务注册 API
-
-BREAKING CHANGE: ServiceRegistry::register_service 已被移除，
-请使用 ServiceRegistry::register。
-```
-
-Breaking Change 必须明确说明对现有用户造成的影响。
-
----
-
-# 32. Commit Granularity
-
-一个 Commit 应尽可能表达一个**独立的逻辑变化**。
-
-推荐：
-
-```text
-feat(nestrs-di): 增加依赖图构建
-test(nestrs-di): 增加依赖图测试
-fix(nestrs-di): 修复循环依赖检测
-```
-
-不推荐：
-
-```text
-feat(framework): 增加依赖图、修改 Logger、修复 Web 路由
-```
-
-不同逻辑应拆分为不同 Commit。
-
----
-
-# 33. 不要机械地按照文件拆分 Commit
-
-Commit 应按照**逻辑边界**划分，而不是按照文件划分。
-
-例如一个完整功能可能同时修改：
-
-```text
-nestrs-di/src/graph.rs
-nestrs-di/src/resolver.rs
-nestrs-di/tests/di.rs
-```
-
-如果它们共同实现一个功能，可以使用一个 Commit：
-
-```text
-feat(nestrs-di): 增加依赖图构建功能
-```
-
-不要机械拆成：
-
-```text
-feat(nestrs-di): 修改 graph.rs
-feat(nestrs-di): 修改 resolver.rs
-test(nestrs-di): 修改测试
-```
-
----
-
-# 34. 一个 Commit 应保持内部一致
-
-Commit 中的所有修改应该围绕同一个逻辑目的。
-
-例如：
-
-```text
-feat(nestrs-di): 增加 Scoped 生命周期支持
-```
-
-可以包含：
-
-```text
-Scoped 生命周期实现
-相关类型修改
-相关测试
-必要的文档
-```
-
-但不应该同时包含：
-
-```text
-Logger 重构
-Web 路由修改
-README 样式调整
-无关依赖更新
-```
-
----
-
-# 35. AI 提交 Commit
-
-AI Coding Agent 创建 Commit 时，也必须遵守本规范。
-
-AI 在创建 Commit 前，应检查：
-
-```bash
-git status
-git diff
-git diff --staged
-```
-
-并根据实际修改内容确定：
-
-```text
-type
-scope
-description
-```
-
-不得仅根据用户最初的任务描述猜测 Commit Message。
-
----
-
-# 36. AI 不得盲目提交全部修改
-
-AI 不应该在没有检查工作区的情况下直接执行：
-
-```bash
-git add .
-git commit -m "..."
-```
-
-或者：
-
-```bash
-git add -A
-```
-
-如果工作区中存在与当前任务无关的修改，应避免将这些修改加入当前 Commit。
-
-应根据实际修改内容选择需要提交的文件。
-
----
-
-# 37. AI Commit Message 规则
-
-AI 创建 Commit 时必须满足：
-
-```text
-Conventional Commits
-        +
-正确 Type
-        +
-正确 Scope
-        +
-中文 Description
-```
-
-例如：
-
-```text
-feat(nestrs-di): 增加依赖图构建功能
-```
-
-而不是：
-
-```text
-feat: add dependency graph
-```
-
-也不是：
-
-```text
-feat(di): 增加依赖图
-```
-
-因为 `di` 不是 Cargo package name。
-
----
-
-# 38. AI 不得添加额外署名
-
-除非明确要求，否则 AI 不得在 Commit Message 中添加：
-
-```text
-Generated by AI
-Created by ChatGPT
-Co-authored-by: ChatGPT
-Co-authored-by: Claude
-Co-authored-by: Codex
-```
-
-也不得自行添加 Emoji。
-
----
-
-# 39. 常见正确示例
-
-### 新增功能
-
-```text
-feat(nestrs-di): 增加依赖图构建功能
-```
-
-### Bug 修复
-
-```text
-fix(nestrs-di): 修复循环依赖检测错误
-```
-
-### 重构
-
-```text
-refactor(nestrs-di): 分离服务注册与依赖解析
-```
-
-### 性能优化
-
-```text
-perf(nestrs-di): 减少依赖图构建过程中的内存分配
-```
-
-### 测试
-
-```text
-test(nestrs-di): 增加服务生命周期测试
-```
-
-### 文档
-
-```text
-docs(nestrs-di): 补充依赖注入生命周期说明
-```
-
-### Package 构建
-
-```text
-build(nestrs-di): 更新依赖版本
-```
-
-### Workspace 构建
-
-```text
-build(framework): 更新 workspace 依赖
-```
-
-### CI
-
-```text
-ci(framework): 增加 workspace CI 检查
-```
-
-### 全局维护
-
-```text
-chore(framework): 调整全局开发配置
-```
-
-### Breaking Change
-
-```text
-feat(nestrs-di)!: 重构服务注册 API
-```
-
----
-
-# 40. 常见错误
-
-## 40.1 使用英文 Description
-
-错误：
-
-```text
-feat(nestrs-di): add dependency injection
-```
-
-正确：
-
-```text
-feat(nestrs-di): 增加依赖注入功能
-```
-
----
-
-## 40.2 使用内部模块作为 Scope
-
-错误：
-
-```text
-feat(graph): 增加依赖图构建
-```
-
-正确：
-
-```text
-feat(nestrs-di): 增加依赖图构建
-```
-
----
-
-## 40.3 使用缩写代替 Package Name
-
-如果 Cargo package 是：
-
-```text
-nestrs-di
-```
-
-错误：
-
-```text
-feat(di): 增加依赖注入
-```
-
-正确：
-
-```text
-feat(nestrs-di): 增加依赖注入
-```
-
----
-
-## 40.4 多 Package 修改却滥用 framework
-
-错误：
-
-```text
-feat(framework): 修改 nestrs-di
-```
-
-如果实际上只修改了 `nestrs-di`，应该：
-
-```text
-feat(nestrs-di): 增加依赖注入功能
-```
-
-`framework` 只用于真正的 workspace / framework 级变化。
-
----
-
-## 40.5 Description 过于模糊
-
-错误：
-
-```text
-fix(nestrs-di): 修复问题
-```
-
-正确：
-
-```text
-fix(nestrs-di): 修复未注册服务导致的解析错误
-```
-
----
-
-## 40.6 滥用 chore
-
-错误：
-
-```text
-chore(nestrs-di): 增加依赖注入功能
-```
-
-正确：
-
-```text
-feat(nestrs-di): 增加依赖注入功能
-```
-
----
-
-## 40.7 将实现细节作为主要描述
-
-错误：
-
-```text
-refactor(nestrs-di): 将 Vec 修改为 BTreeSet
-```
-
-如果真正目的是消除重复节点：
-
-```text
-refactor(nestrs-di): 消除依赖图中的重复节点
-```
-
----
-
-## 40.8 一个 Commit 包含无关修改
-
-错误：
-
-```text
-feat(framework): 增加 DI、重构 Logger、修复 Web 路由
-```
-
-正确：
-
-```text
-feat(nestrs-di): 增加依赖注入功能
-refactor(nestrs-logger): 重构日志初始化流程
-fix(nestrs-web): 修复路由注册错误
-```
-
----
-
-# 41. 推荐的 Git History
-
-一个典型的 Nestrs 功能开发过程可以形成：
-
-```text
-feat(nestrs-di): 增加服务注册功能
-feat(nestrs-di): 增加依赖图构建
-feat(nestrs-di): 增加依赖拓扑排序
-feat(nestrs-di): 增加循环依赖检测
-test(nestrs-di): 增加依赖解析测试
-fix(nestrs-di): 修复重复依赖导致的解析错误
-refactor(nestrs-di): 分离注册图与解析图
-perf(nestrs-di): 减少依赖图构建过程中的内存分配
-docs(nestrs-di): 补充依赖注入生命周期说明
-```
-
-Workspace 级修改：
-
-```text
-build(framework): 更新 workspace 依赖
-build(framework): 更新 Rust toolchain
-ci(framework): 增加 workspace CI 检查
-chore(framework): 调整全局开发配置
-```
-
-这样的 Git History 可以直接反映 Nestrs 各个 Cargo package 的演进过程。
-
----
-
-# 42. Commit 快速参考
-
-标准格式：
+采用 Conventional Commits，格式为：
 
 ```text
 <type>(<scope>): <中文描述>
 ```
 
-Type：
+| type | 用途 |
+| --- | --- |
+| feat | 新能力或新的用户可见行为 |
+| fix | 已有功能的错误修复 |
+| refactor | 调整结构，保持对外功能和行为 |
+| perf | 以性能改善为主要目的 |
+| test | 单独增加、修改或重构测试 |
+| docs | 纯文档修改 |
+| build | Cargo、依赖、构建脚本或 Rust 工具链 |
+| ci | CI/CD 配置和工作流 |
+| chore | 无法合理归入上述类别的维护工作，不作为默认 type |
+| revert | 回滚已有提交 |
+
+Scope 使用实际 Cargo package name，如 `nestrs-core`、`cargo-nestrs`；不得使用 `di`
+之类缩写或 `graph` 等内部 module。整个 workspace 的配置或同一跨 package 架构变更
+使用特殊 scope `framework`。多个 package 的不相关变化应拆分；没有合理 scope
+时可以省略。不要添加没有必要的新 type。
+
+Description 必须使用中文，准确描述改变了什么，使用明确动词，建议约 72 字符以内，
+末尾不加句号。Cargo package、Rust 类型、API 与技术术语可保留英文；默认不使用
+Emoji。避免“修改了一些代码”等空泛描述和只罗列底层数据结构的描述。
 
 ```text
-feat       新功能
-fix        Bug 修复
-refactor   重构
-perf       性能优化
-test       测试
-docs       文档
-build      构建与依赖
-ci         CI/CD
-chore      其他维护
-revert     回滚
+feat(nestrs-core): 支持 Scoped 生命周期
+fix(cargo-nestrs): 修复跨 crate 查询根收集
+refactor(framework): 简化构造输入交付
+build(framework): 更新固定 Rust 工具链
 ```
 
-Scope：
+一个提交对应一个独立逻辑变化。功能可以包含配套测试和文档，不按文件机械拆分，
+也不把无关工作塞进同一提交。混合代码和文档时按主要变化选择 type。
+复杂变化可在空行后的 body 说明原因、设计和兼容性。破坏 API/行为兼容性时使用
+`<type>(<scope>)!:`，或在 body 中标记 `BREAKING CHANGE:`；必须明确说明用户影响，
+必要时补充迁移方式。
 
-```text
-Cargo package name
-```
-
-例如：
-
-```text
-nestrs-core
-nestrs-di
-nestrs-macros
-nestrs-runtime
-nestrs-web
-nestrs-config
-nestrs-logger
-```
-
-整个 Monorepo：
-
-```text
-framework
-```
-
-Description：
-
-```text
-必须使用中文
-```
-
-完整示例：
-
-```text
-feat(nestrs-di): 增加依赖图构建功能
-fix(nestrs-core): 修复服务注册错误
-refactor(nestrs-runtime): 重构服务实例化流程
-perf(nestrs-di): 减少依赖解析过程中的内存分配
-test(nestrs-di): 增加循环依赖测试
-docs(nestrs-di): 补充依赖注入生命周期说明
-build(framework): 更新 workspace 依赖
-ci(framework): 增加 workspace CI 检查
-```
-
----
-
-# 43. 核心原则
-
-Git Commit 应做到：
-
-> **准确、简洁、可读、可追踪。**
-
-每个 Commit 应能够回答：
-
-```text
-这次提交改变了什么？
-```
-
-必要时进一步回答：
-
-```text
-为什么进行这个修改？
-```
-
-Scope 应回答：
-
-```text
-哪个 Cargo package 受到影响？
-```
-
-如果是整个 Nestrs workspace：
-
-```text
-framework
-```
-
-因此，本项目推荐的最终 Commit 风格为：
-
-```text
-feat(nestrs-di): 增加 Scoped 生命周期支持
-fix(nestrs-di): 修复循环依赖检测错误
-refactor(nestrs-core): 简化服务注册流程
-perf(nestrs-di): 减少依赖解析过程中的内存分配
-test(nestrs-di): 增加服务生命周期测试
-docs(nestrs-di): 补充依赖注入生命周期说明
-build(framework): 更新 workspace 依赖
-ci(framework): 增加 workspace CI 检查
-```
-
-**Scope 以 Cargo package 为边界，`framework` 表示整个 Nestrs Monorepo；Description 必须使用中文。**
-
----
+AI 创建提交前必须检查 `git status`、`git diff`、`git diff --staged`，根据实际变更
+选择 type、scope 和 description。不得未经检查就 `git add .` / `git add -A`，
+不得将用户原有无关修改纳入当前提交。没有提交或推送请求时保持工作区更改。
+除非维护者明确要求，不添加 AI 署名、`Co-authored-by` 或 Emoji。
 
 # 架构共识
 
@@ -1400,14 +68,15 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 * `nestrs-bootstrap` 仍为未来的顶层引导库，负责 Application、配置和生态组合，
   导出 `NestrsFactory`；本阶段不提前实现。
 * `example/` 只作多项目父目录，业务示例分别位于其子目录并各有 Cargo.toml、源码与说明。
-  故意非法的 DI 声明放在 `cargo-nestrs/tests/fixtures/`，不使正常示例的默认运行或图导出失败。
+  自动化负例放在 `cargo-nestrs/tests/fixtures/`；`example/di-errors/` 是明确标为预期编译
+  失败的独立观察项目，由父目录统一说明，不混入正常业务示例的默认运行或图导出。
 
 ## 2. 分层与依赖方向
 
 ```text
 工具内部：nestrs-tool-bridge → cargo-nestrs::codegen → 类型化服务声明
 工具编排：cargo nestrs → rustc/rustdoc 的 extern 注入与 rust-analyzer 项目依赖
-语义分析：nestrs-driver → 根据真实类型自动生成 binding
+语义分析：nestrs-driver → 根据真实类型生成 binding、验证完整 DI 图并编译执行计划
 运行期：  应用及未来 bootstrap/logger/config → nestrs-core
 ```
 
@@ -1416,29 +85,71 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 * 编译期 codegen 位于 `cargo-nestrs/src/codegen`，只使用生成所需工具；生成的 typed adapter
   引用 core 实际所属私有模块。driver 按真实宏卫生来源与虚拟源码区间授权，普通业务
   源码不能访问；不导出 `__private` 或换名后的公开内部 ABI 模块。
-* `Provider::{Class, Factory}` 生产实例；`TraitBinding` 只描述 concrete 到 trait
-  的类型投影，不是 Provider，不创建另一份实例。
+* `Constructor::{Class, Factory}` 生产实例；`ProjectionAdapter` 只提供 concrete 到 trait
+  的真实类型投影，不创建另一份实例。
+* core 装配后用 `DependencyInput::{Absent, Immediate, Lazy}` 表达唯一输入动作，
+  `CompiledDependency` 保留原始请求类型、optional、诊断与槽位；普通/延迟缺席分别
+  交付准确的 None。`InputAdapter` 的内部 v2 协议为 service_type、kind: InputKind、project，
+  `ProjectionAdapter` 仅含 trait_type、concrete_type、project。激活只展开 Immediate，
+  完整图和关闭顺序仍包含 Lazy 目标，不把延迟边误删为无依赖。
+* core 用 `ConstructionInput` 保存单槽已选执行数据，一次组成完整 `ConstructionInputs`；
+  生成 adapter 的 typed take 直接经 ServiceProjector/ProjectionTarget::project 写入栈槽，
+  与 trait 根查询和 lazy 共用真实 coercion、准确类型及同一实例 lease 检查。错误读取
+  不消费槽位，None 和 lazy 也检查准确类型及形态；不恢复逐参数 preparer、PreparedInput
+  装箱或可变准备 buffer。全部 typed 参数读取并 ensure_all_consumed 后才执行用户
+  constructor/factory/Default/value；字段表达式保留原求值顺序、类型上下文和宏卫生。
+  Class/Factory 保持分工，FactoryLeaseFrame 从原输入派生真实保活 lease 并借出
+  FactoryInputs；不伪造跨 await 借用，不重写单一 Coordinator 状态机。
+* `nestrs-reflect` 是工具链按当前项目与编译配置生成的逻辑产物，不是手写公共反射
+  package。局部声明 marker、CompilerKey 与泛型 ProviderDefinition 留在生成代码；
+  core 生产代码不定义 DependencyRequest、Delivery、ProviderSource 或候选注册模型。
+  core 私有 activation::adapter 只保留执行能力，最终入口为 __nestrs_reflect_v2。
+  driver 在引用 core 的最终 check/build 中核对 plan_set_options_v2 及完整签名，空图
+  也拒绝旧 core；工具与 core 同步重编译，缓存按 driver/bridge 指纹隔离。审阅 JSON
+  的格式 version 仍为 1，独立于执行 ABI 版本。每个最终入口的 metadata 旁保存
+  版本化 *.nestrs-reflect.json，来自同一已选执行计划，仅用于审阅，不是运行时输入或
+  稳定公开反射 API；HTML 的 *.nestrs-plan.json 是另一种
+  同源展示产物，字段与编号约定不得混用。
 
-## 3. 编译器注册清单与查询根
+## 3. 编译器执行计划与查询根
 
 * 不依赖 linkme、inventory、链接段扫描或全局构造器。driver 在每个 binary/test
-  入口汇总本 crate 与依赖 metadata 中的真实描述回调，生成唯一版本化 registry 符号。
+  入口汇总本 crate 与依赖 metadata 中的类型化声明和查询摘要，生成唯一版本化计划入口。
   rlib 保留回调 MIR 与原生可达性分析要求的目标代码，不安装可变全局注册表、
   不贡献重复的入口符号；私有 static/TLS/inline/generic 依赖必须保留，Rust 源码
   可见性不提升。
-* registry MIR 只调用已验证签名、类型身份与生成来源的描述回调和 core 内部写入函数，
+* reflect 入口 MIR 只调用已验证签名、类型身份与生成来源的执行适配回调和 core 内部写入函数，
   不执行用户 constructor/factory/Default/value/cleanup。业务 typed adapter 仍经过
   标准类型、借用与 trait 检查；不通过任意 MIR 改写伪造投影或放宽业务可见性。
-* 查询宏由 core 导出，在具体类型调用处生成静态根；闭合泛型可提供描述回调，
-  trait/factory-only 类型不被强加 ProviderDefinition 约束。
-* 完整入口合并静态根，包括已编译但未执行的分支；类型不能捕获外层泛型/const
-  参数或 impl 的 Self。动态 key 求值一次，只选择冻结路由，不扩展图。
-* core 拥有本次构图的 RegistrySnapshot。编译器入口 ABI 是内部符号协议，不是业务
-  可调用的 Rust API；driver 拒绝源码引用该入口，保留公开门面与真实 Injection 类型。
+* 编译器识别普通查询方法，按真实类型和跨 crate 查询摘要恢复有限闭合根，支持泛型
+  辅助函数与闭合 impl 的 Self；trait/factory-only 类型不强加 ProviderDefinition 约束。
+  标准 trait 方法与重载运算符保留真实关联方法和泛型实参，再由 rustc 求解业务实现，
+  包括 Iterator::next、Add::add 和 +；不能只遍历业务 crate 自己定义的 trait 调用。
+  隐式 Deref/DerefMut 保留类型检查的真实调整与方法身份；Drop 按优化前摘要和闭合
+  实例的真实析构胶水继续展开，不靠容器名称手写析构规则，也不执行业务析构。
+  关联常量及内联 const 中的查询函数指针保留真实常量身份和泛型实参；跨 crate 使用原生
+  required_consts 与常量 CTFE MIR 摘要，闭合后由 rustc 选择 trait impl/default。
+  不把常量伪装成 FnDef，不为查询分析求值常量或读取已求值函数地址。
+  已编译但未执行的分支，包括 if false，仍贡献需求；cfg 排除代码不贡献需求。
+  动态 key 求值一次，只选择冻结路由，不扩展图；不枚举无限泛型组合。
+  单类型表达式复杂度上限为 max(8 × recursion_limit, 1024)，闭合类型集合和查询
+  展开有 100,000 预算；这是类型族增长防护，不按普通 DI 链深度计数。
+* library 编译贡献声明、投影能力和查询摘要，不要求应用图在 library 中完整。
+  最终 binary/test 在 check/build 时完成候选选择、有限展开、完整图验证与计划生成；
+  结构错误是编译错误，即使用户程序没有调用 build 也必须拒绝非法注册。
+* core 使用入口共享的 OnceLock 装配不可变计划，各次 build 创建独立 runtime、缓存
+  和实例。首次装配仍调用目标端执行适配回调取得真实 TypeId 与 typed adapter 地址；不再
+  选择候选、展开泛型或分析拓扑，也不调用用户构造。不能宣称零回调或零分配。
+  core 不保留 GraphCompiler 或旧注册测试模型；执行测试直接提供冻结计划，
+  只读快照位于 tests/support 并通过 cfg(test) 引入。图语义由工具侧生产模型与真实
+  driver 契约覆盖。未经过工具链的生产应用调用两个 build 入口返回
+  BuildError::CompilerPlanUnavailable，不静默生成空计划。
+* 编译器入口 ABI 是内部符号协议，不是业务可调用的 Rust API；driver 拒绝源码引用
+  该入口，保留公开门面与真实 Injection 类型。
 
 ## 4. 工具私有桥接与标准宏展开
 
-* 应用使用 `use nestrs::{injectable, factory, primary};` 和短属性，也支持
+* 应用使用 `use nestrs::{injectable, constructor, factory, primary, lazy};` 和短属性，也支持
   `#[nestrs::injectable]` 等完整路径。字段/参数 helper 支持裸名及 `nestrs::` 路径。
 * 字段与 factory 参数的 `inject` 语法一致，只接受裸标记 `#[inject]` 或单个字符串/
   整数字面量，如 `#[inject("mail")]`、`#[inject(123)]`。`#[inject(key = ...)]`
@@ -1450,6 +161,14 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   属性之间都可识别身份。crate/module 路径别名与单个宏重命名有对应回归。
 * 标准 Rust 宏展开处理 cfg、外部模块、macro_rules 生成项和属性/derive 顺序；
   Injection<T> 字段和 factory frame 借用签名在类型检查前生成。
+* `#[constructor]` 选择 injectable 的同步 inherent 关联构造函数，返回 Self 或
+  Result<Self, E: Debug>；参数是唯一依赖来源，普通输入交付拥有 lease 的令牌，
+  lazy 输入按值交付弱 owner 句柄，optional 缺席交付 None。字段保留业务写法，按成功返回字面量的整值参数来源改写，不按同名/同型猜测。
+  不混用字段 inject/value/lazy，不创建第二个 provider，不补做 Default；无 constructor
+  时保持自动字段模式。标准名称解析后、HIR 前按真实 impl self 身份选择生成候选，
+  用 Res::Local(NodeId) 区分局部来源、宏卫生与遮蔽；cfg 排除字段不进入存储映射，
+  仍存在的构造参数继续贡献依赖。宏阶段只处理签名和 adapter。保留原生类型/借用检查；
+  复杂无法确认的流必须诊断，不能扫描源码或用可变宏全局表关联。
 * 应用经 cargo nestrs check/build/run/test 获取桥接与自动绑定；普通 Cargo 不注入
   该环境。core 和工具自身可以用普通 Cargo 检查。应用级 Clippy 集成尚未交付。
 * driver 不注册 `nestrs` 工具属性，不替换原生展开管线或复制 token server。
@@ -1468,19 +187,22 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   多候选；optional 不能隐藏歧义、环或生命周期错误。
 * 上游注册、查询根和闭合蓝图通过编码 MIR 汇总。已知服务所属 crate 预生成合法的
   自动投影能力到编译器收集的自动 binding 描述清单，私有 concrete 不要求公开；
-  不把潜在投影直接当成请求或显式注册。core 按实际根/依赖需求迭代启用目录、
-  物化必要闭合类型，再验证和冻结图；未请求接口不触发歧义或泛型物化。
+  不把潜在投影直接当成请求或显式注册。driver 在最终入口编译时按实际根/依赖需求
+  迭代启用目录、物化必要闭合类型，再验证和冻结图；未请求接口不触发歧义或泛型物化。
 * 自动 pair 在完整链接单元幂等，显式 pair 优先且重复显式 binding 仍报错。
+  完整候选验证之后才裁剪未被输入或查询路由引用的投影，并同步重编号；不能提前
+  裁剪来掩盖重复 binding、缺失 concrete provider 或候选歧义。
   类型身份使用真实 Ty/DefId，不按源码名字合并；不绕过隐私、不猜泛型实参。
   目录覆盖业务接口可证明的 Send/Sync 形状，额外 auto trait、未确定泛型、不可命名
-  私有投影和宏生成位置仍须准确报告边界，见 `docs/NESTRS_CROSS_CRATE_DI.md`。
+  私有投影和宏生成位置仍须准确报告边界，见 `docs/NESTRS_MACROS.md` 与 `docs/NESTRS_RUSTC_EXTENSION_GUIDE.md`。
 * `nestrs::bind` 只保留为文档隐藏的显式绑定 ABI 回归入口，不是推荐业务 API。
-  显式 pair 不再自动重复生成，重复显式 binding 仍是 core 图错误。
+  显式 pair 不再自动重复生成，重复显式 binding 仍是编译期图错误。
 
 ## 6. DI 门面与静态图
 
-* 服务查询只通过 core 的 `get_required_service!`、`get_service!` 和 keyed 变体；
-  不提供普通公开查询方法或单独 register!。
+* core 提供 get_required_service、get_service、get_required_keyed_service 和
+  get_keyed_service 四个普通异步查询方法。旧查询宏及 src/query.rs 已移除，不恢复
+  同名转发宏；查询根由工具链识别普通方法的真实调用，不提供单独 register!。
 * build/build_with_options、create_scope、service_provider、warm_up 和消费 owner
   的 dispose_async 保留普通方法。引用绑定实际 root/scope owner 的借用期。
 * 容器启动默认值由入口 package 的 Cargo.toml 顶层 `[nestrs-cli]` 设置：
@@ -1489,32 +211,44 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   manifest 参与编译依赖跟踪；core 运行时不读取 TOML，不继承依赖或 workspace 默认配置。
   `build()` 使用项目默认值；`build_with_options` 完整显式覆盖；Options::default
   保持库的 Lazy / 32 基线。Cargo 的自定义顶层节警告不等于 Nestrs 未读取配置。
-* 任何服务构造前验证全部注册及可物化的闭合类型；结构错误在容器构建入口 panic，
-  成功后冻结图。之后不再读取注册清单、展开泛型或变更图。
+  这里覆盖的是全局默认；服务声明上的显式初始化策略仍优先。
+* 服务结构体 / 工厂支持 `#[lazy]`、`#[lazy()]`、`#[lazy(true)]` 和 `#[lazy(false)]`。
+  未标记继承全局默认；true 不选作自主预热根，false 在全局 Lazy 下也预热 Singleton。
+  scope 创建仍不构造；显式 warm_up 默认预热 Scoped，但跳过 true，包含 false。
+  Transient 不作为预热根。普通依赖仍可提前构造 lazy 目标，服务级标记不改字段包装。
+  属性支持 injectable/factory 前后及 primary 组合；重复或非布尔参数拒绝。
+  策略沿泛型蓝图与上游 metadata 进入最终计划，不改变完整图验证或取消/cleanup 语义。
+* 最终入口编译时验证全部注册及已知闭合类型，结构错误使 cargo nestrs check/build
+  失败。运行时只装配并执行已经选定的计划，之后不重新收集声明、展开泛型或变更图。
 * 字段 `#[inject] #[lazy]` 生成 `LazyInjection<T>`，通过 `get().await` 首次获取。
   optional 字段为 `Option<LazyInjection<T>>`；key、trait 与闭合泛型仍使用冻结选择。
   延迟边参与缺失、歧义、环与 Scope 检查，但不作为消费者构造的就绪前提。
   同一字段合并并发访问并固定一次 occurrence（包括 Transient 的成功/失败），取消等待
   不重复提交。句柄弱持有 owner/命令通道，成功后强 lease 保活目标；不提供透明同步 Deref。
-  当前仅支持字段标记，尚未实现服务级 lazy override 或 factory 参数延迟注入。
+  字段和 factory 参数只接受裸 #[lazy]，不接受布尔参数或空括号。factory 参数默认
+  注入，可单独标注 #[lazy]，也可组合 #[inject] 和字面量 key。延迟参数按值交付
+  LazyInjection<T> / Option<LazyInjection<T>>，允许跨 await 并移入返回服务；普通
+  参数仍是 frame 内借用。延迟参数共享字段的调度、验证、取消与关闭规则，构造 worker
+  内首次获取尚未交付的目标仍报错，不增加构造重入或动态 resolve 通道。
 * 图编译、激活任务展开、失败传播和实例释放使用非递归算法。
 * Singleton 可以依赖 Transient，但整个激活闭包不得包含 Scoped；需要 Scoped 的
   Transient 只能从 scope 查询。factory 参数同样参与生命周期验证。
-* Rust 类型检查、全图结构检查和外部资源初始化是三个不同层级；不能把
-  cargo nestrs check/build 成功描述成已运行容器全图检查。
+* Rust 类型检查、全图结构检查和外部资源初始化是三个不同层级。最终入口
+  cargo nestrs check/build 包含前两层，但不能把它描述成外部资源已初始化成功。
 
 ## 7. Tokio、lease 与关闭
 
 * 每 root 一个中央 Tokio 协调器，所有 scope/查询共享默认 32 个构造名额。
   依赖满足立即推进，没有整层屏障；worker 不递归 resolve。
-* Lazy 默认；Eager 预热 Singleton 及必要依赖，scope.warm_up 预热 Scoped。
+* Lazy 默认；Eager 按服务策略预热 Singleton 及必要依赖，scope.warm_up 按策略预热 Scoped。
   Singleton 始终在 root 上下文构造；Transient 按每个消费槽位独立构造。
 * Injection 和 ErasedServiceRef 持有强 lease；稳定实例地址、真实 factory frame
   和独立于 Tokio 的迭代 ReleaseDomain 维护内存安全。
 * Singleton/Scoped 失败缓存至 owner 关闭，Transient 失败只属于该 occurrence。
   factory Result 要求 E: Debug；构造 panic 进入 ResolveError。
-* 取消查询仅取消等待，接受的初始化继续。关闭先排空接受的任务，再按 owner
-  按消费者先于依赖的约束逐个完成 cleanup/释放；含延迟边时用冻结 DAG 重排 journal，
+* 取消查询仅取消等待，接受的初始化继续。普通查询/预热的 QueryId 订阅及时退订，
+  提前失败的消费者按输入槽位注销对子任务的反向订阅；Lazy 保留可接续的 watch 接收端。
+  关闭先排空接受的任务，再按 owner 的消费者先于依赖约束逐个完成 cleanup/释放；含延迟边时用冻结 DAG 重排 journal，
   可同时清理的实例优先逆发布时间，无延迟边保留原逆发布顺序。每 owner 至多一个
   cleanup worker，root 等 scopes。
 * 当前构造 worker 内首次等待未就绪延迟字段会明确报错，避免占据激活名额等待新任务。
@@ -1527,10 +261,10 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 
 ## 8. 依赖图 HTML
 
-* HTML/CSS/JavaScript 和文件输出全部归 cargo-nestrs。core 仅提供内部只读静态图
-  JSON 和既有验证语义，不再有 graph_output、graph_output_path 或 BuildError::GraphExport。
-* cargo nestrs graph 链接真实选定 binary 的注册集合，通过诊断入口导出图，不执行
-  业务 main、constructor、factory、Default、value 表达式或 cleanup。
+* HTML/CSS/JavaScript 和文件输出全部归 cargo-nestrs，输入来自编译器与执行计划
+  同源的图 sidecar；core 生产代码不再生成图 JSON，不恢复 graph_output 等运行时选项。
+* cargo nestrs graph 对选定 binary 执行 Cargo check 后读取 sidecar，不链接或执行
+  诊断程序、不替换业务 main，也不执行 constructor/factory/Default/value/cleanup。
 * 省略 --bin 时导出所选 package 的全部 binary；--workspace 导出 workspace 总览。
   default-run 不隐藏其他入口。每个入口独立编译、校验并隔离缓存；页面保留独立节点和
   依赖边，只标记共同 provider 声明的入口归属，不合并成跨入口容器。
@@ -1543,9 +277,12 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   -p PACKAGE --features。默认 workspace members 选中多个 package 时也拒绝显式
   features，即使没有传 --workspace。--workspace 的 all-features/no-default-features 按各 package
   分别应用，不承诺复现一次 Cargo workspace 构建的 feature 合并。
-* 当前只支持固定 host 可运行的 binary，以及源码中可定位的 main；宏生成 main、
-  lib/test/example 图目标和跨 target 运行尚未支持。无直接 core 依赖、no_main 及
-  cfg_attr 引入的 no_main 在执行前拒绝，不能声称全部入口都已验证。
+* 图入口选择目前仍限 binary；lib/test/example 独立图目标尚未开放。编译期导出
+  不要求 host 可执行或可直接定位 main；--target 交给 Cargo，目标库必须可用。
+  driver 当前仍要求图目标直接依赖 nestrs-core；只有间接 core 依赖的普通应用虽可
+  check/build/run，graph 入口仍会拒绝，不能把两者支持范围混为一谈。
+  no_main/宏生成入口遵循真实编译检查，不通过运行目标程序补救；各 target 实际验证
+  范围须单列，不能把 Linux 本机验证当作 Windows 或全部跨 target 验证。
 * 页面展示 provider 声明、槽位与投影关系，不是实例状态；重复 Transient 输入仍独立构造。
 * 默认写入 Cargo target 的 nestrs-di.html，输出错误由 CLI 报告，不污染容器构建契约。
 
@@ -1560,11 +297,14 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   当前本机适配为 x86_64-unknown-linux-gnu 与 x86_64-pc-windows-msvc；driver、bridge
   和 sysroot 必须属于实际 host。不匹配时失败，不静默使用默认新编译器或退回源码扫描。
   Windows 使用本机 exe/dll 和 MSVC 工具，不要求 WSL，不宣称 Windows GNU、ARM64
-  或跨 target graph/IDE 已支持。
+  已受支持。graph 的 --target 使用静态编译产物，不要求运行目标程序；具体 target
+  必须另有编译环境与回归证据。IDE 仍只支持当前 host，不能据 graph 推论跨 target IDE。
 * compiler-driver feature 隔离 rustc_private；普通 core/工具单元测试无需该 feature。
   zyn 是共享生成后端的基础依赖；内部 bridge 不建立用户面向的宏 feature 契约。
 * tools/build-toolchain.py 构建 CLI、driver 和匹配的 bridge。bootstrap 授权限于
-  nestrs_driver 构建，不改变全局工具链，也不向应用传播该变量。
+  nestrs_driver 与私有 nestrs_tool_bridge 构建；bridge 仅为生成绑定取得定义点 span，
+  仍委托单一 codegen 后端并保留业务 token 来源。普通 core/工具单元测试无需该授权，
+  不改变全局工具链，也不向应用传播该变量。
 * CLI 按完整编译器身份及 driver、bridge 的联合内容指纹隔离 target；Cargo 保留
   构建单元复用，rustc incremental 当前关闭，不宣称已有完整增量事务协议。
 * 编译器和 rustdoc 同时获得 bridge 所在目录的 dependency 搜索路径，使没有直接
@@ -1573,7 +313,7 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   固定 sysroot 的真实 rustdoc。每段示例独立经过完整 driver，包含新声明、自动
   trait 绑定、闭合根和注册目录；不伪造业务类型、不静默跳过代码块。载体保留 crate
   测试属性，rustdoc 管理代码块执行语义；bootstrap 不传播进示例编译。
-  仅间接依赖 core 的文档也走该流程，不能按直接 extern 是否存在而绕开 registry。
+  仅间接依赖 core 的文档也走该流程，不能按直接 extern 是否存在而绕开最终计划汇总。
   真实源码按原 crate type 检查；纯文档载体按 lib 读取，真实 extern 工件保持不变。
   测试源与真实声明位置保留在 target 来源索引；复杂 impl self 类型不省略示例。
   当前只支持测试入口；相对 include/字节读取映射回原 Rust 文档或 Markdown 目录，
@@ -1586,7 +326,8 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   直接交付已初始化项目，用户无需再执行 init。create 当前属于规划，本阶段不实现。
 * cargo nestrs init 依据 Cargo artifacts 与真实 rustc 单元生成 rust-project.json，
   保留依赖重命名/版本、cfg、edition、test、build.rs 环境、OUT_DIR 及过程宏工件。
-  为 core 用户增加编辑器专用的 `nestrs` 宏依赖，使用原版宏服务器。
+  为实际编译单元直接 extern 包含 nestrs_core 的用户增加编辑器专用 `nestrs` 宏依赖，
+  使用原版宏服务器。
   Windows 编辑器路径统一为普通盘符/UNC，与正常文件 URI 对应；不能只改测试 URI
   规避 verbatim 路径造成的 VFS 身份差异。设备或仅 verbatim 可表示的路径明确拒绝。
   内部 artifact/缓存身份继续归一化，首次准备与保存检查必须复用同一模型与缓存。
@@ -1599,24 +340,21 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   JSONC 注释与已有诊断偏好；不新增诊断屏蔽。保存时 init check 成功后刷新模型，
   失败保留上一份；未保存源码由 rust-analyzer 自身分析。详情见 docs/NESTRS_IDE.md。
   check.extraEnv 固定实际选定的 rustc、driver、bridge 路径并保留其他用户环境变量。
-* tools/verify-ide.py 已验证真实原版 LSP 的冷启动、字段/工厂类型、补全、定义跳转、
+* tools/verify-ide.py 覆盖真实原版 LSP 的冷启动、字段/工厂类型、补全、定义跳转、
   未保存编辑、真实错误与恢复，以及 feature、宏生成项与 build.rs 产物；仍不能宣称
   所有编辑器 UI、重命名操作、属性组合或其他 host 都已验收。
 * native_host、bridge_metadata、rustdoc 集成测试在 Linux/Windows 均启用；前者运行
   真实 CLI 检查/构建/运行、图副作用隔离与重复导出、IDE 项目生成和配置的保存检查，
   目录包含空格与中文。项目模型回归不等于完整 LSP 交互验收；不得把 Linux 结果当作
   Windows 实机结果，实际验收范围须分别记录。
-* 2026-09-28 已实际通过 Windows MSVC workspace check/test、DI 与 56 个 UI 契约、
-  Eager/scope 预热示例及 cleanup、原生集成测试、rustdoc、图 12 条命令和跨 crate
-  6 次 debug/release 运行。原版 rust-analyzer 0.3.3049 的 default/alternate/release
-  完整 LSP 验收通过，使用普通 Windows 文件 URI、未向 RA 父进程额外加入 sysroot/bin。
-  此证据仍不覆盖所有编辑器 UI、重命名操作或其他 host。native-host CI 定义双 host
-  回归，工作流文件已提供不等于对应提交的 GitHub Actions 已成功执行。
-* DI fixture 保留原 52 个 UI 语义基线，加 3 个宏/helper 误用和 1 个导入成功用例。
-  UI 经 CLI 私有 bridge 编译；保留旧错误语义，不批量覆盖 stderr 掩盖退化。
+* 平台能力以当前 `toolchain.json` 和各 host 的实际本地验证结果分别说明；回归命令
+  由开发者手动执行。旧快照的 Windows/Linux 验收不能作为当前提交或完整编辑器 UI
+  已通过的证据，也不能把单个平台的结果推广到另一个平台。
+* DI UI fixture 的案例以 `cargo-nestrs/tests/fixtures/di/tests/ui.rs` 为准，经 CLI 私有 bridge 编译；
+  正例检查成功，反例检查诊断 code/message 及数量，不批量覆盖 stderr 掩盖退化。
 * tools/verify-graph.py 验证副作用隔离、不同 package/binary 缓存、项目部分失败和全部
   失败报告、feature 跳过、入口拒绝与文件导出。单图验证失败保留旧输出；项目报告保留
-  已验证图与独立诊断。不能运行原业务入口代替诊断入口。
+  已验证图与独立诊断。图导出必须读取编译器 sidecar，不能执行原业务入口。
 
 ## 10. 未来生态与命名
 
@@ -1626,16 +364,19 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 * 本次工具链整合不增加 runtime crate，不提前实现 bootstrap、动态注册、运行期扩图
   或集合解析。
 
-## 11. 当前说明与历史记录
+## 11. 后续范围与文档维护
 
-后续会话的待办与讨论状态固定在 [后续待办与讨论决策](docs/NESTRS_TODO_PLAN.md)。
-涉及分发、安装或 bootstrap/create 时先核对该清单；其中“待决策”项不是已确认接口，
-`toolchain install` 等拟议命令尚未实现。完成条目需更新状态与实际验收依据，记录计划
-不等于授权发布或提交代码。
-
-当前使用和限制以 [Cargo 工具链说明](docs/NESTRS_CARGO_TOOLCHAIN.md) 为准；
-[完整演进方案](docs/NESTRS_COMPILER_TOOLCHAIN_PLAN.md) 记录后续验收。
-阶段 B、独立 codegen 提取、公开薄宏和原生工具属性路线均属于历史记录。
-当前标准宏桥接由 CLI 私有管理，生成后端在 cargo-nestrs，HTML 在 CLI；不能据历史
-文件恢复公开宏依赖、独立后端包、原生展开替换或 core HTML 配置。IDE 以
-[当前接入说明](docs/NESTRS_IDE.md) 和真实 LSP 验证为准。
+* 分发安装仍待实现：完整平台工具包、工件版本/校验清单、Rust 组件准备、升级恢复和
+  卸载规则均需另行设计与验收。安装入口、命令名称和发布渠道未定；`toolchain install`
+  或 `setup` 不能写成可执行的现有命令。`cargo install` 不会自动部署私有 bridge 和
+  完整 sysroot，现阶段使用源码构建。规划不授权发布或提交。
+* bootstrap 与 create 保持第 10 节边界；应用级 Clippy、更多图目标、其他 host/编辑器
+  和更广泛宏组合仍属后续范围，不从旧讨论恢复手动注册 DSL 或公开宏 package。
+* `tools/compiler-probe/verify_autobind.py` 仍有运行期捕获非法图的历史预期，不能作为
+  当前整组应通过的 gate；维护它时应将负例迁到 check/build 拒绝，保留有效图运行断言。
+* 当前文档入口为 [文档导航](docs/README.md)。服务用法集中于声明指南，运行期设计
+  集中于 core README，编译器原理集中于 rustc 指南；修改实现时更新相应唯一入口。
+  重复的阶段计划与迁移日志不再增加独立主文档；详细命令、原始日志和临时核查记录放
+  `target/`，性能结论归入 [性能与内存](docs/NESTRS_PERFORMANCE.md)，保留基线与适用范围。
+* 文档必须区分已实现接口、源码可见能力、实际验收证据与尚未实施的计划。历史性能
+  数字不能当作当前完整实现的重新测量；临时 target 证据不随仓库分发。

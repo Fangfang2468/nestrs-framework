@@ -1,65 +1,22 @@
 # Cargo Nestrs：工具管理的声明、自动绑定与 IDE
 
 应用只依赖 `nestrs-core` 和业务所需库。`cargo-nestrs` 管理服务声明、编译器适配、
-自动绑定、rustdoc、编辑器项目模型与 HTML 依赖图。声明通过标准过程宏展开，内部
+自动绑定、完整 DI 图编译、rustdoc、编辑器项目模型与 HTML 依赖图。声明通过标准过程宏展开，内部
 `nestrs-tool-bridge` 位于 `cargo-nestrs/internal/bridge`，设置 `publish = false`，
 委托唯一的 `cargo-nestrs/src/codegen` 后端。应用不在 Cargo.toml 添加宏库，也不在
 运行时链接 CLI。公开 `nestrs-macro`、独立 `nestrs-codegen` 和原生工具属性展开
 都不是当前架构。
 
-## 应用声明
+## 应用接入
 
-面向应用开发的完整示例、宏参数和常见错误见[宏使用指南](NESTRS_MACROS.md)。
+应用 Cargo.toml 依赖 `nestrs-core` 和业务库，通过 `cargo nestrs` 编译。CLI 为
+直接依赖 core 的编译单元注入名为 `nestrs` 的私有过程宏 extern；应用可以
+`use nestrs::{injectable, constructor, factory, primary, lazy};`，也可以使用
+`#[nestrs::injectable]` 等完整路径。`nestrs` 名称由工具保留，同名 Cargo 依赖会报冲突。
 
-CLI 为直接依赖 core 的编译单元注入名为 `nestrs` 的过程宏 extern。业务代码可以
-保持短属性，也可以使用 `#[nestrs::injectable]` 等完整路径：
-
-```rust
-use nestrs::{factory, injectable, primary};
-
-#[injectable]
-struct Database;
-
-trait Store: Send + Sync {
-    fn available(&self) -> bool;
-}
-
-#[injectable]
-#[primary]
-struct SqlStore {
-    #[inject]
-    database: Database,
-}
-
-impl Store for SqlStore {
-    fn available(&self) -> bool { true }
-}
-
-#[injectable(lifetime = Scoped)]
-struct Checkout {
-    #[inject]
-    store: dyn Store,
-}
-
-struct Settings;
-
-#[factory]
-fn settings() -> Settings { Settings }
-```
-
-`#[inject]` / `#[value(...)]` 及带 `nestrs::` 前缀的 helper 由所在声明消费，不是
-可单独导入的宏。注入字段转换为持有强 lease 的 `Injection<T>`，factory 输入转换
-为借用实际 activation frame 的参数，随后由 Rust 检查类型和借用。
-
-内部 bridge 只转换标准 `proc_macro::TokenStream` 并调用共享 `expand_*` 后端。
-没有第二份声明分析实现，也没有 `register_tool` 或复制的 rustc 展开管线。
-单个声明宏支持重命名导入；组合 primary 时保留属性末段 `injectable`、`factory`、
-`primary`。crate/module 路径别名有回归覆盖，任意重命名属性之间的协调不在保证范围。
-
-普通 `impl Trait for Concrete` 按实际接口需求参与自动绑定，业务代码不写 bind。
-`nestrs::bind` 仅保留为隐藏的显式绑定 ABI 回归入口。查询仍使用 core 的四个宏，
-owner、scope、借用与关闭 API 不变。`nestrs` extern 名被工具保留，同名 Cargo
-依赖会报冲突；不要添加一个宏依赖来覆盖它。
+字段与参数 helper、constructor/factory、自动 trait 绑定和四个查询方法的完整用法
+统一见[服务声明与查询](NESTRS_MACROS.md)。实例、scope 与关闭语义见
+[core 架构](../nestrs-core/README.md)。本指南负责命令、启动配置、产物和验证入口。
 
 ## Cargo.toml 中的容器启动配置
 
@@ -73,7 +30,7 @@ max-concurrent-activations = 16
 
 | 配置键 | 取值 | 缺省值 |
 | --- | --- | --- |
-| `initialization` | `"lazy"`：先验证图，查询时构造；`"eager"`：在 build 返回前预热 Singleton 及必要依赖 | `"lazy"` |
+| `initialization` | 未显式覆盖服务策略时的默认行为：`"lazy"` 按需构造；`"eager"` 在 build 返回前预热 Singleton 及必要依赖 | `"lazy"` |
 | `max-concurrent-activations` | 大于零且能由目标平台 `usize` 表示的整数；全 root / scope 共享的构造任务上限 | `32` |
 
 `[nestrs-cli]` 是 Nestrs 管理的自定义顶层配置节，不写成 `[package.nestrs-cli]` 或
@@ -90,11 +47,15 @@ workspace 或依赖库的设置。在依赖库中调用 core 的 build，仍按�
 也会使对应入口重新编译。运行产物不需要读取源码或 Cargo.toml，因此直接启动 binary
 与 `cargo nestrs run` 使用相同的设置；配置修改后必须重新构建。
 
-`ServiceProvider::build_with_options(options)` 保留并完整覆盖项目配置。
+`ServiceProvider::build_with_options(options)` 保留并完整覆盖项目提供的全局默认配置。
 `ServiceProviderOptions::default()` 仍为 Lazy / 32，不隐式读取项目配置；因此
 `build_with_options(Default::default())` 表示显式选用库的基线。
 
 这些设置只控制服务激活，不跳过全图校验，也不改变 scope 的隔离语义。
+服务声明上的 `#[lazy]` / `#[lazy(true)]` 不作为自主预热根；`#[lazy(false)]` 则使
+Singleton 即便在全局 Lazy 下也预热。声明策略优先于全局默认，`build_with_options`
+不会抹除它。普通注入依赖仍可提前构造 lazy 目标。完整规则见
+[宏使用指南](NESTRS_MACROS.md#34-用-lazy-控制某个服务是否自主预热)。
 `create_scope()` 仍不构造服务，需要预热时显式调用 `scope.warm_up().await`。
 `cargo nestrs graph` 仍只分析图，即使配置为 Eager 也不执行 factory 或 cleanup。
 
@@ -148,16 +109,22 @@ cargo nestrs graph -p nestrs-di-example
 | Linux GNU x86-64 | `cargo-nestrs` | `nestrs-driver` | `libnestrs_tool_bridge.so` |
 | Windows MSVC x86-64 | `cargo-nestrs.exe` | `nestrs-driver.exe` | `nestrs_tool_bridge.dll` |
 
-bootstrap 只授权 `nestrs_driver` 的构建，不设置全局默认工具链，也不向应用子进程
+bootstrap 只授权 `nestrs_driver` 和私有 `nestrs_tool_bridge` 的构建；bridge 使用
+`proc_macro_def_site` 为生成绑定取得定义点 span，避免调用点常量与内部变量冲突。
+普通 core/工具单元测试不需要该授权。不设置全局默认工具链，也不向应用子进程
 传播该变量。CLI 不隐式安装组件。两个平台分别本机构建；Linux `.so` 和 driver
-不能拷贝成 Windows 工具。Windows GNU、ARM64、其他 host 与跨 target 的 graph/IDE
-不属于当前适配范围。固定 release/commit 的组件若不可获得，应明确失败，不能静默
+不能拷贝成 Windows 工具。Windows GNU、ARM64 和其他 host 不属于当前适配范围。
+IDE 模型限本机 host；graph 已改为编译期 sidecar 导出，不再因目标产物不能在本机
+执行而拒绝跨 target，但仍需要相应的目标编译环境，不能据此宣称所有 target 已验收。
+固定 release/commit 的组件若不可获得，应明确失败，不能静默
 安装另一个 Rust 版本后绕过身份检查。
 
 CLI 默认查找同目录的 driver 与 bridge。`NESTRS_DRIVER`、`NESTRS_MACRO_BRIDGE` 和
 `NESTRS_RUSTC` 可指定路径，完整编译器身份仍须匹配。桥接必须来自匹配工具链，
 不能只拷贝 CLI 而遗漏它。普通 core/工具检查不需要开启 `compiler-driver` feature；
-应用则必须获得 CLI 的注入环境，普通 Cargo 不提供此环境。
+应用则必须获得 CLI 的注入环境，普通 Cargo 不提供此环境。仅用普通 Cargo 编译
+core API 的应用，调用 build/build_with_options 时返回 `BuildError::CompilerPlanUnavailable`，
+不会把缺失工具链计划解释成合法空图。
 
 Cargo 仍管理依赖、features、cfg、profile、target 和 build.rs。CLI 转发 Cargo
 选项和 `--` 后的业务参数，不支持与其他 Rust 编译包装器叠加。
@@ -216,102 +183,87 @@ cargo nestrs init --all-targets --output target/editor/rust-project.json --vscod
 
 | 入口 | 工作与边界 |
 | --- | --- |
-| `cargo nestrs check/build` | 注入标准声明宏，按真实语义生成绑定，完成 Rust 类型与借用检查 |
+| `cargo nestrs check/build` | 注入声明宏，生成真实类型绑定，完成 Rust 类型与借用检查；最终 binary / test 同时编译并验证完整 DI 图 |
 | `cargo nestrs init` | 初始化或刷新现有项目的 Nestrs 开发环境，成功检查后生成 rust-analyzer 项目与设置 |
 | `cargo nestrs test` | 执行测试；文档示例经完整 driver 编译后由真实 rustdoc 运行 |
-| `ServiceProvider::build()` | 构造任何服务前验证当前链接单元的完整注册图，成功后冻结 |
-| `cargo nestrs graph` | 独立验证选定项目的各 binary，导出项目 HTML；`--bin` 限定单入口 |
+| `ServiceProvider::build()` | 加载入口共享的不可变编译计划，创建独立运行时；按服务声明策略与全局默认选取 Singleton 预热根 |
+| `cargo nestrs graph` | 对选定 binary 执行 Cargo check，从编译器同源 sidecar 生成 HTML；`--bin` 限定单入口 |
 | 实际激活 | 执行 constructor/factory；外部资源初始化仍可能失败 |
 
-`check/build` 成功不等于执行了容器全图校验，结构合法也不保证数据库连接等外部
-资源成功。图诊断程序不执行服务构造，但它仍然运行一个目标程序，不能称为纯 Rust
-类型检查。具体实现见[编译器适配说明](NESTRS_COMPILER_ADAPTER.md)。
+最终 binary / test 的 `check/build` 已检查缺失依赖、重复、歧义、环和生命周期冲突；
+library 编译只贡献声明和查询摘要，由最终入口合并应用需求。结构合法仍不保证数据库
+等外部资源初始化成功。graph 使用同一份编译器语义计划，不运行目标程序、不替换
+业务 `main`，也不调用服务构造。编译器与执行协议见[rustc 集成指南](NESTRS_RUSTC_EXTENSION_GUIDE.md#plan)，运行期行为见[core README](../nestrs-core/README.md)。
 
 ## IDE 与 rustdoc
 
-`cargo nestrs init` 面向自行组装后接入 Nestrs 的现有 Rust 项目，初始化开发环境；
-也可重跑以刷新已有环境。默认生成 `<Cargo target>/nestrs/ide/rust-project.json`
-与相邻的 `rust-analyzer-settings.json`，不会创建项目、添加 Cargo 依赖或改写业务源码。
-CLI 不安装编辑器或工具链组件。
+`cargo nestrs init` 检查现有项目，生成 `<Cargo target>/nestrs/ide/rust-project.json`
+及相邻设置；只有 `--vscode` 才合并 `.vscode/settings.json`。它不创建项目、不改业务
+依赖、不安装编辑器。保存检查调用 `cargo nestrs init check`，输出真实 Cargo JSON
+诊断；成功刷新模型，失败保留上次有效模型，无变化不重写。配置合并、constructor
+语义模型、未保存编辑与平台限制统一见 [IDE 接入](NESTRS_IDE.md)。
 
-只有 `cargo nestrs init --vscode` 才将 linkedProjects、检查命令和过程宏服务器配置
-合并到 `.vscode/settings.json`。JSONC 注释、无关设置和已有诊断偏好保留，首次变更前
-备份一次；无效或重复键输入明确拒绝且不覆盖。其他使用 rust-analyzer LSP 的客户端
-需按自己的接入方式加载生成项目与配置，不能把“编辑器支持 Rust”理解为它必然使用
-rust-analyzer，也不承诺初始化后所有客户端自动生效。
+`cargo nestrs test` / `test --doc` 使用真实 rustdoc。文档源码和每个独立示例均经
+完整 driver，因此示例内可声明服务、使用自动绑定及闭合泛型。文档载体不替代实际
+业务库，不能通过省略示例隐藏失败。相对 include 与来源边界见
+[rustdoc 集成](NESTRS_RUSTC_EXTENSION_GUIDE.md#editors)。
 
-未来的 `cargo nestrs create` 将在 bootstrap 完成后创建新项目，并在内部复用初始化
-能力，直接交付已初始化的项目，用户无需再执行 `init`。`create` 当前尚未实现。
+当前命令不包含 `doc`、`clippy` 或 `create`。core/工具自身可以使用普通 Cargo
+Clippy；这不等于应用级 Clippy 已接入 Nestrs。旧 `ide` 命令已改为 `init`，迁移时
+携带原选项重新执行；VS Code 项目还应加 `--vscode` 更新保存检查命令。
 
-模型来自实际 rustc 单元和 Cargo artifact，保留依赖身份、重命名、多版本、cfg、
-edition、test、build.rs 环境、OUT_DIR 和其他过程宏工件。core 用户在编辑器模型中
-获得同名 `nestrs` 私有依赖，原版宏服务器使用真实 bridge，编辑器据此推导注入
-字段和工厂参数。保存时 `cargo nestrs init check` 流式输出真实编译诊断，成功后
-刷新模型；失败保留上次成功模型，无变化不重写文件。未保存源码由 LSP 自身分析。
+## 生成产物与缓存
 
-cfg 由同一 rustc 按实际参数执行 `--print cfg` 获取。配置 `cfg.setTest = false`
-及 `cargo.cfgs = []`，避免编辑器合成 test、debug_assertions 或 miri 条件；真实
-test 与 profile 条件已在各编译单元中记录。保存检查的 `check.extraEnv` 固定
-本次选定的 rustc、driver 和 bridge 路径，保留其他用户环境变量。
+工具在源码所属 crate 生成合法的 typed adapter，并在最终 binary/test 汇总声明、
+查询和闭合泛型，冻结完整计划。项目生成内容统称 `nestrs-reflect`，不是需要新增的
+Cargo package。私有执行入口为 `__nestrs_reflect_v2`；工具和 core 要配套重编译，
+引用 core 的空图也在 check 阶段验证 `plan_set_options_v2`，不接受旧协议。
 
-原版 rust-analyzer 仍会合并 host 默认 cfg；若实际参数移除其中某项，例如
-`panic = "abort"` 或禁用默认 CPU 特性，IDE 准备会明确拒绝并保留旧模型。
-debug/release 和增加 CPU 特性可以表示；此限制不影响应用的 check/build/run。
+| 产物 | 用途 |
+| --- | --- |
+| `*.nestrs-reflect.json` | 最终入口 metadata 旁的执行清单；JSON schema 仍为 `1`，记录已选节点、输入、投影、路由与顺序 |
+| `*.nestrs-plan.json` | graph 命令读取的同源展示数据；schema 与清单的编号约定不同 |
+| `<隔离构建目录>/nestrs/compiler/<编译单元>/` | 两轮分析记录与自动绑定的虚拟源码片段 |
+| `<Cargo target>/nestrs/ide/rust-project.json` | 编辑器项目模型；默认位置相对原 Cargo target |
 
-真实原版 rust-analyzer 的冷启动、hover、补全、定义跳转、未保存编辑、真实错误与
-恢复，以及 feature、宏生成声明和 build.rs 产物已由 LSP 回归验证。完整使用方式与
-当前平台边界见 [IDE 接入](NESTRS_IDE.md)。这不代表所有编辑器 UI 或任意宏组合均已验收。
+前两份 JSON 供审阅或展示，运行程序不读取它们；业务源码不会被工具生成的绑定覆盖。
+编译器机制、跨 crate 可见性与清单字段统一见
+[rustc 集成指南](NESTRS_RUSTC_EXTENSION_GUIDE.md#plan)。
 
-CLI 的 `RUSTDOC` 指向 driver 的文档入口。真实源码先以 `cfg(doc)` 编译和审计，
-展开后的文档交给固定 sysroot 的原版 rustdoc；每段示例作为独立链接单元经过完整
-driver，再由 rustdoc 按 `compile_fail`、`no_run`、`should_panic` 等设置执行。
-没有直接 core 依赖、只调用上游业务库封装的 DI 函数的 doctest，也经过相同入口。
-文档载体不替代真实业务库，也不静默忽略 doctest。库内服务、示例内新声明与 trait
-自动绑定、闭合泛型、factory 跨 await 借用、方法文档、宏生成项和 crate 测试属性
-均有实际回归。Linux 与 Windows 的实际验证范围见
-[core 重构验收](NESTRS_CORE_REFACTOR_VALIDATION.md)。
-文档位置映射等边界见 [编译器适配](NESTRS_COMPILER_ADAPTER.md#rustdoc-和原版-rust-analyzer)。
-应用级 Clippy 接入和 `cargo nestrs clippy` 尚未实现；普通 core/构建工具的 Clippy
-检查可以独立运行。
+CLI 按 release、完整 commit、host 和 **driver/bridge 的联合内容指纹**隔离 target。
+普通 Linux 构建位于 `<Cargo target>/nestrs/<compiler identity>/<fingerprint>`；
+Windows 使用完整身份的短哈希。graph 再按 package/binary 隔离，Windows graph
+使用 `<Cargo target>/nestrs/g<16位哈希>`。IDE 另按构建选项与 workspace 身份隔离。
+短路径降低 MSVC 路径长度压力，但不保证任意深目录都可用。
 
-## 自动绑定、元数据与缓存
+Cargo 继续复用未变更构建单元；rustc incremental 当前关闭。两轮源码快照只验证
+已读取源码，不涵盖任意非确定过程宏、环境变量或全部外部文件，不是完整构建事务。
+首次 core 装配仍调用目标端 adapter 取得真实 `TypeId` 与函数地址；后续 root 共享
+不可变计划，但缓存与服务实例各自独立，不存在运行时重新注册或扩图。
 
-第一轮分析收集 marker 中真实的 Ty/DefId、provider、接口需求和有限闭合类型，
-用 trait solver / Unsize 检查投影。FileLoader 将辅助 Rust 代码放入合法模块的
-虚拟编译输入，第二轮重新展开和检查；磁盘上的业务源码不被改写。
+## 编译错误的展示
 
-跨 crate 分析读取上游注册回调、查询根和闭合蓝图的编码 MIR；
-`always_encode_mir` 使 metadata-only check 产物也包含必要描述。类型匹配使用
-rustc 的真实身份，公开重导出和 Cargo 依赖别名使用实际可访问的生成路径。
+DI 错误通过原生 rustc 诊断与 Cargo JSON 输出，主位置指向业务字段、
+constructor/factory 参数、查询或冲突声明，附相关位置与修复提示；内部证据保留在
+最后的 `cause`。`NESTRS-DI001` 等标识位于消息正文，不占用 Rust 的 `E0xxx` 编号。
+错误分类、多个错误的排序、来源恢复与完整输出统一见[诊断指南](NESTRS_DIAGNOSTICS_DESIGN.md)。
 
-服务所属 crate 为已声明的 provider、factory 成功类型及可确定的闭合泛型生成
-**自动投影能力目录**。投影代码仍在能合法访问实现类型的模块中编译，所以私有
-实现也能通过公开接口提供给下游。目录不公开业务实现类型，也不实例化服务。
-core 在 build 时合并当前链接单元的需求，仅启用查询根或 provider 依赖实际需要
-的接口；未请求的能力不会产生路由、触发歧义或物化泛型。启用后仍在实例化前完成
-整个依赖闭包的验证，成功后冻结图。
+可用独立的预期失败项目观察终端与 JSON 输出：
 
-来自兄弟 crate 的同一自动投影按 concrete/interface 类型对幂等合并。已有显式
-投影优先，两个显式投影重复仍报图错误；不同 concrete 实现不会因为接口相同而
-被合并。精确 key、primary、optional、生命周期和实例缓存规则保持不变。
+```sh
+cargo nestrs check --manifest-path example/di-errors/01-missing-concrete/Cargo.toml
+cargo nestrs check --manifest-path example/di-errors/01-missing-concrete/Cargo.toml --message-format=json
+```
 
-业务项目的拆分方式与支持边界见 [跨 crate DI](NESTRS_CROSS_CRATE_DI.md)。
-
-producer metadata 会记录 bridge 的实际 crate 身份。工具不仅注入 `--extern nestrs`，
-还为下游 rustc/rustdoc 添加 bridge 目录的 `-L dependency=...`；即使 consumer 没有
-直接 core 依赖，也能加载上游元数据。这不意味着向无 core 的 consumer 开放服务声明。
-
-CLI 按完整编译器身份与 **driver、bridge 的联合内容指纹** 隔离 target，graph 再
-按 package/binary 隔离。Cargo 仍复用未变更构建单元，rustc incremental 当前关闭。
-Windows 的目录名称使用上述完整身份的短哈希，缩短 MSVC 链接器看到的输出路径；
-graph 使用 `<Cargo target>/nestrs/g<16位哈希>`，将完整编译器身份、driver/bridge
-联合内容指纹及 package/binary 身份一起计算到哈希中，避免继续嵌套长目录。
-缓存失效规则保持一致。这能减少 `MAX_PATH` 问题，不保证任意深的工作区路径都可用。
-源码快照不覆盖任意非确定过程宏或全部 build.rs 外部输入，不能描述成完整事务。
+这两条命令都应因缺失依赖编译失败。更多源码、修复方向与批量核对入口见
+[依赖错误示例](../example/di-errors/README.md)。
 
 ## HTML 图边界
 
-HTML/CSS/JavaScript 与写文件全部由 CLI 负责，core 仅提供隐藏只读图 JSON。
+HTML/CSS/JavaScript 与写文件全部由 CLI 负责，输入来自编译器的
+`*.nestrs-plan.json` 图 sidecar，与最终执行计划共用候选选择、输入和拓扑结果。
+该图文件与审阅用的 `*.nestrs-reflect.json` 用途不同；两个文件都不是容器启动时
+加载的配置，也不表示运行时实例或请求的快照。
 默认输出 `<Cargo target>/nestrs-di.html`；`--output PATH` 相对调用目录解析。
 
 ```sh
@@ -325,7 +277,7 @@ cargo nestrs graph --workspace
 cargo nestrs graph -p nestrs-di-example --bin checkout
 ```
 
-省略 `--bin` 时，每个 binary 在独立诊断入口和缓存中处理，HTML 包含项目总览、
+省略 `--bin` 时，每个 binary 在独立编译计划和缓存中处理，HTML 包含项目总览、
 入口筛选、共享声明归属以及各入口诊断。每个节点和依赖边始终属于实际入口，不能
 把不同 binary 的 provider 合并后作统一校验，也不能理解为跨进程共享 Singleton。
 指定 `--bin` 时保持原单图页面与校验契约。
@@ -348,107 +300,83 @@ cargo nestrs graph -p nestrs-di-example --bin checkout
 保持 `nestrs-di-example`，现在只包含正常的 `checkout` 入口。上面的 package 图命令
 在图校验和文件写入成功时返回退出码 `0`。从仓库根目录执行时使用上述 `-p` 参数；
 进入 `example/di-checkout/` 后可以直接执行 `cargo nestrs graph`，默认输出仍为仓库
-根的 `target/nestrs-di.html`。故意非法的生命周期用例位于 DI 测试 fixture，graph fixture 中
-独立的 `invalid_graph` 仍用于验证部分失败报告，不参与正常电商图导出。
+根的 `target/nestrs-di.html`。故意非法的生命周期用例位于 aot-invalid 测试 fixture；
+graph fixture 中独立的 `invalid_graph` 用于验证部分失败报告，不参与正常电商图导出。
 
-显式 `--bin` 的图验证失败、项目没有 binary、入口选择无效、元数据查询失败以及输出写入失败不会覆盖
-已有 HTML。一次项目导出只描述同一组 features、cfg、profile 和 host 下的结果，
+显式 `--bin` 的图验证失败、项目没有 binary、入口选择无效、元数据查询失败以及
+输出写入失败不会覆盖已有 HTML。一次项目导出只描述同一组 features、cfg、profile 和目标平台下的结果，
 不会同时枚举未启用特性或无限开放泛型。只含 lib 的项目目前没有独立 DI 图入口。
+当前 graph 入口仍要求所选 binary 直接依赖 `nestrs-core`，driver 对仅间接依赖 core
+的入口会明确拒绝。这是图命令现有的额外限制；正常 `check/build/run` 可以通过业务库
+封装间接使用容器。声明服务的 crate 应显式依赖 core，确保首次宏展开和编辑器模型都能
+获得 `nestrs`；传递 core 的自动接入发生在首次展开后的语义探测。
 
-命令保留真实 binary 的声明和查询根，生成诊断入口；不执行 main、constructor、
-factory、Default、value 或 cleanup，也不创建 Tokio runtime。当前仅支持固定
-host 可运行、直接依赖 core 且源码中具有标准 main 的 binary，包括
-`#[tokio::main]`。无直接 core、`no_main` 及 `cfg_attr` 引入的 `no_main` 在执行前
-拒绝并进入相应入口诊断；宏生成 main、lib/test/example 图目标和跨 target 执行仍未支持。
+命令保留真实 binary 的声明和查询根，只进行编译检查和 sidecar 导出；不执行 main、
+constructor、factory、Default、value 或 cleanup，也不创建 Tokio runtime。图导出
+不再要求定位或替换 `main`，目标程序是否能在当前 host 执行也不再是导出条件。
+sidecar 跟随本次 Cargo 返回的 `.rmeta` 工件，并核对 package、binary、源码和
+metadata 身份，避免把其他 feature/profile 构建留下的图作为当前结果。
+编译过程仍可能运行 Cargo build script 和过程宏，因此上述保证针对应用 main 与
+DI 激活，不能解释为整个编译过程不会执行任何代码。
+`--target` 由 Cargo 和配套工具链处理，所需目标库仍须可用；这不表示所有 target 已有
+实机验收。目前图入口选择仍限 binary，lib/test/example 独立图目标尚未开放。
 
-## 回归入口
+## 回归入口与核对位置
+
+普通工具单测不需要 rustc_private；应用与编译器集成须先构建完整工具。以下命令
+是可重放的验证入口，实际执行结果按快照和 host 记录在[修复记录](NESTRS_FIXES.md)。
+这些命令的存在不表示当前版本已在所有 host 执行。完整测试职责见
+[core 测试说明](../nestrs-core/tests/README.md)。
 
 ```sh
-cargo check -p nestrs-core -p cargo-nestrs -p nestrs-tool-bridge --all-targets
-cargo test -p nestrs-core -p cargo-nestrs -p nestrs-tool-bridge
-cargo clippy -p nestrs-core -p cargo-nestrs -p nestrs-tool-bridge --all-targets -- -D warnings
-cargo fmt --check
-
-cargo nestrs check --workspace --all-targets
-cargo nestrs test --workspace
+python3 tools/build-toolchain.py
+cargo test -p nestrs-core -p cargo-nestrs
+cargo clippy -p nestrs-core -p cargo-nestrs --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo nestrs test --workspace --exclude nestrs-tool-bridge
 cargo nestrs test --manifest-path cargo-nestrs/tests/fixtures/di/Cargo.toml --all-targets
-python3 tools/verify-macro-toolchain.py --skip-build
-python3 tools/verify-cross-crate-binding.py --skip-build
-python3 tools/verify-ide.py --skip-build
-python3 tools/verify-graph.py --skip-build
-python3 tools/compiler-probe/verify_autobind.py
 ```
 
-DI fixture 保留原 52 个 UI 基线，加 3 个宏/helper 误用和 1 个导入成功用例；另增加
-字段与工厂参数拒绝 `#[inject(key = ...)]` 的两个用例，当前共 58 个。它们经过工具
-提供的 bridge，检查完整错误代码、消息和重复次数。跨 crate verifier
-覆盖 metadata-only check 及 6 次 debug/release 运行，自动绑定探针保留 14 次运行。
-另有跨 crate DI verifier 覆盖独立接口库、私有 class/factory、兄弟 crate 需求、
-精确 key、primary、关联类型、闭合泛型及真实 HTML 图，并验证歧义在构造前失败。
-图 verifier 检查副作用哨兵、目标缓存、普通运行正对照、单图失败保留输出，以及项目
-部分/全部失败、跨 package 同名入口、feature 跳过与开启和 library-only 项目。
-IDE verifier 记录真实 LSP 消息与断言，不能以关闭诊断代替成功。
+Linux 下，`rustc` 与 Cargo 选择同一固定工具链后，编译器集成测试可执行：
 
-离线 HTML 交互另有真实 Chromium 回归，输入为实际电商示例导出的单图或项目报告：
+```sh
+LD_LIBRARY_PATH="$(rustc --print sysroot)/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+RUSTC_BOOTSTRAP=nestrs_driver,nestrs_tool_bridge \
+cargo test -p cargo-nestrs -p nestrs-tool-bridge --features cargo-nestrs/compiler-driver --no-fail-fast
+python3 tools/verify-macro-toolchain.py --skip-build
+python3 tools/verify-cross-crate-binding.py --skip-build
+python3 tools/verify-graph.py --skip-build
+python3 tools/verify-ide.py --skip-build --rust-analyzer /path/to/rust-analyzer
+```
+
+Windows 使用 PowerShell 和相同脚本名，把 `python3` 替换为本机 `python`，并使用
+本机 rust-analyzer.exe。直接运行 compiler-driver 测试时须让 PATH 包含匹配 sysroot
+的 bin，并仅对该测试进程设置 `RUSTC_BOOTSTRAP=nestrs_driver,nestrs_tool_bridge`；不要把它传播给
+业务编译。上述测试和脚本由开发者在对应 host 手动执行，无需配置流水线。
+私有 bridge 与 driver 一起接受上述工具构建测试；应用路径的 workspace 测试排除
+bridge，因为 CLI 会清除 bootstrap，且 bridge 不是应用依赖。
+workspace 的 default-members 仅含 core 和工具，因此不指定 package 的普通 Cargo
+检查和单测也不会要求私有 bridge 的构建授权。
+支持 host 的声明、历史本机结果和当前源码的验证结果是不同证据；某个平台通过
+不代表每次修改都已在两端复测。
+
+| 行为 | 实现或真实回归 |
+| --- | --- |
+| 命令解析与帮助 | [commands/cli.rs](../cargo-nestrs/src/commands/cli.rs)、[cli.rs 测试](../cargo-nestrs/tests/cli.rs) |
+| pin、工具匹配与缓存 | [toolchain.rs](../cargo-nestrs/src/toolchain.rs)、[build-toolchain.py](../tools/build-toolchain.py) |
+| 启动配置 | [project_config.rs](../cargo-nestrs/src/project_config.rs)、[startup_config 回归](../cargo-nestrs/tests/startup_config.rs) |
+| graph 选择与输出保留 | [commands/graph.rs](../cargo-nestrs/src/commands/graph.rs)、[verify-graph.py](../tools/verify-graph.py) |
+| 本机路径、metadata 与 doctest | [native_host.rs](../cargo-nestrs/tests/native_host.rs)、[bridge_metadata.rs](../cargo-nestrs/tests/bridge_metadata.rs)、[rustdoc.rs](../cargo-nestrs/tests/rustdoc.rs) |
+
+离线 HTML 的交互回归使用已有 Playwright 和 Chromium，不为仓库增加 npm 依赖：
 
 ```sh
 cargo nestrs graph -p nestrs-di-example --bin checkout --output target/checkout-di.html
 node tools/verify-graph-page.cjs --html target/checkout-di.html --output target/nestrs-graph-page
 ```
 
-脚本使用已有 Playwright 安装，不为仓库增加 npm 依赖。若 `require('playwright')`
-不可用，可传 `--playwright /path/to/playwright`，或设置 `NESTRS_PLAYWRIGHT_MODULE`；
-浏览器可通过 `--chromium /path/to/chromium` 或 `NESTRS_CHROMIUM_PATH` 指定。
-默认使用该 Playwright 安装管理的 Chromium。只修改页面时，可以传
-`--template cargo-nestrs/src/graph.html`，复用已导出的真实图数据测试当前模板，
-无需重新执行 Cargo。所有路径均可配置，脚本不安装工具或下载浏览器。
-
-这组检查覆盖实际输入页面在 1600/1280px 下的单图或项目入口筛选，以及真实 Checkout
-的接口请求、精确 key 与选中实现链路（包含超过 JavaScript 安全整数范围的 indexed
-十进制字符串和同文本 named key）、输入槽位与重复 Transient、
-多入口局部 ID 隔离、搜索/筛选/详情、安全文本、失败及跳过报告和手机布局；还检查
-大图被截断的接口/缺席输入可经搜索访问，完整槽位可分页查看。真实 Checkout 的每条
-连线都经几何采样，确保不穿过无关节点，连线标签也不能覆盖节点或彼此。
-浏览器处于离线模式，JavaScript 错误及网络请求都会使验证失败。结果、合成边界案例
-HTML 和截图保存在指定输出目录，`report.json` 记录各场景的通过状态。
-
-2026-09-28 已在原生 Windows `x86_64-pc-windows-msvc`、固定 Rust `1.98.0` 上
-完成实际验证：workspace check/test、包含 Eager 与 scope warm-up 的电商示例、
-DI fixture 与全部 56 个 UI 契约用例、三个 driver 集成测试，以及真实 rustdoc。
-图 verifier 的 12 条命令和跨 crate verifier 的 6 次 debug/release 执行通过。
-原版 rust-analyzer `0.3.3049` 的完整 LSP 验证也通过 default、alternate、release
-三种配置，详情见 [IDE 验证与边界](NESTRS_IDE.md#验证与边界)。这些是 Windows
-本机 exe/dll 的执行结果，Linux 回归另行运行；不是把 WSL 运行结果当作 Windows 结果。
-两个平台的 core/工具/driver 严格 Clippy 及格式检查也已通过。
-
-Windows 开发者可以在构建工具后，用 PowerShell 重放主要验收入口：
-
-```powershell
-cargo nestrs check --workspace --all-targets
-cargo nestrs test --workspace
-cargo nestrs test --manifest-path cargo-nestrs/tests/fixtures/di/Cargo.toml --tests
-python tools/verify-graph.py --skip-build
-python tools/verify-macro-toolchain.py --skip-build
-python tools/verify-ide.py --skip-build --rust-analyzer C:\tools\rust-analyzer.exe
-```
-
-最后一条命令的 server 路径应替换为已安装的原版 rust-analyzer 路径；验证器不会
-为用户安装编辑器。普通使用无需运行这些开发回归脚本。
-
-`cargo-nestrs/tests/native_host.rs` 是 Linux/Windows 共用的真实工具回归，需要先
-构建完整工具链。它在包含空格和中文的临时目录中运行 check/build/run、graph 输出
-替换与失败保留、IDE 模型生成，以及编辑器配置中的保存检查；图 fixture 检查业务
-main 和服务构造副作用均未执行。`bridge_metadata` 和 `rustdoc` 测试同样在两个
-host 上启用，覆盖没有直接 core 依赖的下游和实际可执行 doctest。Unix shell mock
-测试仍仅用于 Unix，不能替代 Windows 原生回归。完整 LSP 验证与原生 CLI 测试是
-不同层级，某个平台通过项目模型测试不代表其全部编辑器交互已经验收。
-
-[Native toolchain hosts CI](../.github/workflows/native-host.yml) 为 Linux 和 Windows
-分别定义上述回归：从仓库 pin 选择编译器，安装 `rustc-dev`、`rust-src`、rustfmt 和
-Clippy，再由构建脚本检查完整 commit；不可获得的固定版本会使任务失败，不回退到
-stable。该任务覆盖 core/工具测试、格式、严格 Clippy 和三个真实 driver 集成测试，
-不安装或启动额外 rust-analyzer LSP server。工作流文件的存在不等于云端任务已成功
-执行，应以对应提交的 Actions 日志为准。
-
-三个历史阶段的包划分与命令只作演进记录，当前用户契约以本文、[IDE 接入](NESTRS_IDE.md)
-及 [README](../README.md) 为准。
+可用 `--playwright PATH` / `NESTRS_PLAYWRIGHT_MODULE` 指定已有模块，用
+`--chromium PATH` / `NESTRS_CHROMIUM_PATH` 指定浏览器。只改页面时，可加
+`--template cargo-nestrs/src/graph.html` 复用实际图数据；脚本不安装或下载工具。
+它检查离线请求、JavaScript 错误、入口/搜索/筛选、槽位与 key、连线布局和移动端，
+在输出目录保存 `report.json`、HTML 与截图。
