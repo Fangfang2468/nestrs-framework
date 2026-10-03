@@ -41,11 +41,12 @@ pub(crate) enum Marker {
     PlanOrigin,
     QueryRoot,
     QueryCall,
+    QueryUnsize,
     QuerySummary,
 }
 
 impl Marker {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::Provider,
         Self::Dependency,
         Self::Binding,
@@ -56,6 +57,7 @@ impl Marker {
         Self::PlanOrigin,
         Self::QueryRoot,
         Self::QueryCall,
+        Self::QueryUnsize,
         Self::QuerySummary,
     ];
 
@@ -71,6 +73,7 @@ impl Marker {
             Self::PlanOrigin => "compiler_plan_origin",
             Self::QueryRoot => "compiler_query_root",
             Self::QueryCall => "compiler_query_call",
+            Self::QueryUnsize => "compiler_query_unsize",
             Self::QuerySummary => "__nestrs_query_summary_v1",
         }
     }
@@ -90,6 +93,7 @@ impl Marker {
             Self::PlanFactory => (&[Bool], Inputs::None),
             Self::PlanOrigin => (&[U8, Usize], Inputs::Label),
             Self::QueryRoot | Self::QueryCall => (&[Type], Inputs::None),
+            Self::QueryUnsize => (&[Type, Type], Inputs::None),
             Self::QuerySummary => (&[], Inputs::None),
         }
     }

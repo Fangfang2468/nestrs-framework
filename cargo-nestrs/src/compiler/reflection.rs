@@ -34,6 +34,7 @@ pub(crate) fn prepare(compiler: &interface::Compiler, krate: &mut ast::Crate) {
     }
     let root = Marker::QueryRoot.name();
     let call = Marker::QueryCall.name();
+    let unsize = Marker::QueryUnsize.name();
     let source = format!(
         r#"
         #[allow(dead_code)]
@@ -41,6 +42,7 @@ pub(crate) fn prepare(compiler: &interface::Compiler, krate: &mut ast::Crate) {
             mod {MODULE} {{
                 #[inline(never)] pub const fn {root}<T: ?Sized>() {{}}
                 #[inline(never)] pub const fn {call}<F: ?Sized>() {{}}
+                #[inline(never)] pub const fn {unsize}<S: ?Sized, T: ?Sized>() {{}}
                 #[inline(never)] pub const fn {}() {{}}
             }}
         }};

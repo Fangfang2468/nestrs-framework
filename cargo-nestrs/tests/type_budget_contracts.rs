@@ -1,0 +1,218 @@
+//! Ordinary Rust types and passive query carriers do not consume DI budgets.
+#![cfg(feature = "compiler-driver")]
+
+use std::{
+    fs,
+    path::Path,
+    process::Command,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+const CASES: &[(&str, &str)] = &[
+    ("ordinary", include_str!("fixtures/type-budget/ordinary.rs")),
+    ("provider", include_str!("fixtures/type-budget/provider.rs")),
+    (
+        "projected_provider",
+        include_str!("fixtures/type-budget/projected_provider.rs"),
+    ),
+    ("factory", include_str!("fixtures/type-budget/factory.rs")),
+    ("query", include_str!("fixtures/type-budget/query.rs")),
+    (
+        "generic_growth",
+        include_str!("fixtures/aot-invalid/src/bin/generic_growth.rs"),
+    ),
+    (
+        "associated_const_growth",
+        include_str!("fixtures/aot-invalid/src/bin/associated_const_growth.rs"),
+    ),
+    (
+        "carrier_direct",
+        include_str!("fixtures/type-budget/carrier_direct.rs"),
+    ),
+    (
+        "carrier_erased",
+        include_str!("fixtures/type-budget/carrier_erased.rs"),
+    ),
+    (
+        "carrier_independent",
+        include_str!("fixtures/type-budget/carrier_independent.rs"),
+    ),
+    (
+        "carrier_query_direct",
+        include_str!("fixtures/type-budget/carrier_query_direct.rs"),
+    ),
+    (
+        "carrier_query_erased",
+        include_str!("fixtures/type-budget/carrier_query_erased.rs"),
+    ),
+    (
+        "carrier_growth",
+        include_str!("fixtures/type-budget/carrier_growth.rs"),
+    ),
+];
+
+#[test]
+fn ordinary_complex_types_do_not_consume_di_budgets_and_real_di_growth_is_rejected() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = workspace.join(format!(
+        "target/type-budget-contracts/{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir_all(directory.join("src/bin")).unwrap();
+    let manifest = format!(
+        r#"[package]
+name = "nestrs-di-regressions"
+version = "0.0.0"
+edition = "2024"
+publish = false
+[workspace]
+[dependencies]
+nestrs-core = {{ path = {} }}
+tokio = {{ version = "1.53.1", default-features = false, features = ["rt-multi-thread", "sync", "macros", "time"] }}
+serde_json = "1"
+[features]
+with-di = []
+"#,
+        serde_json::to_string(&workspace.join("nestrs-core")).unwrap(),
+    );
+    fs::write(directory.join("Cargo.toml"), &manifest).unwrap();
+    let lock = fs::read(workspace.join("cargo-nestrs/tests/fixtures/di/Cargo.lock")).unwrap();
+    fs::write(directory.join("Cargo.lock"), &lock).unwrap();
+    // Distinct array lengths create distinct rustc types; repeating the same
+    // tuple element would be deduplicated by Ty::walk and miss this boundary.
+    let wide = format!(
+        "type Wide = ({});\n",
+        (0..1100)
+            .map(|length| format!("[u8; {length}],"))
+            .collect::<String>()
+    );
+    fs::write(directory.join("src/wide.rs"), &wide).unwrap();
+    for &(name, source) in CASES {
+        fs::write(directory.join(format!("src/bin/{name}.rs")), source).unwrap();
+    }
+
+    let mut results = Vec::new();
+    for release in [false, true] {
+        let profile = if release { "release" } else { "debug" };
+        let runs = [
+            ("ordinary", true, false),
+            ("ordinary", false, false),
+            ("ordinary", false, true),
+        ]
+        .into_iter()
+        .chain(CASES[1..].iter().map(|(name, _)| (*name, false, false)));
+        for (name, native, with_di) in runs {
+            let expected_success = matches!(
+                name,
+                "ordinary" | "carrier_direct" | "carrier_erased" | "carrier_independent"
+            );
+            let mut command = Command::new(if native {
+                "cargo"
+            } else {
+                env!("CARGO_BIN_EXE_cargo-nestrs")
+            });
+            command
+                .args([
+                    if expected_success { "run" } else { "check" },
+                    "--locked",
+                    "--offline",
+                    "--message-format=json",
+                    "--bin",
+                    name,
+                ])
+                .current_dir(&directory)
+                .env("CARGO_TARGET_DIR", directory.join("build"))
+                .env("NESTRS_DRIVER", env!("CARGO_BIN_EXE_nestrs-driver"))
+                .env("CARGO_TERM_COLOR", "never");
+            for key in [
+                "RUSTC_BOOTSTRAP",
+                "RUSTC_WRAPPER",
+                "RUSTC_WORKSPACE_WRAPPER",
+                "RUSTFLAGS",
+                "CARGO_ENCODED_RUSTFLAGS",
+                "NESTRS_GRAPH_TARGET",
+                "NESTRS_IDE_CAPTURE",
+            ] {
+                command.env_remove(key);
+            }
+            if release {
+                command.arg("--release");
+            }
+            if with_di {
+                command.args(["--features", "with-di"]);
+            }
+            let output = command.output().unwrap();
+            let log = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let label = format!(
+                "{profile}-{name}-{}",
+                if native {
+                    "cargo"
+                } else if with_di {
+                    "nestrs-with-di"
+                } else {
+                    "nestrs"
+                }
+            );
+            fs::write(directory.join(format!("{label}.log")), &log).unwrap();
+            assert_eq!(output.status.success(), expected_success, "{label}\n{log}");
+            for forbidden in [
+                "internal compiler error",
+                "panicked at",
+                "fatal runtime error",
+            ] {
+                assert!(!log.contains(forbidden), "{label}: {forbidden}\n{log}");
+            }
+            let errors: Vec<serde_json::Value> = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .filter(|event| {
+                    event["reason"] == "compiler-message" && event["message"]["level"] == "error"
+                })
+                .map(|event| event["message"].clone())
+                .collect();
+            if expected_success {
+                assert!(errors.is_empty(), "{label}\n{log}");
+            } else {
+                assert_eq!(errors.len(), 1, "{label}\n{log}");
+                assert!(
+                    errors[0]["message"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("[NESTRS-DI008]"),
+                    "{label}\n{log}"
+                );
+                assert!(log.contains("TypeExpansionLimit"), "{label}\n{log}");
+                assert!(log.contains("single_type_tree_nodes"), "{label}\n{log}");
+            }
+            results.push(serde_json::json!({ "case": label, "passed": true }));
+            fs::write(
+                directory.join("results.json"),
+                serde_json::to_vec_pretty(&results).unwrap(),
+            )
+            .unwrap();
+        }
+    }
+    assert_eq!(
+        fs::read_to_string(directory.join("Cargo.toml")).unwrap(),
+        manifest
+    );
+    assert_eq!(fs::read(directory.join("Cargo.lock")).unwrap(), lock);
+    assert_eq!(
+        fs::read_to_string(directory.join("src/wide.rs")).unwrap(),
+        wide
+    );
+    for &(name, source) in CASES {
+        assert_eq!(
+            fs::read_to_string(directory.join(format!("src/bin/{name}.rs"))).unwrap(),
+            source
+        );
+    }
+}

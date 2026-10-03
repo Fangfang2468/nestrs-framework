@@ -417,9 +417,23 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
             .instantiate_identity()
             .skip_normalization();
         if closed(concrete) {
+            // 普通 Rust impl 也可能拥有很大的 Self 类型。它尚不是 DI 输入，
+            // 因此先按 rustc 语义归一化并确认真实蓝图，不能让全 crate 的类型
+            // 提前消耗 DI 复杂度/闭合类型预算。关联类型 Self 同样经真实求解。
+            let concrete = tcx
+                .try_normalize_erasing_regions(
+                    ty::TypingEnv::post_analysis(tcx, owner),
+                    ty::Unnormalized::new_wip(concrete),
+                )
+                .map_err(|error| {
+                    format!("cannot normalize impl self type {concrete}: {error:?}")
+                })?;
+            if provider_definition(tcx, concrete).is_none() {
+                continue;
+            }
             closed_impls.push(Marker {
                 kind: MarkerKind::Request,
-                types: vec![normalized(tcx, owner, concrete, tcx.def_span(owner))?],
+                types: vec![concrete],
                 owner,
                 span: tcx.def_span(owner),
                 diagnostic_span: tcx.def_span(owner),

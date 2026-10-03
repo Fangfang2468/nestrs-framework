@@ -18,7 +18,7 @@ use rustc_hir::intravisit::{self, Visitor};
 use rustc_index::Idx;
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::mir::{self, BasicBlock, BasicBlockData, Operand, TerminatorKind};
-use rustc_middle::ty::adjustment::{Adjust, DerefAdjustKind};
+use rustc_middle::ty::adjustment::{Adjust, CustomCoerceUnsized, DerefAdjustKind, PointerCoercion};
 use rustc_middle::ty::{self, Ty, TyCtxt, TypeVisitableExt};
 use rustc_span::{Span, Spanned};
 use rustc_trait_selection::traits::{Obligation, ObligationCause, ObligationCtxt};
@@ -86,11 +86,20 @@ pub const SUMMARY_NAME: &str = crate::protocol::Marker::QuerySummary.name();
 
 const ROOT_MARKER: &str = crate::protocol::Marker::QueryRoot.name();
 const CALL_MARKER: &str = crate::protocol::Marker::QueryCall.name();
+const UNSIZE_MARKER: &str = crate::protocol::Marker::QueryUnsize.name();
 
 #[derive(Clone, Copy)]
 struct Record<'tcx> {
     value: QueryValue<'tcx>,
     span: Span,
+}
+
+/// 粗筛展开链使用 arena 索引，避免深链的递归遍历和析构。不同闭合调用的初始
+/// 大类型互不影响；只有同一条发现链反复扩大同一定义的实参才施加增长防护。
+struct DiscoveryStep {
+    parent: usize,
+    definition: Option<DefId>,
+    size: usize,
 }
 
 /// 常量引用保留真实定义与实参；FnPtr 只描述签名，不能恢复其初始化器身份。
@@ -100,12 +109,13 @@ enum QueryValue<'tcx> {
     Service(Ty<'tcx>),
     Callable(Ty<'tcx>),
     Constant(DefId, ty::GenericArgsRef<'tcx>),
+    Unsize(Ty<'tcx>, Ty<'tcx>),
 }
 
 impl<'tcx> QueryValue<'tcx> {
     fn definition(self) -> Option<DefId> {
         match self {
-            Self::Service(_) => None,
+            Self::Service(_) | Self::Unsize(..) => None,
             Self::Callable(value) => match *value.kind() {
                 ty::FnDef(id, _)
                 | ty::Closure(id, _)
@@ -120,14 +130,31 @@ impl<'tcx> QueryValue<'tcx> {
     fn closed(self) -> bool {
         match self {
             Self::Service(value) | Self::Callable(value) => closed(value),
+            Self::Unsize(source, target) => closed(source) && closed(target),
             Self::Constant(_, args) => {
                 !args.has_non_region_param() && !args.has_infer() && !args.has_escaping_bound_vars()
             }
         }
     }
 
+    fn complexity(self) -> usize {
+        match self {
+            Self::Service(value) | Self::Callable(value) => value.walk().count(),
+            Self::Constant(_, args) => args.types().map(|value| value.walk().count()).sum(),
+            Self::Unsize(source, target) => source.walk().count() + target.walk().count(),
+        }
+    }
+
     fn instantiate(self, tcx: TyCtxt<'tcx>, args: ty::GenericArgsRef<'tcx>) -> Self {
         match self {
+            Self::Unsize(source, target) => Self::Unsize(
+                ty::EarlyBinder::bind(tcx, source)
+                    .instantiate(tcx, args)
+                    .skip_normalization(),
+                ty::EarlyBinder::bind(tcx, target)
+                    .instantiate(tcx, args)
+                    .skip_normalization(),
+            ),
             Self::Service(value) => Self::Service(
                 ty::EarlyBinder::bind(tcx, value)
                     .instantiate(tcx, args)
@@ -147,10 +174,31 @@ impl<'tcx> QueryValue<'tcx> {
         }
     }
 
-    fn normalize(self, tcx: TyCtxt<'tcx>, span: Span, origin: Span) -> Result<Self, String> {
+    fn normalize(
+        self,
+        tcx: TyCtxt<'tcx>,
+        span: Span,
+        origin: Span,
+        query_path: bool,
+    ) -> Result<Self, String> {
         match self {
+            Self::Unsize(source, target) => {
+                // Erasure 只是有限 concrete 候选，尚未调用的方法不消耗 DI 类型预算。
+                // 匹配到真实虚调用后，其闭合 callable/service 会接受相同预算检查。
+                let (source, target) = tcx
+                    .try_normalize_erasing_regions(
+                        ty::TypingEnv::fully_monomorphized(),
+                        ty::Unnormalized::new_wip((source, target)),
+                    )
+                    .map_err(|error| {
+                        format!("无法归一化 DI 查询类型擦除 {source} -> {target}: {error:?}")
+                    })?;
+                Ok(Self::Unsize(source, target))
+            }
             Self::Service(value) | Self::Callable(value) => {
-                validate_type_complexity_at(tcx, value, span, origin)?;
+                if query_path || matches!(self, Self::Service(_)) {
+                    validate_type_complexity_at(tcx, value, span, origin)?;
+                }
                 let normalized = tcx
                     .try_normalize_erasing_regions(
                         ty::TypingEnv::fully_monomorphized(),
@@ -164,8 +212,10 @@ impl<'tcx> QueryValue<'tcx> {
                 })
             }
             Self::Constant(id, args) => {
-                for value in args.types() {
-                    validate_type_complexity_at(tcx, value, span, origin)?;
+                if query_path {
+                    for value in args.types() {
+                        validate_type_complexity_at(tcx, value, span, origin)?;
+                    }
                 }
                 let args = tcx
                     .try_normalize_erasing_regions(
@@ -273,6 +323,15 @@ impl<'tcx> Visitor<'tcx> for Summary<'_, 'tcx> {
         // 每一步的真实接收类型，使用与 THIR 相同的 Deref/DerefMut 方法身份与实参。
         let mut receiver = self.typeck.expr_ty(expression);
         for adjustment in self.typeck.expr_adjustments(expression) {
+            if matches!(adjustment.kind, Adjust::Pointer(PointerCoercion::Unsize)) {
+                self.records.push(Record {
+                    value: QueryValue::Unsize(
+                        self.tcx.erase_and_anonymize_regions(receiver),
+                        self.tcx.erase_and_anonymize_regions(adjustment.target),
+                    ),
+                    span: expression.span,
+                });
+            }
             if let Adjust::Deref(DerefAdjustKind::Overloaded(deref)) = adjustment.kind {
                 self.function(
                     deref.method_call(self.tcx),
@@ -452,12 +511,13 @@ fn immutable_static_summary<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Vec<Record<'tcx>>
 pub fn preserve_summary<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, body: &mut mir::Body<'tcx>) {
     // 常量引用由 rustc 原生 required_consts 在优化前保留，随 MIR metadata 编码。
     // 这里只追加原有类型标记；不插入常量求值或运行期调用，也不改变常量有效性规则。
-    let summary = if crate::reflection::summary_definition(tcx, owner.to_def_id()) {
+    let mut summary = if crate::reflection::summary_definition(tcx, owner.to_def_id()) {
         immutable_static_summary(tcx)
             .unwrap_or_else(|error| crate::diagnostics::internal(tcx, error))
     } else {
         local_summary(tcx, owner)
     };
+    summary.extend(unsize_summary(tcx, body));
     preserve_records(tcx, body, summary);
 }
 
@@ -483,6 +543,9 @@ fn preserve_records<'tcx>(
         return;
     };
     let Some(call) = crate::reflection::local_marker(tcx, CALL_MARKER) else {
+        return;
+    };
+    let Some(unsize) = crate::reflection::local_marker(tcx, UNSIZE_MARKER) else {
         return;
     };
     let source_info = body.basic_blocks[mir::START_BLOCK].terminator().source_info;
@@ -517,9 +580,12 @@ fn preserve_records<'tcx>(
     );
     let count = records.len();
     for (index, record) in records.into_iter().enumerate() {
-        let (function, argument) = match record.value {
-            QueryValue::Service(value) => (root, value),
-            QueryValue::Callable(value) => (call, value),
+        let (function, arguments) = match record.value {
+            QueryValue::Service(value) => (root, tcx.mk_args(&[value.into()])),
+            QueryValue::Callable(value) => (call, tcx.mk_args(&[value.into()])),
+            QueryValue::Unsize(source, target) => {
+                (unsize, tcx.mk_args(&[source.into(), target.into()]))
+            }
             QueryValue::Constant(..) => unreachable!("常量引用使用原生 MIR metadata"),
         };
         let next = if index + 1 == count {
@@ -530,7 +596,7 @@ fn preserve_records<'tcx>(
         blocks.push(call_block(
             tcx,
             function,
-            argument,
+            arguments,
             unit.into(),
             next,
             unwind,
@@ -545,7 +611,7 @@ fn preserve_records<'tcx>(
 fn call_block<'tcx>(
     tcx: TyCtxt<'tcx>,
     function: DefId,
-    argument: Ty<'tcx>,
+    arguments: ty::GenericArgsRef<'tcx>,
     destination: mir::Place<'tcx>,
     target: BasicBlock,
     unwind: mir::UnwindAction,
@@ -558,7 +624,7 @@ fn call_block<'tcx>(
                 func: Operand::Constant(Box::new(mir::ConstOperand {
                     span: source_info.span,
                     user_ty: None,
-                    const_: mir::Const::zero_sized(Ty::new_fn_def(tcx, function, [argument])),
+                    const_: mir::Const::zero_sized(Ty::new_fn_def(tcx, function, arguments)),
                 })),
                 args: Vec::<Spanned<Operand<'tcx>>>::new().into(),
                 destination,
@@ -604,6 +670,8 @@ fn external_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
                 QueryValue::Service(args.type_at(0))
             } else if crate::registration_codegen::reflect_item(tcx, callee, CALL_MARKER) {
                 QueryValue::Callable(args.type_at(0))
+            } else if crate::registration_codegen::reflect_item(tcx, callee, UNSIZE_MARKER) {
+                QueryValue::Unsize(args.type_at(0), args.type_at(1))
             } else {
                 return None;
             };
@@ -676,6 +744,35 @@ fn drop_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> Vec<Record<'
         .collect()
 }
 
+/// 保存原生 unsize 的两端，不猜测包装类型或把普通 impl 当作 provider。
+/// MIR 同时覆盖显式 `as`、隐式 coercion 和标准库泛型转发中的类型擦除。
+fn unsize_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> Vec<Record<'tcx>> {
+    body.basic_blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .filter_map(|statement| {
+            let mir::StatementKind::Assign(assignment) = &statement.kind else {
+                return None;
+            };
+            let mir::Rvalue::Cast(
+                mir::CastKind::PointerCoercion(PointerCoercion::Unsize, _),
+                operand,
+                target,
+            ) = &assignment.1
+            else {
+                return None;
+            };
+            Some(Record {
+                value: QueryValue::Unsize(
+                    tcx.erase_and_anonymize_regions(operand.ty(&body.local_decls, tcx)),
+                    tcx.erase_and_anonymize_regions(*target),
+                ),
+                span: statement.source_info.span,
+            })
+        })
+        .collect()
+}
+
 fn mir_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> Vec<Record<'tcx>> {
     struct Calls<'a, 'tcx> {
         tcx: TyCtxt<'tcx>,
@@ -702,6 +799,7 @@ fn mir_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> Vec<Record<'t
         body,
         records: drop_summary(tcx, body),
     };
+    calls.records.extend(unsize_summary(tcx, body));
     mir::visit::Visitor::visit_body(&mut calls, body);
     let mut seen = HashSet::new();
     calls.records.retain(|record| seen.insert(record.value));
@@ -729,6 +827,11 @@ impl QueryCarriers {
     fn add(&mut self, tcx: TyCtxt<'_>, method: DefId) -> Vec<DefId> {
         self.callables.insert(method);
         let mut added = Vec::new();
+        if let Some(trait_id) = tcx.trait_of_assoc(method)
+            && self.types.insert(trait_id)
+        {
+            added.push(trait_id);
+        }
         if tcx.def_kind(method) == DefKind::AssocFn
             && let Some(implementation) = tcx.impl_of_assoc(method)
         {
@@ -779,6 +882,7 @@ impl<'tcx> NominalIdentities<'tcx> {
         let types = match value {
             QueryValue::Service(value) | QueryValue::Callable(value) => vec![value],
             QueryValue::Constant(_, args) => args.types().collect(),
+            QueryValue::Unsize(source, target) => vec![source, target],
         };
         let mut pending = types;
         let mut identities = HashSet::new();
@@ -790,6 +894,16 @@ impl<'tcx> NominalIdentities<'tcx> {
                     continue;
                 };
                 match *value.kind() {
+                    ty::Dynamic(predicates, _) => {
+                        if let Some(principal) = predicates.principal() {
+                            for reference in rustc_trait_selection::traits::supertraits(
+                                tcx,
+                                principal.with_self_ty(tcx, value),
+                            ) {
+                                identities.insert(reference.skip_binder().def_id);
+                            }
+                        }
+                    }
                     ty::Adt(definition, _) => {
                         identities.insert(definition.did());
                         // 这里只求有限的名义类型关系。实际实参已由 walk 保留，字段
@@ -874,6 +988,123 @@ fn closed(value: Ty<'_>) -> bool {
     !value.has_non_region_param() && !value.has_infer() && !value.has_escaping_bound_vars()
 }
 
+/// 与 rustc 单态化收集使用同一 CoerceUnsized 字段和 lockstep tail 规则。
+/// 只读取已通过类型检查的 coercion；不遍历所有字段来猜测 vtable 的 concrete。
+fn unsize_tails<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    mut source: Ty<'tcx>,
+    mut target: Ty<'tcx>,
+    span: Span,
+) -> Result<Option<(Ty<'tcx>, Ty<'tcx>)>, String> {
+    let environment = ty::TypingEnv::fully_monomorphized();
+    loop {
+        match (*source.kind(), *target.kind()) {
+            (ty::Pat(left, _), ty::Pat(right, _)) => (source, target) = (left, right),
+            (ty::Ref(_, left, _), ty::Ref(_, right, _) | ty::RawPtr(right, _))
+            | (ty::RawPtr(left, _), ty::RawPtr(right, _)) => {
+                return Ok(Some(tcx.struct_lockstep_tails_for_codegen(
+                    left,
+                    right,
+                    environment,
+                )));
+            }
+            _ if source.boxed_ty().is_some() && target.boxed_ty().is_some() => {
+                return Ok(Some(tcx.struct_lockstep_tails_for_codegen(
+                    source.boxed_ty().unwrap(),
+                    target.boxed_ty().unwrap(),
+                    environment,
+                )));
+            }
+            (ty::Adt(left, left_args), ty::Adt(right, right_args)) if left == right => {
+                let reference = ty::TraitRef::new(
+                    tcx,
+                    tcx.require_lang_item(LangItem::CoerceUnsized, span),
+                    [source, target],
+                );
+                let Ok(rustc_middle::traits::ImplSource::UserDefined(implementation)) =
+                    tcx.codegen_select_candidate(environment.as_query_input(reference))
+                else {
+                    return Err(format!(
+                        "无法解析已检查的 CoerceUnsized: {source} -> {target}"
+                    ));
+                };
+                let information = tcx
+                    .coerce_unsized_info(implementation.impl_def_id)
+                    .map_err(|_| format!("无法读取 CoerceUnsized: {source} -> {target}"))?;
+                let Some(CustomCoerceUnsized::Struct(index)) = information.custom_kind else {
+                    return Ok(None);
+                };
+                let field = &left.non_enum_variant().fields[index];
+                source = tcx.normalize_erasing_regions(environment, field.ty(tcx, left_args));
+                target = tcx.normalize_erasing_regions(environment, field.ty(tcx, right_args));
+            }
+            _ => return Ok(None),
+        }
+    }
+}
+
+/// 一个真实 erasure 只为对应 trait 及其 supertrait 上实际出现的虚调用提供 Self。
+/// trait 参数使用真实身份匹配，最终 override/default 仍由 Instance::try_resolve 选择。
+fn concrete_virtual_call<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    concrete: Ty<'tcx>,
+    object: Ty<'tcx>,
+    value: QueryValue<'tcx>,
+) -> Option<QueryValue<'tcx>> {
+    let QueryValue::Callable(callable) = value else {
+        return None;
+    };
+    let ty::FnDef(method, args) = *callable.kind() else {
+        return None;
+    };
+    let trait_id = tcx.trait_of_assoc(method)?;
+    let called_object = args.type_at(0);
+    if object != called_object {
+        // 同名 trait 不代表相同对象形状。只允许 rustc 认可的 object upcast，
+        // 同时核对关联类型绑定、trait 参数和 auto traits；不能重添被擦除的能力。
+        let infcx = tcx
+            .infer_ctxt()
+            .ignoring_regions()
+            .build(ty::TypingMode::non_body_analysis());
+        let ocx = ObligationCtxt::new(&infcx);
+        let reference = ty::TraitRef::new(
+            tcx,
+            tcx.require_lang_item(LangItem::Unsize, tcx.def_span(method)),
+            [object, called_object],
+        );
+        ocx.register_obligation(Obligation::new(
+            tcx,
+            ObligationCause::dummy(),
+            ty::ParamEnv::empty(),
+            reference,
+        ));
+        if !ocx.evaluate_obligations_error_on_ambiguity().is_empty() {
+            return None;
+        }
+    }
+    let ty::Dynamic(predicates, _) = *object.kind() else {
+        return None;
+    };
+    let principal = predicates.principal()?;
+    let concrete_args = tcx.mk_args_from_iter(args.iter().enumerate().map(|(index, argument)| {
+        if index == 0 {
+            concrete.into()
+        } else {
+            argument
+        }
+    }));
+    let trait_count = tcx.generics_of(trait_id).count();
+    let matches = rustc_trait_selection::traits::supertraits(
+        tcx,
+        principal.with_self_ty(tcx, concrete),
+    )
+    .any(|reference| {
+        let reference = tcx.instantiate_bound_regions_with_erased(reference);
+        reference.def_id == trait_id && reference.args.as_slice() == &concrete_args[..trait_count]
+    });
+    matches.then(|| QueryValue::Callable(Ty::new_fn_def(tcx, method, concrete_args)))
+}
+
 /// 每个编译入口汇总全部已类型检查的 body。非泛型 body 即使没有被调用也贡献查询；
 /// 泛型 body 的闭合查询同样直接贡献，带参数的查询则等待实际闭合函数项进行替换。
 /// 业务部分沿保存的语义摘要遍历；标准库只补充闭合回调的原生 MIR 转发边。
@@ -905,7 +1136,10 @@ pub fn collect_with_providers<'tcx>(
             records.extend(
                 external_summary(tcx, owner.to_def_id())
                     .into_iter()
-                    .filter(|record| drop_type(tcx, record.value).is_some()),
+                    .filter(|record| {
+                        drop_type(tcx, record.value).is_some()
+                            || matches!(record.value, QueryValue::Unsize(..))
+                    }),
             );
         }
         if !records.is_empty() {
@@ -1020,6 +1254,16 @@ pub fn collect_with_providers<'tcx>(
             incoming.entry(id).or_default().push(trait_item);
         }
     }
+    // carrier 只表示可能通过标准转发、drop 或 erasure 到达查询，不能据此把
+    // Box::new<Runner<Wide>> 等普通业务类型当成 DI 请求。单类型预算仅施于真实
+    // 查询/调用/常量边反向可达的路径；粗筛发现仍保留下面的全局实例数量上限。
+    let mut query_paths = HashSet::new();
+    let mut direct = propagation.clone();
+    while let Some(id) = direct.pop_front() {
+        if query_paths.insert(id) {
+            direct.extend(incoming.get(&id).into_iter().flatten().copied());
+        }
+    }
     while let Some(id) = propagation.pop_front() {
         if relevant.insert(id) {
             propagation.extend(incoming.get(&id).into_iter().flatten().copied());
@@ -1074,9 +1318,19 @@ pub fn collect_with_providers<'tcx>(
     }
     let mut seen = HashSet::new();
     let mut seen_roots = HashSet::new();
+    let mut seen_unsizes = HashSet::new();
+    let mut dynamic_sources = Vec::new();
+    let mut virtual_calls: Vec<(Record<'tcx>, LocalDefId, usize, Span)> = Vec::new();
+    let mut seen_virtual_calls = HashSet::new();
+    let mut discovery = vec![DiscoveryStep {
+        parent: 0,
+        definition: None,
+        size: 0,
+    }];
+    let mut seen_discovery = HashSet::new();
     let mut roots = Vec::new();
     let mut count = 0usize;
-    while let Some((mut record, owner, depth, origin)) = pending.pop_front() {
+    while let Some((mut record, owner, mut path, origin)) = pending.pop_front() {
         count += 1;
         if count > MAX_QUERY_TYPES {
             expansion_error(
@@ -1088,8 +1342,60 @@ pub fn collect_with_providers<'tcx>(
                 "DI 查询泛型实例展开超过有限分析上限，可能存在不断增长的递归泛型调用".into(),
             );
         }
-        record.value = record.value.normalize(tcx, record.span, origin)?;
+        let query_path = record
+            .value
+            .definition()
+            .is_some_and(|id| query_paths.contains(&id));
+        if !query_path && let Some(definition) = record.value.definition() {
+            if !seen_discovery.insert(record.value) {
+                continue;
+            }
+            let size = record.value.complexity();
+            let limit = (tcx.recursion_limit().0 * 8).max(1024);
+            if size > limit {
+                let mut ancestor = path;
+                while ancestor != 0 {
+                    let step = &discovery[ancestor];
+                    if step.definition == Some(definition) && step.size < size {
+                        expansion_error(
+                            tcx,
+                            record.span,
+                            origin,
+                            "single_type_tree_nodes",
+                            limit,
+                            "查询载体发现过程中，同一函数或常量的泛型实参沿调用链持续增长".into(),
+                        );
+                    }
+                    ancestor = step.parent;
+                }
+            }
+            discovery.push(DiscoveryStep {
+                parent: path,
+                definition: Some(definition),
+                size,
+            });
+            path = discovery.len() - 1;
+        }
+        record.value = record
+            .value
+            .normalize(tcx, record.span, origin, query_path)?;
         if !record.value.closed() {
+            continue;
+        }
+        if let QueryValue::Unsize(source, target) = record.value {
+            if seen_unsizes.insert((source, target))
+                && let Some((concrete, object)) = unsize_tails(tcx, source, target, record.span)?
+                && matches!(object.kind(), ty::Dynamic(..))
+                && !matches!(concrete.kind(), ty::Dynamic(..))
+                && !dynamic_sources.contains(&(concrete, object))
+            {
+                dynamic_sources.push((concrete, object));
+                for &(call, owner, path, origin) in &virtual_calls {
+                    if let Some(value) = concrete_virtual_call(tcx, concrete, object, call.value) {
+                        pending.push_back((Record { value, ..call }, owner, path, origin));
+                    }
+                }
+            }
             continue;
         }
         if let QueryValue::Service(service) = record.value {
@@ -1111,7 +1417,7 @@ pub fn collect_with_providers<'tcx>(
                 _ => continue,
             },
             QueryValue::Constant(id, args) => (id, args),
-            QueryValue::Service(_) => unreachable!(),
+            QueryValue::Service(_) | QueryValue::Unsize(..) => unreachable!(),
         };
         let mut drop_instance = None;
         let (id, args) = if matches!(
@@ -1123,8 +1429,24 @@ pub fn collect_with_providers<'tcx>(
             match ty::Instance::try_resolve(tcx, ty::TypingEnv::fully_monomorphized(), id, args)
                 .map_err(|_| format!("无法解析 DI 查询 helper {}", tcx.def_path_str(id)))?
             {
-                // dyn 调用的 Self 是 trait object，不是实际实现。默认方法也
-                // 不能以 dyn Self 物化；实际 concrete 由已知 provider seed 决定。
+                Some(instance) if matches!(instance.def, ty::InstanceKind::Virtual(..)) => {
+                    if seen_virtual_calls.insert(record.value) {
+                        virtual_calls.push((record, owner, path, origin));
+                        for &(concrete, object) in &dynamic_sources {
+                            if let Some(value) =
+                                concrete_virtual_call(tcx, concrete, object, record.value)
+                            {
+                                pending.push_back((
+                                    Record { value, ..record },
+                                    owner,
+                                    path,
+                                    origin,
+                                ));
+                            }
+                        }
+                    }
+                    continue;
+                }
                 Some(instance) if !matches!(instance.def, ty::InstanceKind::Virtual(..)) => {
                     if matches!(
                         instance.def,
@@ -1146,7 +1468,7 @@ pub fn collect_with_providers<'tcx>(
             // 胶水按 Instance（含实际 T）生成，不能按公共 drop 函数 DefId 缓存。
             for nested in mir_summary(tcx, tcx.instance_mir(instance.def)) {
                 if relevant_record(&nested) {
-                    pending.push_back((nested, owner, depth + 1, origin));
+                    pending.push_back((nested, owner, path, origin));
                 }
             }
             continue;
@@ -1163,7 +1485,7 @@ pub fn collect_with_providers<'tcx>(
             let value = nested.value.instantiate(tcx, args);
             let nested = Record { value, ..nested };
             if relevant_record(&nested) {
-                pending.push_back((nested, owner, depth + 1, origin));
+                pending.push_back((nested, owner, path, origin));
             }
         }
     }
