@@ -185,12 +185,14 @@ optional 构造字段的 hover / 定义跳转定位允许访问链中点号两�
 LSP 验证与 `native_host` 的项目模型测试分别执行，记录实际使用的服务器与 host；
 仅运行项目模型测试不能证明完整 LSP 交互通过。
 
-`tools/verify-macro-editor.py` 是更早的宏服务器低层协议探针，当前会先删除
-`RUSTC_BOOTSTRAP`，再直接构建使用 `proc_macro_def_site` 的私有 bridge，缺少该
-crate 的限定构建授权。已用脚本捕获的实际环境最小复现 E0554，因此它目前不能
-作为应通过的验证入口。本轮仅核对并补充这一说明，尚未修改该脚本行为；现行标准
-LSP 验证使用上面的 `verify-ide.py`。这个探针准备失败不能推断为产品宏展开或
-LSP 功能损坏。
+`tools/verify-macro-editor.py` 是补充性的宏服务器低层协议探针，可在仓库根目录
+运行 `python3 tools/verify-macro-editor.py`。它清除继承的 bootstrap 与 wrapper，
+仅为私有 bridge 的构建子进程设置 `RUSTC_BOOTSTRAP=nestrs_tool_bridge`，以使用
+定义点 span；编译器查询和宏服务器进程不接收该授权。此前缺少授权导致的 E0554
+已修复，原因与回归见[修复记录 R17](NESTRS_FIXES.md#r17宏服务器探针限定私有-bridge-构建授权)。
+探针保留协议版本 5/6 的固定输入编解码，检查 bridge 加载及 injectable / factory
+展开；报告位于 `target/nestrs-tool-bridge-probe/report.json`。它不验证完整项目模型、
+补全或诊断恢复，这些仍由上面的 `verify-ide.py` 验证。
 
 项目准备适配 Linux `x86_64-unknown-linux-gnu` 和 Windows
 `x86_64-pc-windows-msvc` 的固定工具链。Windows 使用本机 `.exe` 和 `.dll`，在

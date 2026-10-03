@@ -12,11 +12,11 @@ rustc/rustc-dev。基础与展开探针支持 `--rustc /absolute/path/to/rustc`�
 当前实验 pin 为 1.98.0、`88d9e12ae178fab0fb5cc050a94da85685d449ea`、Linux GNU x86_64。
 探针的固定 Linux 配置不代表生产工具全部 host 的覆盖范围。
 
-仓库另有 [verify-macro-editor.py](../verify-macro-editor.py) 这个历史宏服务器协议
-探针，当前直接构建私有 bridge 时缺少 `nestrs_tool_bridge` 的限定 bootstrap 授权；
-用其实际环境最小复现了 `proc_macro_def_site` 的 E0554。该已知准备问题尚未修复，
-不能将它列为当前应通过的 gate。原版 rust-analyzer 的现行完整 LSP 入口是
-[verify-ide.py](../verify-ide.py)，具体覆盖见 [IDE 指南](../../docs/NESTRS_IDE.md#验证与边界)。
+仓库另有 [verify-macro-editor.py](../verify-macro-editor.py) 这个宏服务器低层协议
+探针，仅在私有 bridge 构建子进程中授予 `nestrs_tool_bridge` 的 bootstrap，
+编译器查询与宏服务器仍使用清洁环境。此前缺少授权导致的 E0554 已修复；该入口
+检查实际宏库加载和两个固定声明的展开。原版 rust-analyzer 的完整 LSP 入口仍是
+[verify-ide.py](../verify-ide.py)，具体分工见 [IDE 指南](../../docs/NESTRS_IDE.md#验证与边界)。
 
 ## 基础语义
 

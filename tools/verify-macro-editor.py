@@ -7,12 +7,9 @@ The small token codec implements the server's legacy JSON protocol versions 5/6
 in ID span mode. It is used only for these fixed test inputs, never application
 source preprocessing.
 
-This legacy entry currently removes RUSTC_BOOTSTRAP and builds the private bridge
-directly. The bridge now requires proc_macro_def_site, so that build lacks its
-crate-scoped authorization and fails with E0554 on the pinned stable compiler;
-the same feature gate was reproduced with the script's captured environment.
-Use verify-ide.py for the maintained standard-LSP verification entry. This known
-probe setup defect is not evidence of a product macro or LSP failure.
+The private bridge build receives RUSTC_BOOTSTRAP=nestrs_tool_bridge solely for
+proc_macro_def_site. Compiler discovery and macro-server processes receive no
+bootstrap authorization. Use verify-ide.py for standard-LSP verification.
 """
 
 import json
@@ -119,12 +116,13 @@ def main():
     compiler_library_environment(environment, sysroot, host)
     server = macro_server(sysroot)
     assert server.is_file(), f"macro server is not installed in the active toolchain: {server}"
-    # Known probe defect: this direct build has no nestrs_tool_bridge bootstrap
-    # grant. The maintained build-toolchain.py scopes that grant to tool builds;
-    # updating this legacy probe also requires checking its protocol assertions.
+    # Grant only the bridge's definition-site span feature during its build.
+    # Keep the base environment clean for rustc discovery and server requests.
+    build_environment = environment.copy()
+    build_environment["RUSTC_BOOTSTRAP"] = "nestrs_tool_bridge"
     build = subprocess.run(
         ["cargo", "build", "-p", "nestrs-tool-bridge", "--message-format=json"],
-        cwd=root, env=environment, text=True, capture_output=True, encoding="utf-8",
+        cwd=root, env=build_environment, text=True, capture_output=True, encoding="utf-8",
     )
     (output / "build.stderr.txt").write_text(build.stderr, encoding="utf-8")
     assert build.returncode == 0, f"macro build failed; inspect {output / 'build.stderr.txt'}"
