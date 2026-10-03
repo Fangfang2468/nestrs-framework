@@ -41,6 +41,9 @@ pub struct SourceInsertion {
 /// or reference-lifetime conversion is introduced by the compiler adapter.
 /// Capabilities remain separate from explicit registrations until graph
 /// compilation activates an interface demanded by the actual link unit.
+/// A private child module isolates generated bindings from business constants
+/// and statics. Type paths are already fully qualified, and the anonymous const
+/// keeps the module itself out of the business namespace.
 pub fn binding_source(binding: &BindingSpec) -> String {
     let module = crate::protocol::REFLECTION_MODULE;
     let marker = crate::protocol::Marker::AutomaticBinding.name();
@@ -57,6 +60,8 @@ pub fn binding_source(binding: &BindingSpec) -> String {
         r#"#[allow(clippy::unused_unit)]
 #[doc = {origin}]
 const _: () = {{
+    #[allow(dead_code)]
+    mod __nestrs_binding {{
     #[allow(dead_code)]
     mod {module} {{
         #[inline(never)]
@@ -89,6 +94,7 @@ const _: () = {{
                 >(slot, input, target, __nestrs_project_bound_service)
             }}) as ::nestrs_core::activation::ServiceProjector,
         }}
+    }}
     }}
 
     ()
@@ -329,12 +335,22 @@ mod tests {
         let Expr::Block(block) = &*generated.expr else {
             panic!("generated anonymous const must contain the projection items");
         };
-        let callback = block
+        let isolated = block
             .block
             .stmts
             .iter()
             .find_map(|statement| match statement {
-                Stmt::Item(Item::Fn(function))
+                Stmt::Item(Item::Mod(module)) if module.ident == "__nestrs_binding" => {
+                    module.content.as_ref().map(|(_, items)| items)
+                }
+                _ => None,
+            })
+            .expect("generated bindings need a module boundary without business imports");
+        assert!(isolated.iter().all(|item| !matches!(item, Item::Use(_))));
+        let callback = isolated
+            .iter()
+            .find_map(|item| match item {
+                Item::Fn(function)
                     if function.sig.ident == "__nestrs_reflect_automatic_binding" =>
                 {
                     Some(function)

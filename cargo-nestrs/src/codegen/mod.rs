@@ -186,7 +186,7 @@ fn injectable(
 ///
 /// 支持同步与 `async` 函数；不允许带 `self`、`unsafe` 或 `extern` 的函数。直接返回值、
 /// `Result` 的 `Ok` 类型与显式 `Future::Output` 均不能为 `()`。
-fn factory(item: syn::ItemFn, args: Args) -> zyn::Output {
+fn factory(item: syn::ItemFn, args: Args, binding_span: zyn::proc_macro2::Span) -> zyn::Output {
     let input = syn::Item::Fn(item.clone());
     let config = match parse_factory_config(&args) {
         Ok(config) => config,
@@ -231,6 +231,7 @@ fn factory(item: syn::ItemFn, args: Args) -> zyn::Output {
                             }
                             @EmitFactoryProvider(
                                 analysis = analysis.clone(),
+                                binding_span = binding_span,
                                 config = config,
                                 primary = primary.is_primary(),
                                 source = source.clone(),
@@ -380,7 +381,7 @@ pub fn expand_injectable_with_binding_span(
     if let Ok(item) = syn::parse2::<syn::ItemStruct>(input.clone())
         && conditional_fields::needs_filtering(&item)
     {
-        return conditional_fields::defer(args, item)
+        return conditional_fields::defer(args, item, binding_span)
             .unwrap_or_else(syn::Error::into_compile_error);
     }
     expand_attribute(args, input, |item, args| {
@@ -411,7 +412,17 @@ pub fn expand_configured_injectable_with_binding_span(
 /// 展开 `#[factory]`，供过程宏和编译器适配层共享。
 #[doc(hidden)]
 pub fn expand_factory(args: zyn::TokenStream, input: zyn::TokenStream) -> zyn::TokenStream {
-    expand_attribute(args, input, factory)
+    expand_factory_with_binding_span(args, input, zyn::proc_macro2::Span::mixed_site())
+}
+
+/// factory 内部 provider 项使用定义处卫生，避免占用业务模块的值命名空间。
+#[doc(hidden)]
+pub fn expand_factory_with_binding_span(
+    args: zyn::TokenStream,
+    input: zyn::TokenStream,
+    binding_span: zyn::proc_macro2::Span,
+) -> zyn::TokenStream {
+    expand_attribute(args, input, |item, args| factory(item, args, binding_span))
 }
 
 /// 展开同步关联构造函数；所属服务身份由编译器在名称解析后关联。

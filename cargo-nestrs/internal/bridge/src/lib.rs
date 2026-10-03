@@ -5,7 +5,7 @@
 //! 编译器和编辑器均将此产物作为 `nestrs` 命名空间注入。应用直接使用
 //! `#[nestrs::injectable]` 和 `#[nestrs::factory]`，无需了解本包名称。
 //! 此处只转换 token；声明分析、字段改写和代码生成复用 cargo-nestrs 后端。
-//! 生成局部绑定的定义处 span 也由本桥接显式传给后端；不改业务 token 的卫生上下文。
+//! 生成局部绑定和内部辅助项的定义处 span 由本桥接显式传给后端；不改业务 token 的卫生上下文。
 
 /// 声明可注入的结构体，消费其字段上的 `#[inject]` 与 `#[value(...)]`。
 #[proc_macro_attribute]
@@ -41,7 +41,12 @@ pub fn factory(
     args: proc_macro::TokenStream,
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    cargo_nestrs::codegen::expand_factory(args.into(), input.into()).into()
+    cargo_nestrs::codegen::expand_factory_with_binding_span(
+        args.into(),
+        input.into(),
+        proc_macro::Span::def_site().into(),
+    )
+    .into()
 }
 
 /// 为 injectable 服务指定同步关联构造函数；参数声明依赖，函数体完成业务初始化。

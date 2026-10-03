@@ -20,7 +20,11 @@ pub(super) fn needs_filtering(item: &ItemStruct) -> bool {
     })
 }
 
-pub(super) fn defer(args: TokenStream, item: ItemStruct) -> syn::Result<TokenStream> {
+pub(super) fn defer(
+    args: TokenStream,
+    item: ItemStruct,
+    binding_span: zyn::proc_macro2::Span,
+) -> syn::Result<TokenStream> {
     let mut declaration = item.clone();
     match &mut declaration.fields {
         syn::Fields::Named(fields) => fields.named.clear(),
@@ -29,7 +33,13 @@ pub(super) fn defer(args: TokenStream, item: ItemStruct) -> syn::Result<TokenStr
     }
 
     let mut carrier = item;
-    carrier.ident = zyn::format_ident!("__NestrsConditionalFieldsFor{}", carrier.ident);
+    // carrier 留在业务模块中以便 derive 恢复原声明；只隔离内部类型的名称，
+    // 不移动真实声明，也不改变其字段、泛型与业务属性的卫生来源。
+    carrier.ident = zyn::format_ident!(
+        "__NestrsConditionalFieldsFor{}",
+        carrier.ident,
+        span = binding_span.located_at(carrier.ident.span()),
+    );
     carrier.vis = syn::Visibility::Inherited;
     carrier.generics = syn::Generics::default();
     carrier.attrs = vec![

@@ -1,7 +1,7 @@
 //! `#[factory]` 的 Provider 代码生成。
 //!
 //! 本模块只消费 [`FactoryAnalysis`]，不会再查看用户函数参数上的属性。最终输出分成
-//! 两个平级 element：一个重写后的用户函数，一个匿名 `const` 中的 adapter + 描述回调
+//! 两个平级 element：一个重写后的用户函数，一个卫生隔离的 `const` 中的 adapter + 描述回调
 //! callback。这样 factory 函数保留用户可以在模块内调用的普通函数语义，而 runtime
 //! adapter 始终是不可从模块外命名的实现细节。
 
@@ -33,13 +33,14 @@ pub(crate) fn rewrite_factory_signature(analysis: FactoryAnalysis) -> zyn::Token
 
 /// 生成隐藏 factory adapter 及写入统一 Provider 描述清单 的 callback。
 ///
-/// adapter、cleanup wrapper 和 slice callback 被放入同一个私有且按 factory 名称唯一的
-/// `const`。这样它在错误地出现在 impl 中时仍是合法的 associated const，同时
+/// adapter、cleanup wrapper 和 slice callback 被放入同一个使用定义处卫生的
+/// `const`。这样它不占用业务名称，在错误地出现在 impl 中时仍是合法的 associated const，同时
 /// `__nestrs_factory_construct` 等真正的辅助函数继续停留在词法私有作用域，不会成为
 /// 模块 API，也不会和其他 factory 的同名辅助符号冲突。
 #[zyn::element]
 pub(crate) fn emit_factory_provider(
     analysis: FactoryAnalysis,
+    binding_span: zyn::proc_macro2::Span,
     config: FactoryConfig,
     primary: bool,
     lazy: Option<bool>,
@@ -56,7 +57,10 @@ pub(crate) fn emit_factory_provider(
     let origins = source.render();
     // raw 前缀只属于业务标识符语法，不能嵌入生成符号的中间；业务引用仍使用原 Ident。
     let provider_name = factory.unraw();
-    let provider_const = zyn::format_ident!("__nestrs_factory_provider_for_{provider_name}");
+    let provider_const = zyn::format_ident!(
+        "__nestrs_factory_provider_for_{provider_name}",
+        span = binding_span.located_at(factory.span()),
+    );
 
     zyn! {
         #[doc(hidden)]
@@ -356,6 +360,7 @@ mod tests {
         let analysis = analyze_factory(syn::parse_str(source).expect("factory should parse"))
             .expect("factory should analyze");
         EmitFactoryProvider {
+            binding_span: zyn::proc_macro2::Span::mixed_site(),
             source: crate::codegen::source::ProviderOrigin::from_args(
                 analysis.item.sig.ident.clone(),
                 &syn::parse_quote!(),

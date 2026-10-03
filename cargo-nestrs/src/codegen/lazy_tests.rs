@@ -350,7 +350,12 @@ fn conditional_field_carrier_preserves_service_policy_and_field_helper_boundarie
             }
         })
         .unwrap();
-        let carrier = conditional_fields::defer(TokenStream::new(), original).unwrap();
+        let carrier = conditional_fields::defer(
+            TokenStream::new(),
+            original,
+            zyn::proc_macro2::Span::mixed_site(),
+        )
+        .unwrap();
         let mut carrier: syn::ItemStruct = syn::parse2(carrier).unwrap();
         for field in &mut carrier.fields {
             field
