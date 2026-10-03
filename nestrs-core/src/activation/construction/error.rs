@@ -9,8 +9,9 @@ use super::slot::InputSlot;
 /// 由输入准备、adapter 消费或 factory 调用产生的受控错误。
 ///
 /// 此错误属于内部构造协议，不直接作为公开错误暴露。运行时在激活边界补上 provider、
-/// 源码位置和依赖路径，转换为公开的 [`crate::ResolveError`]；Eager 构建再按构建契约
-/// 汇总为 [`crate::BuildError`]。
+/// 源码位置和依赖路径，转换为公开的 [`crate::ResolveError`]；若发生在 owner 创建期，
+/// 再由创建入口保留为 [`crate::BuildError`] 或 [`crate::ScopeBuildError`]。
+/// 这也包括 Lazy 默认下显式 `#[lazy(false)]` 服务的初始化。
 #[doc(hidden)]
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum ConstructionError {

@@ -5,10 +5,14 @@
 务必使用同一源码、编译器、Release 配置和 Nestrs driver 构建两个版本。
 
 当前 `runner.py` 只接受一个 `--cli`，after 固定使用脚本所在工作区的 core。
-因此两版 core 必须与该 CLI 的执行协议兼容。2026-10-01 的历史基线使用旧 v1，
-当前工作区使用 v2，不能直接用当前工具重建旧的 `target/di-ahash/baseline`。
+因此两版 core 必须与该 CLI 的执行协议兼容，也必须接受同一份探针使用的公开 API。
+2026-10-01 的历史基线使用旧 v1；当前 reflect 入口为 `__nestrs_reflect_v2`，
+初始化选项写入协议为 `plan_set_options_v3`，审阅 JSON 格式仍为 version 1。
+这些版本号分别描述不同边界，不能只看到 reflect v2 就判定工具兼容。
+当前探针还使用 `build(None)` 和异步 `create_scope(None)`，
+不能直接用当前工具或探针重建旧的 `target/di-ahash/baseline`。
 复现原测量须恢复当时的 before/after 源码及匹配工具；跨 ABI 比较改用支持两套
-工具的[直接输入基准](../bench-direct-input/README.md)。
+工具的[直接输入基准](../bench-direct-input/README.md)，并另行核对探针源码的 API 兼容性。
 
 准备新的同协议对照时，下面的 baseline 必须是本次优化前的完整快照，CLI 必须
 同时适配两版 core；这些路径需替换成实际路径：
@@ -25,7 +29,7 @@ runner 会清理 Rust flags、wrapper、target 与 Release 环境覆盖，但保
 工具路径覆盖，或确保它们指向上述匹配组合；以 `build.json` 的 doctor 输出核实实际
 使用的工具，不能仅凭 `--cli` 路径判断 driver/bridge 身份。
 
-CLI 会把真实程序写入带 compiler/driver 指纹的 target 子目录。使用构建输出中的
+CLI 会把真实程序写入按 compiler 身份和 driver/bridge 联合指纹隔离的 target 子目录。使用构建输出中的
 `executable`（可加 Cargo 的 `--message-format=json`）定位二进制。不要计时
 `cargo run`，因为构建和工具链启动不属于查询耗时。
 
@@ -47,7 +51,8 @@ CLI 会把真实程序写入带 compiler/driver 指纹的 target 子目录。使
 `--iterations` 与 `--warmup` 必须为正整数。所有场景在计时之外构建 root、预热和关闭；
 瞬时服务每 512 次查询完整关闭一个 scope，计时只累计各批的查询循环，scope 创建和
 关闭不在计时范围。新 scope 会在计时前完成一次无关 Singleton 查询，以确认协调器
-已处理其注册命令。这是有界的构造负载，不是容器完整生命周期基准。每次查询读取
+已处理该检查点之前的命令。当前异步 create_scope 本身也会等待 owner 登记；
+这次 Singleton 查询保留既有测量屏障。这是有界的构造负载，不是容器完整生命周期基准。每次查询读取
 业务值并经过 `black_box`，最终校验 checksum，防止把空循环当成服务查询。
 
 建议先完成全部编译与测试，再单独测量。多个进程按交替顺序运行 before/after，

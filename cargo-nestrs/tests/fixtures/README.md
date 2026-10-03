@@ -27,7 +27,7 @@ panic/文件写入哨兵，不能把整个目录当成普通示例统一执行 `
 | [query-implicit](query-implicit/Cargo.toml) | 多层隐式 Deref/DerefMut、原生析构胶水、泛型及关联字段/GAT、容器与闭包析构；Debug/Release 保留未执行分支并排除 forget/ManuallyDrop，非法图在 check/build 拒绝 | [query_implicit_contracts.rs](../query_implicit_contracts.rs)，`--features compiler-driver --test query_implicit_contracts` |
 | [query-clone](query-clone/Cargo.toml) | 元组、嵌套元组及闭包捕获的真实 Clone shim，本地与无 core 外部 helper、未执行分支、不同实例及直接/数组/不克隆对照；Debug/Release 成功运行与非法依赖 check/build 拒绝 | [query_clone_contracts.rs](../query_clone_contracts.rs)，`--features compiler-driver --test query_clone_contracts` |
 | [raw-types](raw-types/main.rs) | 自动投影中的原始关联项名、私有类型与重导出、const 泛型、继承约束及 HRTB，根查询和字段注入共享同一实例 | [autobind_raw_types.rs](../autobind_raw_types.rs)，`--features compiler-driver --test autobind_raw_types` |
-| [provider-lazy](provider-lazy/Cargo.toml) | 跨 crate 服务级三态预热策略、私有 factory 的 owned lazy 参数、真实查询共享与图元数据；Debug/Release 均运行 | [provider_lazy_contracts.rs](../provider_lazy_contracts.rs)，`--features compiler-driver --test provider_lazy_contracts` |
+| [provider-lazy](provider-lazy/Cargo.toml) | 跨 crate 服务级三态初始化策略、私有 factory 的 owned lazy 参数、真实查询共享与图元数据；Debug/Release 均运行 | [provider_lazy_contracts.rs](../provider_lazy_contracts.rs)，`--features compiler-driver --test provider_lazy_contracts` |
 | [diagnostics](diagnostics/Cargo.toml) | 原生 Cargo JSON 的主位置/高亮、宏调用来源、同名真实类型、别名、跨 crate 闭合来源、查询歧义、长 cause 与复杂度保护。多数 binary 必须失败，`cfg_valid` 必须通过 | [diagnostics.rs](../diagnostics.rs)，`--features compiler-driver --test diagnostics` |
 | [bridge-metadata](bridge-metadata/Cargo.toml) | 只有 producer 直接依赖 core；下游 library/binary/doctest 必须能加载私有 proc-macro metadata，并通过真实运行解析服务 | [bridge_metadata.rs](../bridge_metadata.rs)，`--features compiler-driver --test bridge_metadata` |
 | [macro-rustdoc](macro-rustdoc/Cargo.toml) | 库和文档内服务声明、借用 factory、泛型查询、文档属性、宏生成 Markdown 与相对 include 语义；分别执行普通 test 与 test --doc | [rustdoc.rs](../rustdoc.rs)，`--features compiler-driver --test rustdoc` |
@@ -112,6 +112,11 @@ rustdoc 的源码定位语义。它属于编译输入，整理时必须保留路
 binary/test/doctest 使用自己的 `__nestrs_reflect_v2` 已验证执行计划。该入口属于私有 ABI，
 工具与 core 必须配套。伴随的 `*.nestrs-reflect.json` 与 graph 的 `*.nestrs-plan.json`
 用于审阅，runtime 不读取它们。
+
+默认初始化配置通过 `plan_set_options_v3` 传入，包含相互独立的 root/scope 模式和
+共享构造上限；该 v3 与上述入口 v2、审阅 JSON v1、IDE constructor 模型 v2 分别
+版本化。配置选择由 [startup_config.rs](../startup_config.rs) 核对；
+[registry_abi.rs](../registry_abi.rs) 另外检查空图也拒绝不兼容的 Options 协议。
 
 core 不再保留旧 GraphCompiler 或注册参考模型：生产运行期接收冻结计划，执行输入
 测试直接构造执行数据。图语义由工具纯模型与真实 driver harness 覆盖；core 执行测试

@@ -220,8 +220,9 @@ impl ConstructionInputs {
 
     /// 从准确输入来源派生保活集合，供实例或 factory frame 持有。
     ///
-    /// 只能在 adapter 消费前调用。普通投影随后必须保留同一 lease 身份；lazy 目标尚未
-    /// 存在，不加入集合。重复依赖仍逐槽保留，不按静态图的去重边替代真实参数。
+    /// 只能在 adapter 消费前调用。普通投影随后必须保留同一 lease 身份；lazy 输入尚未
+    /// 取得目标 lease，不加入集合，即使其他请求已构造目标。重复依赖仍逐槽保留，
+    /// 不按静态图的去重边替代真实参数。
     pub(crate) fn dependency_leases(&self) -> Vec<DependencyLease> {
         // 该数组随发布实例存活到释放；filter_map().collect() 对单参数按容量 4
         // 分配会使每个存活实例长期多占三份 lease 的空间。只为实际立即输入分配。

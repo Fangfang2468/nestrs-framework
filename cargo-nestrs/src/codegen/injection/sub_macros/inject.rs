@@ -1,8 +1,8 @@
 //! `#[inject]` 子标注的唯一实现。
 //!
-//! `#[injectable]` 字段与 `#[factory]` 参数共用这个子标注，只接受 `#[inject]`、
+//! `#[injectable]` 字段、`#[constructor]` 与 `#[factory]` 参数共用这个子标注，只接受 `#[inject]`、
 //! `#[inject("name")]`、`#[inject(123)]`，不接受命名参数。
-//! 两者的 `Option<T>` 可选形态与可注入服务类型规则完全一致。
+//! 三种位置的 `Option<T>` 可选形态与可注入服务类型规则完全一致。
 //!
 //! 这里只做「源码语法 → 宏期事实」：不生成 token、不改写 AST、不依赖 provider 注册
 //! ABI。key 值的字面量规则定义在 [`crate::codegen::injection::macros_attrs::service_key`]，
@@ -17,7 +17,7 @@ use zyn::syn::{self, Attribute, GenericArgument, Lit, Meta, PathArguments, Type}
 
 /// 一个依赖请求的宏期事实。
 ///
-/// 该模型仅属于工具链。`#[inject]` 字段与 factory 参数先归一到这个形状，再生成
+/// 该模型仅属于工具链。`#[inject]` 字段与 constructor / factory 参数先归一到这个形状，再生成
 /// 供编译器读取的标记及真实输入操作；不会把本模型作为注册描述交给 core。
 #[derive(Clone, Debug)]
 pub(crate) struct DependencyRequest {
@@ -110,7 +110,7 @@ fn parse_inject_attribute(attribute: &Attribute) -> syn::Result<Option<ServiceKe
 // 服务类型形状
 // ---------------------------------------------------------------------------
 
-/// 共享语法在两个宏入口中的措辞差异。
+/// 共享语法在字段与各类参数入口中的措辞差异。
 ///
 /// 语法规则本身完全一致，只有面向用户的文案需要区分「字段」与「参数」。
 #[derive(Clone, Copy, Debug)]

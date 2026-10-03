@@ -20,7 +20,8 @@ struct CompilerReport<'a> {
     host: &'a str,
 }
 
-/// 已验证工件的只读视图。未显式查询 target 时，三个目录字段均为 null。
+/// 已定位工具的只读视图；rustc/driver 身份已核对，bridge 的实际加载另由编译验证。
+/// 未显式查询 target 时，三个目录字段均为 null。
 #[derive(Serialize)]
 struct DoctorReport<'a> {
     /// 诊断 JSON 格式版本，独立于编译器计划 ABI。
@@ -38,7 +39,7 @@ struct DoctorReport<'a> {
     /// 已完成身份核对的 driver 路径。
     driver: &'a Path,
 
-    /// 与 driver 配套并参与联合指纹的私有宏桥接路径。
+    /// 已确认可读并参与联合指纹的私有宏桥接路径；此查询不加载过程宏。
     macro_bridge: &'a Path,
 
     /// 正式工具计算的 driver 与桥接工件联合内容指纹。

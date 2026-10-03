@@ -46,7 +46,7 @@ cargo test -p nestrs-core --lib -- --list
 | 实现约束 | 对应测试 |
 | --- | --- |
 | 编译计划槽位、真实类型和目标端装配 | `unit/graph/plan.rs` |
-| 共享计划不共享 root 实例，服务级 lazy 只控制预热根 | `unit/runtime/initialization.rs` |
+| 共享计划不共享 root 实例，root/scope 独立初始化策略与服务级覆盖、普通依赖仍可触发 lazy 目标 | `unit/runtime/initialization.rs` |
 | 共享缓存、全 root 构造上限、依赖就绪推进和深链激活 | `unit/runtime/coordinator.rs` |
 | scope 登记确认、创建与查询取消、完成和退订竞争 | `unit/runtime/requests.rs`、`subscriptions.rs` |
 | 延迟槽位取消接续、owner 关闭、runtime 退出、深链释放 | `unit/runtime/lazy.rs`、`lazy_delivery.rs` |
@@ -88,7 +88,8 @@ core 测试直接提供 `CompiledNode` / `ValidatedGraph`，或向真实 `PlanAs
 | 层次 | 当前入口 | 验证内容 |
 | --- | --- | --- |
 | 闭合图纯模型 | [di_plan.rs](../../cargo-nestrs/tests/di_plan.rs) | type/key、primary、optional、重复与孤立 binding、完整 Lazy 边、环、Scope、槽位、深链和确定性 |
-| Rust 类型与生成来源 | [compiler_contracts.rs](../../cargo-nestrs/tests/compiler_contracts.rs)、[registry_abi.rs](../../cargo-nestrs/tests/registry_abi.rs) | 真实执行计划、宏来源、泛型闭合、自动/显式投影、精确 factory 优先；v2 driver 拒绝旧 core |
+| Rust 类型与生成来源 | [compiler_contracts.rs](../../cargo-nestrs/tests/compiler_contracts.rs)、[registry_abi.rs](../../cargo-nestrs/tests/registry_abi.rs) | 真实执行计划、宏来源、泛型闭合、自动/显式投影、精确 factory 优先；空图也核对 `plan_set_options_v3` 的名称、参数数量与类型 |
+| 创建配置与作用域失败 | [startup_config.rs](../../cargo-nestrs/tests/startup_config.rs)、[runtime_scope_initialization.rs](../../cargo-nestrs/tests/fixtures/di/tests/runtime_scope_initialization.rs) | None/Some 的默认来源、独立 root/scope 模式、单次覆盖、创建失败前的 cleanup、关闭错误保留及 root 继续使用 |
 | 非法最终图 | [aot_graph.rs](../../cargo-nestrs/tests/aot_graph.rs) | 即使 main 不调用 build，结构错误仍在 check/build 拒绝 |
 | 源码诊断 | [diagnostics.rs](../../cargo-nestrs/tests/diagnostics.rs) | 原生 Cargo JSON 的业务标题、完整类型或 key 高亮、关联声明、独立错误与末尾 cause |
 | 跨 crate | [cross-crate-binding](../../cargo-nestrs/tests/fixtures/README.md#关键契约的阅读位置) 与 [验证脚本](../../tools/verify-cross-crate-binding.py) | 私有 concrete、同名类型身份、上游/兄弟需求、泛型投影、实例共享、关闭和导图 |
@@ -132,8 +133,9 @@ RUSTC_BOOTSTRAP=nestrs_driver \
 cargo test -p cargo-nestrs --features compiler-driver --test compiler_contracts
 ```
 
-`RUSTC_BOOTSTRAP` 只授权编译工具自己的 driver crate，不能改为 `1` 或用来放宽应用
-编译。示例中的 `rustc` 必须与构建工具时使用的固定编译器一致；上面的动态库设置只
+这条测试命令的 `RUSTC_BOOTSTRAP` 只授权工具自己的 driver crate；此前的源码构建脚本
+还会为私有 bridge 限定授权。不能改为 `1` 或用来放宽应用编译。示例中的 `rustc`
+必须与构建工具时使用的固定编译器一致；上面的动态库设置只
 适用于 Linux / WSL。跨平台维护脚本通过 `tools/toolchain_support.py` 配置对应
 host 的动态库路径，harness 会为应用子进程移除 bootstrap，并使用真实 driver。
 

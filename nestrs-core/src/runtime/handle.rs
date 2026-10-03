@@ -22,8 +22,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 /// 面向门面的命令句柄；不持有可变调度状态。
 ///
-/// 每个查询只拥有自己的 oneshot 等待端。命令一旦进入协调器，初始化便属于 owner；
-/// 丢弃查询 future 不会取消构造。所有 owner 共用同一个命令通道与并发上限。
+/// 每个普通查询只拥有自己的 oneshot 等待端。协调器接受的初始化属于实际 owner；
+/// 丢弃查询 future 不会取消构造。发送命令不等于获准初始化，关闭检查仍可拒绝请求。
+/// 所有 owner 共用同一个命令通道与构造 worker 上限。
 pub(crate) struct Runtime {
     /// 当前入口共享的不可变执行计划。
     graph: Arc<ValidatedGraph>,

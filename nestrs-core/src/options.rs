@@ -27,7 +27,8 @@ pub struct ServiceProviderOptions {
     /// 单次 create_scope(Some(options)) 可以覆盖此值。
     pub scope_initialization: InitializationMode,
 
-    /// 整个 root 及所有 scope 共享的构造任务上限，不限制业务服务方法的执行并发。
+    /// 整个 root 及所有 scope 共享的活跃构造 worker 上限，默认 32。
+    /// 等待依赖的任务不占名额；此值不限制请求队列、实例总数、业务方法或 cleanup 并发。
     pub max_concurrent_activations: NonZeroUsize,
 }
 

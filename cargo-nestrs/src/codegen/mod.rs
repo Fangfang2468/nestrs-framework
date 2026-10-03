@@ -4,8 +4,9 @@
 //! 此 crate 不执行服务构造，也不依赖 DI runtime；生成的 Rust 代码仍引用
 //! core 实际所属私有模块；编译器限制这些引用只来自真实生成代码。
 //!
-//! 输入直接使用带 span 的 `proc_macro2::TokenStream`，可以在普通进程中调用，
-//! 无需过程宏执行上下文，也不通过字符串往返解析 token。
+//! 声明输入直接使用带 span 的 `proc_macro2::TokenStream`，普通生成单测无需过程宏
+//! 执行上下文。constructor 元数据另保存文本快照，IDE 分支会重新解析该快照来比较
+//! 声明结构；这不代替真实编译中业务 token 的来源与卫生身份。
 
 mod conditional_fields;
 mod constructor;
@@ -441,7 +442,8 @@ pub fn expand_constructor(args: zyn::TokenStream, input: zyn::TokenStream) -> zy
     expand_constructor_with_binding_span(args, input, zyn::proc_macro2::Span::mixed_site())
 }
 
-/// 显式 constructor 只对生成输入、结果和错误绑定使用 bridge 提供的卫生上下文。
+/// 显式 constructor 的输入、结果、错误绑定及内部关联项使用 bridge 提供的卫生上下文。
+/// 业务方法的 Ident、签名类型与函数体保留原来源，IDE helper 按已确认的模型连接。
 #[doc(hidden)]
 pub fn expand_constructor_with_binding_span(
     args: zyn::TokenStream,
@@ -466,7 +468,7 @@ pub fn expand_lazy(args: zyn::TokenStream, input: zyn::TokenStream) -> zyn::Toke
     result.unwrap_or_else(syn::Error::into_compile_error)
 }
 
-/// 展开迁移期保留的显式 `#[bind]`。
+/// 展开文档隐藏的显式 `#[bind]` ABI 回归入口，不作为推荐业务注册方式。
 #[doc(hidden)]
 pub fn expand_bind(args: zyn::TokenStream, input: zyn::TokenStream) -> zyn::TokenStream {
     expand_bind_with_binding_span(args, input, zyn::proc_macro2::Span::mixed_site())

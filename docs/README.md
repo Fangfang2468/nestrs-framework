@@ -25,7 +25,7 @@
 - [依赖错误示例](../example/di-errors/README.md)：每类错误的原因、修复方向与独立项目。
 - [core 测试职责](../nestrs-core/tests/README.md)：运行期行为、内存所有权和内部执行边界。
 - [工具 fixture 索引](../cargo-nestrs/tests/fixtures/README.md)：真实 driver、宏、查询根、跨 crate 和诊断契约。
-- [rustc 语义探针](../tools/compiler-probe/README.md)：基础能力实验及历史脚本的适用限制。
+- [rustc 语义探针](../tools/compiler-probe/README.md)：基础能力实验、正式自动绑定回归的便捷入口及各自边界。
 - [哈希表基准](../tools/bench-di-ahash/README.md)与[构造输入内存基准](../tools/bench-direct-input/README.md)：测量工具的使用与指标定义。
 - [core 内存与关闭基准](../tools/bench-core-memory/README.md)：存活堆、分配流量、关闭成本与受限同机实验的口径。
 

@@ -1,4 +1,7 @@
-//! graph 命令直接消费的编译产物。它与执行计划来自同一个已验证模型，不运行目标程序。
+//! 编译期审阅与图展示产物；两者来自同一个已验证计划，不运行目标程序。
+//!
+//! 最终入口始终写反射执行清单；只有匹配 graph 入口身份时才额外写图 sidecar。
+//! 反射清单使用执行编号，展示图另用 1 基编号，二者都不作为运行期计划输入。
 
 use super::*;
 use serde_json::{Value, json};
@@ -120,7 +123,7 @@ fn snapshot<'tcx>(tcx: TyCtxt<'tcx>, plan: &Compiled<'tcx>) -> Value {
     json!({"version":1,"nodes":nodes})
 }
 
-/// 节点初始化策略与 dependencies[].lazy 的边语义分别展示，避免把跳过预热画成代理注入。
+/// 节点初始化策略与 dependencies[].lazy 的边语义分别展示，避免把按需创建画成代理注入。
 fn initialization(lazy: Option<bool>) -> &'static str {
     match lazy {
         None => "inherit",

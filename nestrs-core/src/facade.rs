@@ -30,7 +30,7 @@ pub struct ServiceProvider {
 
     // Owner 的 Drop 统一发送非阻塞关闭请求。门面不再重复实现同一兜底行为；
     // 即使 dispose_async 的 future 未完成就被丢弃，持有的 owner 也会负责发起关闭。
-    /// 本次操作所属的实际 root 或 scope。
+    /// 本容器的 root owner，负责 Singleton 和 root 查询产生的 Transient。
     owner: Arc<Owner>,
 
     /// 当前容器的 scope 创建默认值，独立于 root 初始化策略。
@@ -44,6 +44,10 @@ impl ServiceProvider {
     /// `Some(options)` 完整覆盖项目默认值，服务声明的 `#[lazy]` 策略仍然优先。
     /// `Some(Default::default())` 明确选择库基线，不等同于继承项目配置的 `None`。
     /// 各次创建共享不可变计划，但运行时、缓存、实例与关闭状态独立；运行时不读取 TOML。
+    ///
+    /// 缺少编译计划或当前 Tokio runtime 时返回对应的 [`BuildError`]。选中服务失败后，
+    /// 先请求并等待未交付 root 关闭，再返回初始化错误及可能的关闭错误。
+    /// 取消此 future 由未交付 owner 的 Drop 发起关闭，取消者不会等待 cleanup 完成。
     pub async fn build(options: Option<ServiceProviderOptions>) -> Result<Self, BuildError> {
         // 普通 Cargo 不会生成应用计划。必须明确提示工具链缺失，不能把未经过
         // Nestrs 编译的应用伪装成一个合法的空容器。隔离单元测试仍可装载空计划。
@@ -113,7 +117,9 @@ impl ServiceProvider {
     /// `None` 使用容器保存的 scope 默认策略；`Some(options)` 只覆盖本次创建。
     /// `Some(Default::default())` 明确选择 Lazy，不读取容器的 scope 默认值。
     /// 服务级 `#[lazy(false)]` 在 Lazy 下仍生效；所有 scope 共享 root 的构造额度。
-    /// 失败先关闭，取消由未交付 owner 发起关闭，不交付部分初始化的 scope。
+    /// 即使没有服务要初始化，也等待协调器确认 scope 登记成功。
+    /// 失败先请求并等待关闭结果，取消由未交付 owner 发起关闭，不交付部分初始化的 scope。
+    /// scope 初始化失败不关闭 root；已失败的共享 Singleton 仍缓存其错误，不自动重试。
     pub async fn create_scope(
         &self,
         options: Option<ServiceScopeOptions>,
@@ -130,6 +136,7 @@ impl ServiceProvider {
 
     /// 消费 owner，等待已接受构造、scope 关闭及本 owner 的所有 cleanup。
     /// 取消等待不会取消关闭；不返回的 factory/cleanup 会使关闭持续等待。
+    /// 协调器提前停止时返回关闭错误，不能确认异步 cleanup 已完成。
     pub async fn dispose_async(self) -> Result<(), DisposeError> {
         self.runtime.close(&self.owner).await
     }
@@ -141,7 +148,7 @@ pub struct ServiceScope<'provider> {
     /// 借用 root，确保 scope 使用期间其计划和运行时仍有效。
     provider: &'provider ServiceProvider,
 
-    /// 本次操作所属的实际 root 或 scope。
+    /// 此 scope 的独立 owner，负责本 scope 的 Scoped 与 Transient 实例。
     owner: Arc<Owner>,
 }
 
@@ -157,6 +164,7 @@ impl ServiceScope<'_> {
 
     /// 消费当前 scope，等待已接受任务及本 scope 的串行 cleanup 完成。
     /// 查询结果仍被使用时，Rust 借用检查会拒绝消费这个 scope。
+    /// 取消等待不取消关闭；协调器提前停止时返回无法确认 cleanup 完成的关闭错误。
     pub async fn dispose_async(self) -> Result<(), DisposeError> {
         self.provider.runtime.close(&self.owner).await
     }

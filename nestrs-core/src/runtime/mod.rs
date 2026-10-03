@@ -1,4 +1,5 @@
-//! 每个 root 一个、通过显式任务图推进的 Tokio 运行时。
+//! 每个 root 一个、通过显式任务图推进的 Tokio 调度器。
+//! 使用应用当前的 Tokio runtime，不另建执行器。
 //!
 //! 阅读路径：`handle` 提交命令 → `coordinator` 展开任务并调度 → `worker` 执行一个节点。
 //! `owner` 定义缓存、发布 journal 与关闭阶段，`task` 定义尚未完成的构造 occurrence。

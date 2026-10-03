@@ -40,6 +40,13 @@ DI 的每波 settle 会额外查询一次根 Base，manual 为 black_box+yield�
 
 ## 构建与运行
 
+当前探针已使用接受 Option 的 build 与异步 create_scope API；runner 只固定一套
+CLI / driver / bridge，两份 core 快照必须同时与它及探针源码兼容。复现本文关联的
+2026-10-02 历史测量须恢复当时的探针、runner、工具及 before/after 快照，不能把
+当前探针直接配旧 baseline。以下默认路径沿用历史命名；新实验须选择新的 `--output`
+目录，并显式传入本次基线和工具路径。这里的“预热波”是测量前执行的业务查询，
+不依赖已移除的公开 warm_up API。
+
 先由任务保存实际工作区快照到 baseline；不要使用可能缺少现有修改的 Git HEAD。优化稳定后以同样方式保存 after。CLI/driver/bridge 必须属于相同固定 rustc，工具首次调用复制并固定它们，记录二进制 SHA-256、实际 rustc 完整身份、生产源码哈希、probe 源码哈希、lock 与 registry package version/checksum。
 
 ```bash

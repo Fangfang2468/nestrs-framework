@@ -27,6 +27,7 @@ BINARIES = {
 
 
 def source_hashes(directory):
+    """Record source and Cargo inputs across all crates in the fixture workspace."""
     paths = list(directory.rglob("*.rs")) + list(directory.rglob("Cargo.toml")) + list(directory.rglob("Cargo.lock"))
     return {
         str(path.relative_to(directory)): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -35,6 +36,7 @@ def source_hashes(directory):
 
 
 class GraphData(HTMLParser):
+    """Extract the graph-data payload from CLI-produced HTML without executing it."""
     def __init__(self):
         super().__init__()
         self.collecting = False
@@ -56,6 +58,7 @@ class GraphData(HTMLParser):
 
 
 def verify_graph(path, binary):
+    """Assert the selected fixture graph preserves cross-crate type, key and input identity."""
     parser = GraphData()
     parser.feed(path.read_text(encoding="utf-8"))
     assert parser.count == 1, f"{binary}: expected one graph-data payload"
@@ -139,6 +142,7 @@ def verify_graph(path, binary):
 
 
 def main():
+    """Run fixture check, run and graph commands and retain each command outcome."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-build", action="store_true", help="use the already built debug toolchain")
     parser.add_argument("--cli", type=Path, help="CLI path, defaults to Cargo target/debug/cargo-nestrs")

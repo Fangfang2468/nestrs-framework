@@ -28,9 +28,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::registration_codegen::definition_path;
 
-/// 有限编译计划的防护界限。独立的简单类型总数允许一万层以上的普通 DI 图；
-/// 对不断增长的 `A<Vec<T>>` 类递归，先限制单个类型树大小，再归一化/trait 求解，
-/// 避免等到分配无限类型或耗尽编译线程栈时才失败。
+/// 闭合类型集合、常量摘要和查询展开各自使用的数量上限，不按普通 DI 路径深度计数。
+/// 单个服务类型另受节点数保护；查询载体的复杂度只在真实实例沿发现链持续增长时
+/// 拦截，不能仅因粗筛关联到 DI 就把其全部泛型实参当作服务类型。
 pub const MAX_QUERY_TYPES: usize = 100_000;
 
 /// 按类型树节点数保护有限展开；超过界限时发出 DI008 并终止当前编译。
@@ -1263,6 +1263,7 @@ fn unsize_tails<'tcx>(
 
 /// 一个真实 erasure 只为对应 trait 及其 supertrait 上实际出现的虚调用提供 Self。
 /// trait 参数使用真实身份匹配，最终 override/default 仍由 Instance::try_resolve 选择。
+/// 两侧的关联投影在同一闭合环境归一化；归一化失败是分析错误，不能当作无匹配跳过。
 fn concrete_virtual_call<'tcx>(
     tcx: TyCtxt<'tcx>,
     concrete: Ty<'tcx>,
@@ -1557,6 +1558,7 @@ pub fn collect_with_providers<'tcx>(
             }
         }
     }
+    // 执行实例以种类和实参共同去重；Clone/Drop 的共享方法 DefId 不足以区分字段调用。
     let mut seen = HashSet::new();
     let mut seen_roots = HashSet::new();
     let mut seen_unsizes = HashSet::new();
@@ -1568,6 +1570,7 @@ pub fn collect_with_providers<'tcx>(
         definition: None,
         size: 0,
     }];
+    // 归一化前的发现记录另行去重，保留原始载体形状供增长防护比较。
     let mut seen_discovery = HashSet::new();
     let mut roots = Vec::new();
     let mut count = 0usize;

@@ -354,8 +354,10 @@ Transient 每个延迟字段拥有独立的一次构造。同一字段的多次�
 都会提前报告，不会因为尚未访问而被跳过。特别是 Singleton 不能借助 `#[lazy]` 依赖
 Scoped；依赖 Scoped 的 Transient 仍须从 scope 查询。
 
-字段上的延迟标记不改变目标自身的预热选择。如果目标仍继承全局 Eager，它会作为
-Singleton 自主预热；若希望它本身也按需初始化，可以组合下一节的服务级 `#[lazy]`。
+字段上的延迟标记不改变目标自身的初始化选择。如果目标是 Singleton 且 root 为
+Eager，它仍可在 `build(options).await` 中自主初始化；如果目标是 Scoped 且本次
+scope 为 Eager，它仍可在 `create_scope(options).await` 中自主初始化。root 与
+scope 的模式互相独立；若希望目标本身也按需初始化，可以组合下一节的服务级 `#[lazy]`。
 其他普通注入依赖需要它时仍会提前构造。字段只接受裸 `#[lazy]`，不接受带括号的
 `#[lazy()]`、`#[lazy(true)]` 或 `#[lazy(false)]`；factory 参数也支持相同的裸标记，
 具体用法见[把延迟依赖传入工厂](#43-把延迟依赖传入工厂)。
@@ -406,8 +408,8 @@ async fn report_client() -> ReportClient {
 | `#[lazy]` / `#[lazy(true)]` | 不作为自主初始化入口 | 不作为自主初始化入口 |
 | `#[lazy(false)]` | 自主初始化 | 自主初始化 |
 
-Singleton 使用 root 模式，在 `build(options).await` 返回前初始化；Scoped 使用本次 scope
-模式，在 `create_scope(options).await` 返回前初始化。
+Singleton 使用 root 模式，选中时在 `build(options).await` 返回前初始化；Scoped
+使用本次 scope 模式，选中时在 `create_scope(options).await` 返回前初始化。
 即使 scope 默认 Lazy，`#[lazy(false)]` 的 Scoped 也会在创建时构造。root 为 Eager
 不改变 scope 的独立默认值。Transient 不作为初始化入口，任何标记都不改变“每次
 消费独立构造”的规则。公开的 `warm_up()` 已移除，预先初始化通过创建配置控制。
@@ -522,8 +524,9 @@ owner 的规则保活和关闭。
 诊断，不猜测字段类型。
 
 构造函数必须同步，不支持 `async fn`、间接返回 Future、receiver、trait impl、
-unsafe / extern 或方法自己的泛型参数。异步初始化仍使用 `#[factory]`；不能在构造
-阶段等待尚未就绪的延迟依赖，这与 factory 的延迟参数限制相同。
+unsafe / extern 或方法自己的泛型参数。异步初始化仍使用 `#[factory]`；构造 worker
+内不能首次获取尚未缓存类型化结果的延迟句柄，即使目标实例已就绪也会拒绝。
+这与 factory 的延迟参数限制相同。
 
 编辑器使用 `cargo nestrs init` 生成的编译单元模型复用相同字段选择。增加或调整 DI
 声明后保存文件，配置的检查命令会刷新模型；也可执行 `cargo nestrs init check`。
@@ -655,10 +658,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 延迟参数只接受裸 `#[lazy]`（也可写 `#[nestrs::lazy]`），不接受布尔参数、空括号或
 重复标记。参数属性不需要导入独立宏，由 `factory` 消费；函数本身的服务级 `#[lazy]`
-则是另一个位置的策略，决定工厂产出的服务是否自主预热。
+则是另一个位置的策略，决定工厂产出的服务是否在所属 owner 创建时自主初始化。
 
-**应将句柄交给业务阶段使用。** 工厂构造 worker 内调用尚未交付目标的 `get().await`
-仍会返回 `ResolveError`，避免占据构造名额等待其他构造任务。需要先取得依赖才能完成
+**应将句柄交给业务阶段使用。** 工厂构造 worker 内对尚未缓存类型化结果的句柄调用
+`get().await` 仍会返回 `ResolveError`，即使目标已被其他请求构造；已有句柄结果可复用。
+此限制避免占据构造名额等待其他构造任务。需要先取得依赖才能完成
 工厂的场景，请声明普通参数；不要通过自行 spawn 的任务绕过该等待限制。
 延迟参数保留字段级句柄的缓存、取消、owner 关闭和 cleanup 规则，不会绕过编译期的
 缺失依赖、歧义、循环或生命周期检查。
@@ -1128,8 +1132,8 @@ constructor 输入随上游 metadata 保留，而全局 `[nestrs-cli]` 默认值
 | --- | --- | --- |
 | `cargo nestrs check/build` | 宏、Rust 类型与借用；最终 binary / test 的全部注册依赖结构，包括缺失、重复、歧义、环和生命周期 | 修正类型约束，补齐 provider、key 或 primary，调整依赖关系 |
 | `cargo nestrs graph` | 执行选定入口的 Cargo check，从同一编译计划的 sidecar 生成 HTML | 根据编译诊断修正声明；不会运行目标程序 |
-| `ServiceProvider::build(None)` | 首次装配并共享已验证执行计划，建立独立容器状态；按声明策略与全局默认选择 Singleton 启动预热根 | 检查 Tokio 环境与初始化错误 |
-| `provider.create_scope(None).await` | 按本次 scope 策略初始化 Scoped；失败时关闭未交付 scope 并返回 `ScopeBuildError` | 检查初始化与可能的清理错误 |
+| `ServiceProvider::build(options).await` | 首次装配并共享已验证执行计划，建立独立容器状态；按声明策略与 root 配置选择 Singleton 初始化入口 | 检查 Tokio 环境与初始化错误 |
+| `provider.create_scope(options).await` | 按本次 scope 策略初始化 Scoped；失败时关闭未交付 scope 并返回 `ScopeBuildError` | 检查初始化与可能的清理错误 |
 | 实际查询、root / scope 创建时初始化 | 运行工厂和创建实例，可能遇到外部资源故障 | 检查连接配置及初始化错误 |
 
 图结构错误在最终入口编译时报告，Lazy 下未被使用的已注册服务也参与检查。单独

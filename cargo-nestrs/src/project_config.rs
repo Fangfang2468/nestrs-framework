@@ -10,10 +10,10 @@ use toml::Table;
 /// 经过验证的 DI 启动配置，供编译入口嵌入运行期默认值。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DiConfig {
-    /// 是否在容器构建时预热 Singleton 及其必要依赖。
+    /// root 创建期间 Singleton 的默认初始化策略；服务级显式策略仍优先。
     pub eager: bool,
 
-    /// 是否在作用域创建完成前初始化 Scoped 及其必要依赖；独立于 root 策略。
+    /// scope 创建期间 Scoped 的默认初始化策略；独立于 root，服务级显式策略仍优先。
     pub scope_eager: bool,
 
     /// 同一个 root 及全部 scope 共享的构造任务上限，始终大于零。

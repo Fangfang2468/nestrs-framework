@@ -14,6 +14,7 @@ from toolchain_support import bridge_name, executable_name
 
 
 def hashes(directory):
+    """Record the macro fixture source and root Cargo inputs for the final unchanged check."""
     sources = list(directory.rglob("*.rs")) + [directory / "Cargo.toml", directory / "Cargo.lock"]
     return {
         str(path.relative_to(directory)): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -22,6 +23,7 @@ def hashes(directory):
 
 
 def main():
+    """Check all targets and run the three metadata fixtures in debug and release."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-build", action="store_true", help="use the already built debug CLI and driver")
     args = parser.parse_args()

@@ -41,7 +41,7 @@ pub(crate) struct ValidatedGraph {
     /// 查询只需按完整服务身份查找；使用随机种子的 aHash，不把哈希顺序用于图语义。
     pub(crate) routes: AHashMap<ServiceIdentifier, RootRoute>,
 
-    /// 依赖总在消费者之前，用于预热与已验证的 Scope 能力传播。
+    /// 编译器给出的依赖优先顺序；owner 创建时据此选择并提交初始化请求。
     pub(crate) topological_order: Vec<ProviderId>,
 
     /// 每个 Provider 的去重反向邻接表，按确定的 ProviderId 顺序排列。
@@ -54,7 +54,7 @@ pub(crate) struct CompiledNode {
     /// 当前 concrete 节点的准确类型与 key。
     pub(crate) identifier: ServiceIdentifier,
 
-    /// 固定生命周期、预热覆盖、来源与清理策略。
+    /// 固定生命周期、创建期初始化覆盖、来源与清理策略。
     pub(crate) common: NodePolicy,
 
     /// 输入槽位完整保留，不能像拓扑边一样去重。
@@ -73,7 +73,8 @@ pub(crate) struct NodePolicy {
     /// 决定实际实例缓存和 owner 归属的生命周期。
     pub(crate) lifetime: ServiceLifetime,
 
-    /// None 继承当前 root/预热调用的默认值，Some 覆盖自主预热选择。
+    /// None 继承所属 root/scope 本次创建的默认值，Some 覆盖自主初始化入口选择。
+    /// true 跳过、false 选中；Transient 不作为入口，普通依赖仍可触发任何已选目标。
     pub(crate) lazy: Option<bool>,
 
     /// 原始声明位置，供运行期失败诊断使用。

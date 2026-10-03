@@ -9,8 +9,8 @@ use std::{fmt, sync::Arc};
 
 use crate::service::{ServiceIdentifier, ServiceSource};
 
-/// 编译计划缺失、运行环境或启动预热失败。静态图错误由工具链在编译期报告。
-/// Lazy 默认下显式 #[lazy(false)] 的初始化失败也属于启动失败。
+/// 编译计划缺失、运行环境或 root 创建期初始化失败。静态图错误由工具链在编译期报告。
+/// Lazy 默认下显式 `#[lazy(false)]` 的 Singleton 初始化失败也属于启动失败。
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
     /// 应用没有经过工具链生成最终执行计划。
@@ -21,10 +21,10 @@ pub enum BuildError {
     #[error("构建服务容器需要当前 Tokio runtime")]
     RuntimeUnavailable,
 
-    /// 启动预热失败，并保留清理尚未交付 root 的结果。
+    /// 创建期初始化失败，并保留关闭尚未交付 root 的结果。
     #[error("服务容器预热失败: {error}; 关闭结果: {dispose_error:?}")]
     Initialization {
-        /// 启动预热产生的原始解析失败。
+        /// root 创建期初始化产生的原始解析失败。
         #[source]
         error: ResolveError,
 
@@ -33,9 +33,10 @@ pub enum BuildError {
     },
 }
 
-/// scope 创建失败；返回前已等待未交付 owner 排空及清理。
+/// scope 登记或创建期初始化失败；返回前已请求并等待未交付 owner 的关闭结果。
 ///
-/// 保留原始初始化失败和可选的清理失败，不把部分初始化的 scope 交给调用者。
+/// 保留原始失败和可选的关闭失败，不把部分初始化的 scope 交给调用者。
+/// 若协调器已停止，关闭错误表示无法确认异步 cleanup 完成，不作完成保证。
 #[derive(Debug, thiserror::Error)]
 #[error("服务作用域初始化失败: {error}; 关闭结果: {dispose_error:?}")]
 pub struct ScopeBuildError {
@@ -86,7 +87,8 @@ impl Drop for FailureFrame {
 
 /// 获取或激活失败，保留失败原因和带 key、源码位置的依赖路径。
 ///
-/// Singleton/Scoped 的失败被缓存，后续调用共享原始失败记录。
+/// Singleton/Scoped 的构造或依赖失败缓存到所属 owner 关闭，后续调用共享原始记录。
+/// 查询被关闭状态或生命周期限制拒绝时，不会因此创建一个服务失败缓存。
 #[derive(Clone)]
 pub struct ResolveError(Arc<ResolveFailure>);
 
@@ -168,7 +170,9 @@ impl fmt::Debug for ResolveError {
 
 impl std::error::Error for ResolveError {}
 
-/// 所有 cleanup 都处理完成后汇总的关闭错误。
+/// 关闭期间的 cleanup、跟踪到的析构失败，或协调器未能交付关闭结果。
+///
+/// 正常关闭会汇总错误并继续清理其他实例；协调器提前停止时，不能确认 cleanup 已完成。
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("服务容器关闭失败: {failures:?}")]
 pub struct DisposeError {
@@ -191,7 +195,8 @@ impl DisposeError {
         }
     }
 
-    /// 每个失败 cleanup 的诊断。其余实例仍会继续清理。
+    /// 关闭失败的诊断，包括 cleanup、跟踪到的析构 panic 或协调器停止。
+    /// 协调器仍运行时，个别 cleanup 失败不会阻止其余实例继续清理。
     pub fn failures(&self) -> &[String] {
         &self.failures
     }

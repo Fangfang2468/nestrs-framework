@@ -86,7 +86,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `#[inject]` 字段生成持有实例 lease 的 `Injection<T>`，通过只读解引用访问服务。
 Singleton 在容器内共享，Scoped 在同一 scope 内共享，Transient 每次解析创建新实例；
 root 不接收 Scoped 查询。`#[lazy]` 输入通过 `LazyInjection<T>::get().await` 显式访问；
-provider 级 `#[lazy]` 则只影响主动预热，两者语义不同。
+provider 级 `#[lazy]` 则决定服务是否被选作所属 owner 创建期的自主初始化入口，
+普通依赖仍可能提前构造它。root 和 scope 的默认初始化策略独立，均为 Lazy；
+配置、服务级覆盖与失败清理见 [core 的初始化说明](nestrs-core/README.md)。
 可选注入/查询仅在路由缺席时返回 `None`，不会隐藏歧义、循环或生命周期错误。
 
 构造函数、同步/异步 factory、key、trait、泛型、lazy 和跨 crate 的完整用法统一见

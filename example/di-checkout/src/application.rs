@@ -14,6 +14,7 @@ use crate::{
     observe::event,
 };
 
+/// CLI 传入的创建选项；root 与 scope 策略独立，构造名额由整个容器共享。
 #[derive(Debug, Clone)]
 pub(crate) struct RunOptions {
     pub initialization: InitializationMode,
@@ -31,6 +32,7 @@ impl Default for RunOptions {
     }
 }
 
+/// 容器与应用编排错误；操作和显式关闭同时失败时保留两个原因。
 #[derive(Debug, Error)]
 pub(crate) enum ApplicationError {
     #[error(transparent)]
@@ -48,14 +50,17 @@ pub(crate) enum ApplicationError {
     },
 }
 
+/// 应用边界的结果；支付拒绝等业务结果仍放在 CheckoutResponse 内。
 type AppResult<T> = Result<T, ApplicationError>;
 
+/// 一笔请求的业务结果，供 CLI 展示并决定退出状态。
 #[derive(Debug)]
 pub(crate) struct CheckoutResponse {
     pub customer: String,
     pub result: Result<String, CheckoutError>,
 }
 
+/// 全部请求完成后读取的订单、库存与审计快照。
 #[derive(Debug)]
 pub(crate) struct RunReport {
     pub responses: Vec<CheckoutResponse>,
@@ -64,6 +69,7 @@ pub(crate) struct RunReport {
     pub audit_entries: usize,
 }
 
+/// 建立 root、处理请求并显式关闭；错误路径同样等待关闭结果。
 pub(crate) async fn run(
     options: RunOptions,
     requests: Vec<CheckoutRequest>,

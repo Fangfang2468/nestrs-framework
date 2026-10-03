@@ -128,7 +128,7 @@ flowchart TB
 | 查询路由 `RootRoute` | 请求类型/key 对应的 provider，以及必要的 trait 投影 | 多个合法视图可指向同一 provider；投影不会额外构造实例 |
 | occurrence / `TaskId` | 一次实际构造及其活跃任务身份 | 同一个 Transient provider 可以对应多个 occurrence |
 | owner / `OwnerId` | root 或某个 scope 的实例归属与关闭边界 | 决定缓存、journal 和 cleanup 归属，不等同于 Tokio task |
-| `QueryId` | 一次普通查询或预热请求的等待订阅 | 多个 QueryId 可以等待同一个构造任务，取消一个不取消共享构造 |
+| `QueryId` | 一次普通查询或创建期初始化请求的等待订阅 | 多个 QueryId 可以等待同一个构造任务，取消一个不取消共享构造 |
 | journal | owner 成功发布实例的记录 | 包含 Transient；用途是保活引用和安排关闭，不只是查询缓存 |
 | `DependencyLease` | 一个实例及其必要依赖的内部强所有权凭证 | 它可以被缓存、令牌等共同持有；释放一份不代表实例立即析构 |
 
@@ -237,8 +237,9 @@ core 的私有 [activation::adapter](src/activation/adapter.rs) 仅定义执行�
 
 生成入口为私有的 `__nestrs_reflect_v2`。完整验证之后，工具只交付输入或查询路由实际使用的投影，并同步重编号；未使用的已注册 provider 仍接受全图检查。入口 metadata 旁的 `*.nestrs-reflect.json` 保存同一份已选计划，便于审阅节点、槽位和路由，运行时不读取此文件。文件位置与字段说明见[rustc 集成指南](../docs/NESTRS_RUSTC_EXTENSION_GUIDE.md)。
 
-`v2` 表示 core 与工具生成代码之间的内部执行 ABI；JSON 清单的格式 `version` 仍为 `1`，
-两者独立演进。包含 root / scope 两种默认策略的 options sink 为 `plan_set_options_v3`；
+入口符号沿用 `__nestrs_reflect_v2`，包含 root / scope 两种默认策略的 options sink
+则为 `plan_set_options_v3`；这些内部协议入口分别核对版本与完整签名，不能仅凭 reflect
+名称中的 `v2` 判断工具与 core 兼容。JSON 清单的格式 `version` 仍为 `1`，独立演进。
 driver 在引用 core 的最终 `check/build` 中核对这个 sink 及其完整签名，空服务图也不能
 混用旧 core。更新工具和 core 后应一起重新编译；CLI
 使用 driver/bridge 内容指纹隔离生成缓存。
@@ -256,7 +257,7 @@ core 的 [CompiledApplication::load](src/graph/plan.rs) 使用入口共享的 `O
 内部调用 `Runtime::create_scope(...).await`，复用当前 root 的计划和 runtime，
 只为新 scope 建立独立 owner、缓存与 journal。二者共用私有 `initialize_owner`：
 它持有尚未交付的 owner，初始化失败先关闭，并不能对已交付 owner 再发起批量初始化。
-它选择 Scoped 入口，不再创建另一份协调器；Scoped 的 Singleton 依赖仍归 root。
+scope 创建只选择 Scoped 入口，不再创建另一份协调器；Scoped 的 Singleton 依赖仍归 root。
 scope 初始化失败时只关闭这个尚未交付的 scope，root 和其他 scope 可以继续使用；
 若失败来自共享 Singleton，该 Singleton 的失败缓存仍保留在 root，不会自动重试。
 
@@ -697,7 +698,8 @@ workspace 默认值；core 运行时不解析 TOML。修改配置后需要重新
 
 ### 代码显式覆盖
 
-需要程序化控制时，向 `build` 传入 `Some(options)` 完整覆盖项目默认值：
+需要程序化控制时，向 `build` 传入 `Some(options)` 完整覆盖项目默认值。下面的入口
+使用现有 Tokio runtime，并依次等待两个 scope 和 root 关闭：
 
 ```rust
 use std::num::NonZeroUsize;
@@ -705,25 +707,29 @@ use nestrs_core::{
     InitializationMode, ServiceProvider, ServiceProviderOptions, ServiceScopeOptions,
 };
 
-let provider = ServiceProvider::build(Some(ServiceProviderOptions {
-    initialization: InitializationMode::Eager,
-    scope_initialization: InitializationMode::Lazy,
-    max_concurrent_activations: NonZeroUsize::new(16).unwrap(),
-}))
-.await?;
-
-// 使用当前 root 的 scope 默认值 Lazy；显式 #[lazy(false)] 的 Scoped 仍会初始化。
-let request_scope = provider.create_scope(None).await?;
-request_scope.dispose_async().await?;
-
-// 只为这一次批处理 scope 选择 Eager，不修改 root 或随后 scope 的默认值。
-let batch_scope = provider
-    .create_scope(Some(ServiceScopeOptions {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ServiceProvider::build(Some(ServiceProviderOptions {
         initialization: InitializationMode::Eager,
+        scope_initialization: InitializationMode::Lazy,
+        max_concurrent_activations: NonZeroUsize::new(16).unwrap(),
     }))
     .await?;
-batch_scope.dispose_async().await?;
-provider.dispose_async().await?;
+
+    // 使用当前 root 的 scope 默认值 Lazy；显式 #[lazy(false)] 的 Scoped 仍会初始化。
+    let request_scope = provider.create_scope(None).await?;
+    request_scope.dispose_async().await?;
+
+    // 只为这一次批处理 scope 选择 Eager，不修改 root 或随后 scope 的默认值。
+    let batch_scope = provider
+        .create_scope(Some(ServiceScopeOptions {
+            initialization: InitializationMode::Eager,
+        }))
+        .await?;
+    batch_scope.dispose_async().await?;
+    provider.dispose_async().await?;
+    Ok(())
+}
 ```
 
 `None` 与 `Some` 的区别是**是否采用外部默认值**，不是 Lazy 与 Eager 的区别：
@@ -1103,7 +1109,7 @@ DI 或异步 factory 并不必然要求这种结构。共享状态加短时锁�
 
 | 实现位置 | 具体职责 |
 | --- | --- |
-| [handle.rs](src/runtime/handle.rs) 的 `Runtime` | 分配 QueryId，发送 Resolve / Close 等命令，等待结果；预热也复用普通解析请求 |
+| [handle.rs](src/runtime/handle.rs) 的 `Runtime` | 分配 QueryId，发送 Resolve / Close 等命令，等待结果；创建期初始化也复用普通解析请求 |
 | [coordinator.rs](src/runtime/coordinator.rs) 的 `Coordinator` | 独占任务图与 owner 的调度状态，处理命令和 worker 完成事件 |
 | [task.rs](src/runtime/task.rs) 的 `Activation` | 保存一次未完成构造的 owner、provider、输入就绪状态、消费者和等待者 |
 | [worker.rs](src/runtime/worker.rs) 的 `ActivationWorker` / `CleanupWorker` | 独占一次构造或清理所需的输入，通过 `run(self)` 完成工作并交回结果 |
@@ -1135,7 +1141,7 @@ DI 或异步 factory 并不必然要求这种结构。共享状态加短时锁�
 | provider 编号（`usize`） | 冻结计划中的一个服务节点 | 某个 key 下的 `OrderStore` 选定了哪一个 concrete provider |
 | `OwnerId` | 当前 root 或某个 scope；root 固定为 `0` | 两个 scope 请求同一 Scoped provider，实际 owner 不同 |
 | `TaskId` | 本次需要完成的一次构造 occurrence | 一个 Transient provider 被两个槽位消费，会有两个 TaskId |
-| `QueryId` | 一次普通查询或预热请求的订阅 | 十个查询等待同一个 Singleton，可以是十个 QueryId 对应一个 TaskId |
+| `QueryId` | 一次普通查询或创建期初始化请求的订阅 | 十个查询等待同一个 Singleton，可以是十个 QueryId 对应一个 TaskId |
 | Tokio `Id` | 一个已经启动的 worker 任务 | 从 `JoinError` 找回 panic 的构造或 cleanup 属于谁 |
 
 `Runtime` 的 `next_owner`、`next_query` 是原子计数器，因为不同调用者可同时使用请求
@@ -1676,8 +1682,8 @@ future 类型并维持其 pin 约束；这份装箱没有因去除逐参数的 P
 
 [Coordinator::launch_ready](src/runtime/coordinator.rs) 将普通依赖 lease 与实际 owner
 的弱能力交给 [ActivationWorker::run](src/runtime/worker.rs)。worker 仅在 `Lazy`
-分支组合共享 `LazyInputPlan` 与 `Weak<dyn LazyResolver>`，不请求目标，也不为尚未
-存在的目标制造 lease。每个 lazy 字段仍有独立的请求、取消接续与类型化结果状态；
+分支组合共享 `LazyInputPlan` 与 `Weak<dyn LazyResolver>`，不请求目标，也不预先为这条
+lazy 输入取得目标 lease。目标可能已由其他请求创建；每个 lazy 字段仍有独立的请求、取消接续与类型化结果状态；
 共享的只是固定计划描述。
 
 实际 owner 由当前构造任务决定：Singleton 即使从 scope 查询也关联 root；Scoped
@@ -1703,10 +1709,15 @@ concrete 在其所属 crate 内投影，消费方只需命名可访问的请求�
 | scope 创建初始化失败（包含 Lazy 下 `#[lazy(false)]` 的 Scoped） | 关闭尚未交付的 scope，再返回 `ScopeBuildError { error, dispose_error }`；已存在的 root 与其他 scope 不受关闭影响 |
 | 查询、生命周期或构造失败 | 返回 `ResolveError`；初始化诊断保留 provider、key、源码与依赖路径 |
 | cleanup 或关闭期间跟踪到的实例析构 panic | 记录失败、继续清理其他实例，最终聚合为 `DisposeError` |
+| 协调器在交付关闭结果前停止 | 返回表示“异步 cleanup 未确认完成”的 `DisposeError`；不能把等待结束视为清理成功 |
 
 Singleton / Scoped 的初始化失败缓存到所属 owner 关闭，后续查询不会自动重试。Transient 的失败只属于本次 occurrence，下次请求可以创建新的 occurrence；一个 `LazyInjection` 字段固定持有同一次 occurrence，因此该字段反复 `get()` 不会重试失败。普通前置依赖失败时，消费者不会开始构造；延迟目标失败发生在消费者已构造之后，由调用 `get()` 的业务代码处理。其他请求可能使用的成功共享实例不会被连带清理。
 
 factory 返回 `Result<T, E>` 时要求 `E: Debug`，同步和异步 adapter 都保存错误诊断文本，不承诺保留业务错误完整的 `Error::source` 链。constructor / factory panic 通过受跟踪的 worker 结果进入初始化错误，协调器继续运行。`BuildError::Initialization` 和 `ScopeBuildError` 均保留公开的 `ResolveError` 及可选 `DisposeError`；关闭诊断可通过 `DisposeError::failures()` 逐项读取。
+
+创建失败时等待的是未交付 owner 的**关闭结果**。协调器正常运行时，结果在排空和
+cleanup 后交付；若 Tokio 提前退出或协调器停止，关闭返回错误，不能承诺清理已完成。
+这时仍保留原始初始化错误和关闭错误，内存安全释放继续由 lease 与 ReleaseDomain 负责。
 
 错误路径也有专门的数据结构，而不是每经过一层消费者就拼接一份长字符串。
 [error.rs](src/error.rs) 中的 `ResolveError` 共享一个 `ResolveFailure`，其中原始
@@ -1757,7 +1768,7 @@ Building 缓存里的一个 TaskId。第一个查询取消时，只移除它的�
 | --- | --- |
 | 查询 future 尚未被 poll | async 函数主体尚未执行，没有仅凭创建 future 提交 Resolve |
 | 查询已提交请求 | 丢弃等待凭证，发送退订；接受的构造继续，由已有 owner 收纳 |
-| `build(None)` / `create_scope(None)` 正在初始化 | 创建函数内部尚未交付的 owner 被 Drop，发出关闭请求；已接受任务继续排空并清理，取消者没有等到 cleanup 完成 |
+| `build(options)` / `create_scope(options)` 正在初始化 | None / Some 均由创建函数内部尚未交付的 owner 在 Drop 时发出关闭请求；已接受任务继续排空并清理，取消者没有等到 cleanup 完成 |
 | `dispose_async(self)` 等待中 | 关闭请求继续，owner 的 Drop 也负责幂等兜底；future 被丢弃不撤销关闭 |
 
 `dispose_async(self)` 与普通查询还有一个所有权区别：它的 future 从创建时就拥有

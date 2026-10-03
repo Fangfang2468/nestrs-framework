@@ -16,6 +16,7 @@ spec.loader.exec_module(verify_ide)
 
 
 class FieldLocationTests(unittest.TestCase):
+    """Keep field coordinates tied to original fixture text across formatting changes."""
     def test_field_position_preserves_original_whitespace(self):
         cases = [
             ("optional.delayed_present.as_ref()", 0, 9),
@@ -66,6 +67,7 @@ class FieldLocationTests(unittest.TestCase):
 
 
 class Clock:
+    """Provide deterministic request deadlines without sleeping or launching a server."""
     def __init__(self):
         self.now = 0.0
         self.delays = []
@@ -95,6 +97,7 @@ class Incoming:
 
 
 class RequestRetryTests(unittest.TestCase):
+    """Exercise the real request loop with queued protocol replies and a simulated clock."""
     def setUp(self):
         self.clock = Clock()
         self.time_patch = patch.object(verify_ide, "time", self.clock)

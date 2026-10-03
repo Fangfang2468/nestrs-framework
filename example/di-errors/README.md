@@ -85,7 +85,7 @@ Windows 将 `python3` 换成 `python`；`--offline` 要求依赖已缓存。脚�
 | [26-generic-growth](26-generic-growth/src/main.rs) | 未执行分支中的 `growing::<(T,)>()` 持续增加查询类型复杂度 | `NESTRS-DI008` | 使用有限闭合类型，或用运行期数据结构表达递归 |
 | [27-duplicate-binding](27-duplicate-binding/src/main.rs) | 隐藏协议对同一 `Service → Port` 显式绑定两次 | `NESTRS-DI009` | 移除重复显式绑定；普通业务使用自动绑定 |
 | [28-orphan-binding](28-orphan-binding/src/main.rs) | 显式声明 `Service → Port` 投影，却没有 Service provider | `NESTRS-DI010` | 声明实例创建方；binding 自身不创建服务 |
-| [29-provider-lazy-missing](29-provider-lazy-missing/src/main.rs) | 服务级 lazy 的 `DeferredApplication.missing` 缺少目标 | `NESTRS-DI001` | 补齐依赖；服务级 lazy 仅决定自主预热 |
+| [29-provider-lazy-missing](29-provider-lazy-missing/src/main.rs) | 服务级 lazy 的 `DeferredApplication.missing` 缺少目标 | `NESTRS-DI001` | 补齐依赖；服务级 lazy 仅决定创建期自主初始化 |
 
 `27`、`28` 专门观察隐藏的 `nestrs::bind` 内部协议。正常应用只写服务声明与
 `impl Trait for Concrete`，不需要添加 bind。泛型展开上限按类型复杂度/实例数量

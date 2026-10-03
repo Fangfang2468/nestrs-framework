@@ -18,6 +18,7 @@ from toolchain_support import bridge_name, compiler_command_environment, compile
 
 
 def main():
+    """Validate the selected compiler and build the three host artifacts with scoped bootstrap."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release", action="store_true")
     parser.add_argument("--rustc", default=os.environ.get("NESTRS_RUSTC", "rustc"))

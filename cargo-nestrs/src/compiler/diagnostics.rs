@@ -1,5 +1,6 @@
-//! 用户源码诊断的唯一输出口。通过原生 rustc 同时交付终端和 Cargo JSON，
+//! 带 Nestrs 编号的源码诊断统一输出口。通过原生 rustc 同时交付终端和 Cargo JSON，
 //! 不让经过语义认证的来源在最后一步退化成无位置的 stderr 字符串。
+//! 宏语法错误、原生 Rust 错误和无法继续的工具链协议握手仍可使用各自的原生诊断。
 
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{FileName, Span, SyntaxContext};

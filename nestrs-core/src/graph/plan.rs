@@ -377,6 +377,7 @@ unsafe extern "Rust" {
 }
 
 /// 将最终入口的编译时配置写入计划，不读取部署环境中的 Cargo.toml。
+/// root 与 scope 策略分别编码；此 options sink 的 v3 与 reflect 入口的 v2 独立演进。
 ///
 /// # Safety
 /// output 必须满足本模块的编译器装配协议。
@@ -468,7 +469,7 @@ pub unsafe fn plan_push_trait_route(output: *mut (), provider: usize, binding: u
     unsafe { PlanAssembly::from_output(output) }.push_trait_route(provider, binding);
 }
 
-/// 写入依赖优先的拓扑顺序；运行期预热直接遍历该顺序。
+/// 写入依赖优先的拓扑顺序；owner 创建时按此顺序提交选中服务的初始化请求。
 ///
 /// # Safety
 /// output 必须满足本模块的编译器装配协议，provider 是当前计划的有效节点编号。

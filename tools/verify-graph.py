@@ -15,6 +15,7 @@ from toolchain_support import bridge_name, executable_name
 
 
 class GraphData(HTMLParser):
+    """Read the exported graph-data JSON script without executing page JavaScript."""
     def __init__(self):
         super().__init__()
         self.collecting = False
@@ -36,6 +37,7 @@ class GraphData(HTMLParser):
 
 
 def graph_data(path):
+    """Require one embedded graph payload and no external script dependency."""
     html = path.read_text(encoding="utf-8")
     parser = GraphData()
     parser.feed(html)
@@ -45,11 +47,13 @@ def graph_data(path):
 
 
 def verify_graph(path, binary):
+    """Validate a single exported graph against its known fixture binary."""
     graph = graph_data(path)
     return verify_graph_payload(graph, binary)
 
 
 def verify_graph_payload(graph, binary):
+    """Check fixture providers and input slots, not production graph-selection rules."""
     assert graph["version"] == 1, graph
     nodes = graph["nodes"]
     assert len(nodes) == 5, f"unexpected provider count: {nodes}"
@@ -84,6 +88,7 @@ def verify_graph_payload(graph, binary):
 
 
 def project_data(path):
+    """Validate project-report shape and keep success, failure and skipped entries distinct."""
     project = graph_data(path)
     assert project["version"] == 2 and project["kind"] == "project", project
     entries = project["entries"]
@@ -101,6 +106,7 @@ def project_data(path):
 
 
 def fixture_entries(project):
+    """Check expected statuses and graph contents for this fixed test package."""
     entries = {entry["binary"]: entry for entry in project["entries"] if entry["package"] == "nestrs-graph-fixture"}
     assert set(entries) == {"alpha", "beta", "build-script-build", "invalid_graph", "no_main", "cfg_no_main", "feature_app", "compile_error", "macro_main"}, entries
     for binary in ["alpha", "beta"]:
@@ -124,6 +130,7 @@ def fixture_entries(project):
 
 
 def source_hashes(fixture):
+    """Record fixture source and Cargo inputs before invoking the real graph CLI."""
     paths = list(fixture.rglob("*.rs")) + list(fixture.rglob("Cargo.toml")) + list(fixture.rglob("Cargo.lock"))
     return {
         str(path.relative_to(fixture)): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -132,6 +139,7 @@ def source_hashes(fixture):
 
 
 def main():
+    """Run real exports and negative controls with isolated tools and retained evidence."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-build", action="store_true", help="use the already built CLI and driver")
     parser.add_argument("--cli", type=Path, help="CLI path; defaults to Cargo target/debug/cargo-nestrs")

@@ -17,7 +17,7 @@ pub(crate) const PROVIDER_DEFINITION: &str = "ProviderDefinition";
 /// 供 driver 识别 provider 定义能力的描述函数名。
 pub(crate) const PROVIDER_HELPER: &str = "provider_definition";
 
-/// 最终 binary/test 的唯一执行计划入口符号，版本独立于展示 JSON。
+/// 最终 binary/test 的唯一执行计划入口符号；入口 v2、Options sink v3 与展示 JSON 分别版本化。
 pub(crate) const PLAN_ENTRY: &str = "__nestrs_reflect_v2";
 
 /// core 内部激活适配能力的真实路径，由 driver 校验类型身份。
@@ -199,17 +199,17 @@ pub(crate) enum Lifetime {
     Transient = 2,
 }
 
-/// 服务是否作为独立预热入口的三态编码，不表示字段延迟注入。
+/// owner 创建期间是否自主初始化服务的三态编码，不表示字段延迟注入。
 #[derive(Clone, Copy)]
 #[repr(u8)]
 pub(crate) enum Initialization {
-    /// 继承应用入口的初始化默认值。
+    /// Singleton 继承 root 默认，Scoped 继承 scope 默认；Transient 不自主初始化。
     Inherit = 0,
 
-    /// 不作为自主预热入口，普通依赖仍可触发构造。
+    /// 不作为创建阶段的自主初始化入口，普通依赖仍可触发构造。
     Lazy = 1,
 
-    /// 在所属生命周期的预热操作中显式选为入口。
+    /// 创建所属 root/scope 时显式选为初始化入口；Transient 仍按消费构造。
     Eager = 2,
 }
 
@@ -223,7 +223,7 @@ impl Initialization {
         }
     }
 
-    /// 还原声明语义，None 保留继承入口配置的含义。
+    /// 还原声明语义，None 保留继承所属 owner 默认策略的含义。
     pub(crate) fn lazy(self) -> Option<bool> {
         match self {
             Self::Inherit => None,
@@ -241,7 +241,7 @@ pub(crate) struct ProviderPolicy {
     /// 同 key 的 trait 多候选选择中是否拥有 primary 优先级。
     pub(crate) primary: bool,
 
-    /// 服务级预热入口策略，允许继承应用默认值。
+    /// 服务级初始化策略，允许继承所属 owner 的默认值。
     pub(crate) initialization: Initialization,
 }
 
@@ -314,7 +314,7 @@ pub(crate) enum KeyKind {
 /// 已冻结执行计划向 core 私有装配入口写入的数据类别。
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum PlanSink {
-    /// 写入应用入口的容器默认启动配置。
+    /// 经 v3 sink 写入 root/scope 独立初始化默认值与共享构造并发上限。
     Options,
 
     /// 写入已启用的 concrete/trait 投影能力。

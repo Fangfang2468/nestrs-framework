@@ -21,7 +21,8 @@ use crate::{
 };
 
 /// 一条已选定延迟依赖的不可变信息。归 activation 协议所有，不反向依赖 graph。
-/// optional 缺席在创建字段前处理；存在此计划就必须交付一个真实实例。
+/// optional 缺席在创建字段前处理；存在此计划表示已选定目标，获取成功才交付真实实例。
+/// 构造或关闭错误仍通过延迟句柄报告，不转换为 optional 缺席。
 #[derive(Debug)]
 pub(crate) struct LazyInputPlan {
     /// 冻结计划中的 provider 节点编号。

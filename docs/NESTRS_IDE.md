@@ -156,6 +156,15 @@ python3 tools/verify-ide.py --skip-build --rust-analyzer /path/to/rust-analyzer
 未保存编辑、真实错误与诊断恢复，以及 feature、宏生成声明、build.rs 的 cfg/env/include 产物。报告位于
 `target/nestrs-ide-verification/report.json`。
 
+验证器通过正式 CLI 的 `doctor --json` 获取实际 rustc、driver 和桥接路径，再核对
+这些路径是否写入保存检查环境；它不从面向人的文本输出猜测工具位置，也不自行
+计算编译缓存。`doctor` 成功只说明工具发现与相应身份检查完成，下面的真实 LSP
+请求仍负责验证项目加载、宏展开、类型和导航。
+
+默认、alternate 与 release 都检查项目模型、冷启动及字段/工厂的 LSP 行为；
+未保存编辑、诊断恢复和生成的保存检查命令在 default 配置中执行。该分工不等于
+每一种 feature/profile 组合都重复完整编辑流程。
+
 验证器的真实错误对照使用默认启用的 E0308 类型不匹配验证未保存编辑的实时诊断，保存后的
 E0425 名称错误由配置的真实 rustc 检查验证。没有额外开启 rust-analyzer 实验诊断，
 也没有通过关闭诊断消除属性或类型的红线。
@@ -175,6 +184,13 @@ optional 构造字段的 hover / 定义跳转定位允许访问链中点号两�
 `--rust-analyzer` 传给上述验证器。也可指定已安装的 VS Code 扩展服务器。
 LSP 验证与 `native_host` 的项目模型测试分别执行，记录实际使用的服务器与 host；
 仅运行项目模型测试不能证明完整 LSP 交互通过。
+
+`tools/verify-macro-editor.py` 是更早的宏服务器低层协议探针，当前会先删除
+`RUSTC_BOOTSTRAP`，再直接构建使用 `proc_macro_def_site` 的私有 bridge，缺少该
+crate 的限定构建授权。已用脚本捕获的实际环境最小复现 E0554，因此它目前不能
+作为应通过的验证入口。本轮仅核对并补充这一说明，尚未修改该脚本行为；现行标准
+LSP 验证使用上面的 `verify-ide.py`。这个探针准备失败不能推断为产品宏展开或
+LSP 功能损坏。
 
 项目准备适配 Linux `x86_64-unknown-linux-gnu` 和 Windows
 `x86_64-pc-windows-msvc` 的固定工具链。Windows 使用本机 `.exe` 和 `.dll`，在

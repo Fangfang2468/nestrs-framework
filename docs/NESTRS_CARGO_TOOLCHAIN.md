@@ -156,13 +156,21 @@ cargo nestrs doctor --json --target-dir ./target/verification
 工具版本或组件不匹配仍以非零状态失败。默认 `doctor` 保留面向人的文本输出。
 未指定 `--target-dir` 时，三个目录字段为 null，不读取项目或环境中的 target 默认值。
 
+`doctor` 核对 rustc 与 driver 的完整身份、所需 rustc-dev 元数据，并确认桥接文件
+可读取、计入联合指纹。它不加载过程宏、不编译应用；桥接能否被 rustc 或编辑器宏
+服务器正确加载，仍由真实构建和 IDE 验证确认。成功的诊断报告不能代替这些验证。
+路径与指纹都是正式工具返回的值，维护脚本不应重新拼接缓存路径；Windows 工件路径
+可能保留 canonical 前缀，也不能直接当作已经转换过的编辑器 URI。
+
 ### 源码构建与维护脚本的职责
 
 `tools/build-toolchain.py` 是 CLI 尚未存在时的源码构建入口，负责检查已经安装的
 固定编译器、限定 bootstrap 授权并调用 Cargo 构建 CLI / driver / bridge。它保留
 首次构建必需的跨平台路径和动态库环境准备；正式应用构建、身份验证及缓存隔离
-仍由 Rust 工具实现。已有工具的维护脚本通过 doctor 的结构化报告获取实际信息，
-不复制缓存哈希算法。
+仍由 Rust 工具实现。需要工具身份信息的 IDE 验证器与自动绑定包装脚本通过
+`tools/toolchain_support.py` 读取 doctor 的结构化报告；该 helper 检查 JSON 版本与
+必需字段，并保留命令原始输出和退出状态，不复制缓存哈希算法。首次源码构建所需
+的宿主文件名、动态库搜索路径和 pin 检查仍可在没有 CLI 时使用。
 
 正式编译回归的 Rust harness 和业务夹具集中于 `cargo-nestrs/tests/`；Python
 验证器负责进程编排、记录证据或模拟外部客户端。原版 rust-analyzer LSP、浏览器
@@ -267,6 +275,8 @@ Clippy；这不等于应用级 Clippy 已接入 Nestrs。旧 `ide` 命令已改�
 查询和闭合泛型，冻结完整计划。项目生成内容统称 `nestrs-reflect`，不是需要新增的
 Cargo package。私有执行入口为 `__nestrs_reflect_v2`；工具和 core 要配套重编译，
 引用 core 的空图也在 check 阶段验证 `plan_set_options_v3`，不接受旧协议。
+Options v3 携带 root 与 scope 各自的默认初始化策略和共享构造并发上限；它不把
+执行入口符号、审阅 JSON 或 IDE constructor 模型的版本号一并改成 3。
 
 | 产物 | 用途 |
 | --- | --- |

@@ -24,11 +24,13 @@ from toolchain_support import bridge_name, executable_name, query_doctor
 
 
 def source_hashes(directory):
+    """Record fixture Rust sources and Cargo inputs to detect unintended source edits."""
     paths = list(directory.rglob("*.rs")) + [directory / "Cargo.toml", directory / "Cargo.lock"]
     return {str(p.relative_to(directory)): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
 
 
 def locate_server(explicit):
+    """Select an already installed LSP server; never install or download one."""
     if explicit:
         path = Path(explicit).resolve()
         assert path.is_file(), f"rust-analyzer does not exist: {path}"
@@ -46,6 +48,7 @@ def locate_server(explicit):
 
 
 def nested_settings(settings):
+    """Convert generated rust-analyzer dotted keys into LSP initialization options."""
     result = {}
     for key, value in settings.items():
         if not key.startswith("rust-analyzer."):
@@ -59,6 +62,7 @@ def nested_settings(settings):
 
 
 class Lsp:
+    """Minimal fixture client: record messages, serve configuration and bound request retries."""
     def __init__(self, server, root, options, environment, output):
         self.output = output
         self.options = options
@@ -90,6 +94,7 @@ class Lsp:
         self.notify("initialized", {})
 
     def read(self):
+        """Decode Content-Length frames on the reader thread and queue failures explicitly."""
         try:
             while True:
                 headers = {}
@@ -115,6 +120,7 @@ class Lsp:
         self.send({"jsonrpc": "2.0", "method": method, "params": params})
 
     def consume(self, timeout):
+        """Record a received message and answer the server's fixture configuration requests."""
         try:
             message = self.queue.get(timeout=max(0.01, timeout))
         except queue.Empty:
@@ -142,6 +148,7 @@ class Lsp:
         return message
 
     def request(self, method, params=None, timeout=30):
+        """Match response IDs and retry allowed cancellations within the original deadline."""
         self.next_id += 1
         identifier = self.next_id
         self.send({"jsonrpc": "2.0", "id": identifier, "method": method, "params": params})
@@ -178,6 +185,7 @@ class Lsp:
         raise TimeoutError(f"LSP request timed out: {method}")
 
     def until(self, action, predicate, label, timeout=60):
+        """Poll a fixture expectation while continuing to service incoming protocol messages."""
         deadline = time.monotonic() + timeout
         last = None
         while time.monotonic() < deadline:
@@ -191,6 +199,7 @@ class Lsp:
         return self.request("textDocument/diagnostic", {"textDocument": {"uri": uri}, "identifier": "rust-analyzer"})
 
     def clean_diagnostics(self, uri):
+        """Require a full diagnostic response with no errors; never suppress error entries."""
         found = self.pull_diagnostics(uri)
         assert found and found["kind"] == "full", found
         errors = [entry for entry in found["items"] if entry.get("severity") == 1]
@@ -198,6 +207,7 @@ class Lsp:
         return found
 
     def close(self):
+        """Shut down the test server, kill it if necessary and retain the received transcript."""
         try:
             self.request("shutdown", timeout=5)
             self.notify("exit", None)
@@ -217,10 +227,12 @@ def position_at(source, index):
 
 
 def position(source, fragment, offset=0):
+    """Locate an exact fixture anchor and return its original document position."""
     return position_at(source, source.index(fragment) + offset)
 
 
 def params(uri, source, fragment, offset=0):
+    """Build a text-document position request from an exact fixture anchor."""
     return {"textDocument": {"uri": uri}, "position": position(source, fragment, offset)}
 
 
@@ -238,11 +250,13 @@ def field_params(uri, source, receiver, field):
 
 
 def completion_labels(answer):
+    """Normalize the two LSP completion result shapes for fixture assertions."""
     items = answer.get("items", []) if isinstance(answer, dict) else answer or []
     return [item.get("label", "") for item in items]
 
 
 def paths_match(left, right):
+    """Compare native paths while preserving Windows drive and case conventions."""
     def normalized(path):
         path = os.fspath(path)
         if os.name == "nt":
@@ -270,6 +284,7 @@ def file_uri_matches(uri, path):
 
 
 def validate_model(path, project, alternate, release):
+    """Assert the selected fixture unit has real cfg, generated inputs and macro artifacts."""
     model = json.loads(path.read_text(encoding="utf-8"))
     crates = model["crates"]
     candidates = [item for item in crates if paths_match(item["root_module"], project / "src/main.rs")
@@ -317,6 +332,7 @@ def validate_model(path, project, alternate, release):
 
 
 def lsp_cases(server, project, settings, environment, output, full, release):
+    """Exercise real LSP requests; the default profile also covers unsaved edits and recovery."""
     main = project / "src/main.rs"
     source = main.read_text(encoding="utf-8")
     uri = main.as_uri()
@@ -450,6 +466,7 @@ def lsp_cases(server, project, settings, environment, output, full, release):
 
 
 def configured_check_cases(project, settings, environment, output, model_path):
+    """Run the saved check command and verify failure preserves the last valid model."""
     command = settings["rust-analyzer.check.overrideCommand"]
     assert command[1:3] == ["init", "check"], command
     settings_path = project / ".vscode/settings.json"
@@ -492,6 +509,7 @@ def configured_check_cases(project, settings, environment, output, model_path):
 
 
 def rejected_cfg_case(cli, project, environment, output, cargo_target):
+    """Assert unsupported panic cfg fails without replacing the model or editor settings."""
     model_path = cargo_target / "nestrs/ide/rust-project.json"
     settings_path = project / ".vscode/settings.json"
     model = model_path.read_bytes()
@@ -512,6 +530,7 @@ def rejected_cfg_case(cli, project, environment, output, cargo_target):
 
 
 def main():
+    """Prepare an isolated fixture and validate default, alternate and release IDE models."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rust-analyzer", help="path to an already installed standard LSP server")
     parser.add_argument("--skip-build", action="store_true")

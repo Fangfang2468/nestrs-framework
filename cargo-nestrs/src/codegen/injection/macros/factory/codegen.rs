@@ -1,8 +1,8 @@
 //! `#[factory]` 的 Provider 代码生成。
 //!
 //! 本模块只消费 [`FactoryAnalysis`]，不会再查看用户函数参数上的属性。最终输出分成
-//! 两个平级 element：一个重写后的用户函数，一个卫生隔离的 `const` 中的 adapter + 描述回调
-//! callback。这样 factory 函数保留用户可以在模块内调用的普通函数语义，而 runtime
+//! 两个平级 element：一个重写后的用户函数，一个卫生隔离的 `const` 中的 adapter 与
+//! 描述回调。这样 factory 函数保留用户可以在模块内调用的普通函数语义，而 runtime
 //! adapter 始终是不可从模块外命名的实现细节。
 
 use crate::codegen::injection::render::{
@@ -31,9 +31,9 @@ pub(crate) fn rewrite_factory_signature(analysis: FactoryAnalysis) -> zyn::Token
     }
 }
 
-/// 生成隐藏 factory adapter 及写入统一 Provider 描述清单 的 callback。
+/// 生成隐藏 factory adapter 及返回其执行能力、携带声明 marker 的描述回调。
 ///
-/// adapter、cleanup wrapper 和 slice callback 被放入同一个使用定义处卫生的
+/// adapter、cleanup wrapper 和描述回调被放入同一个使用定义处卫生的
 /// `const`。这样它不占用业务名称，在错误地出现在 impl 中时仍是合法的 associated const，同时
 /// `__nestrs_factory_construct` 等真正的辅助函数继续停留在词法私有作用域，不会成为
 /// 模块 API，也不会和其他 factory 的同名辅助符号冲突。
@@ -149,7 +149,11 @@ fn generate_factory_adapter(
     }
 }
 
-/// 选择无输入时不会触发 unused-variable warning 的 context 参数写法。
+/// 复用业务 factory 的值名称作为上下文绑定，并按输入数量决定是否需要 mut。
+///
+/// 此局部名称来自原函数 Ident，辅助项名称才由 bridge 的定义处 span 隔离。原函数
+/// 已占据模块值命名空间，因此该 Ident 不会同时指向业务 const；对原函数的调用
+/// 使用 self:: 限定路径，不受同名局部参数遮蔽。输入元组及 Ok/Err 绑定也沿用此身份。
 fn factory_context_binding(analysis: &FactoryAnalysis) -> zyn::TokenStream {
     // 用户函数名已占据当前模块的值命名空间，因此不可能同时解析成业务 const。
     // adapter 可将它用作局部参数，并始终通过 self::function 调用原 factory。

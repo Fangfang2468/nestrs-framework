@@ -12,16 +12,19 @@ import sys
 
 
 def executable_name(name):
+    """Return the host executable suffix without selecting an installed tool."""
     return name + (".exe" if os.name == "nt" else "")
 
 
 def bridge_name():
+    """Name the bootstrap bridge artifact using the current Python host convention."""
     if os.name == "nt":
         return "nestrs_tool_bridge.dll"
     return "libnestrs_tool_bridge" + (".dylib" if sys.platform == "darwin" else ".so")
 
 
 def validate_compiler(expected, actual):
+    """Check the bootstrap rustc -vV identity against the repository pin."""
     for field, key in [("release", "release"), ("commit_hash", "commit-hash")]:
         if actual.get(key) != expected[field]:
             raise RuntimeError(f"Unsupported rustc {key}: expected {expected[field]}, found {actual.get(key)}")
@@ -107,6 +110,7 @@ def compiler_library_environment(environment, sysroot, host):
 
 
 def macro_server(sysroot):
+    """Find the probe server in an existing sysroot, leaving absence to the caller."""
     name = executable_name("rust-analyzer-proc-macro-srv")
     candidates = [sysroot / "libexec" / name, sysroot / "bin" / name]
     return next((path for path in candidates if path.is_file()), candidates[0])

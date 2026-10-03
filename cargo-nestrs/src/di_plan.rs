@@ -57,8 +57,9 @@ pub struct Provider {
     /// 仅在同 key 的 trait 多候选中参与唯一选择。
     pub primary: bool,
 
-    /// None 继承容器配置，Some(true) 延迟预热，Some(false) 显式提前初始化。
-    /// 只决定预热根选择；全部声明与依赖仍接受完整图检查。
+    /// None 继承所属 root/scope 默认值，Some(true) 不自主初始化，Some(false) 显式初始化。
+    /// 只决定创建阶段 Singleton/Scoped 入口的选择；Transient 不作为初始化入口。
+    /// 普通依赖仍可触发 lazy 服务构造，全部声明与依赖始终接受完整图检查。
     pub lazy: Option<bool>,
 
     /// 诊断使用的声明来源说明。

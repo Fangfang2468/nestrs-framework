@@ -9,21 +9,25 @@ use crate::{
     domain::{CheckoutRequest, PaymentMethod},
 };
 
+/// 一次命令调用的容器选项与待执行业务操作。
 pub(crate) struct Invocation {
     pub options: RunOptions,
     pub command: CheckoutCommand,
 }
 
+/// 单笔输入和固定样例共用应用层的请求处理流程。
 pub(crate) enum CheckoutCommand {
     PlaceOrder(CheckoutRequest),
     Sample,
 }
 
 impl CheckoutCommand {
+    /// 样例内预设业务拒绝不应使整个正常演示流程失败。
     pub fn is_sample(&self) -> bool {
         matches!(self, Self::Sample)
     }
 
+    /// 将命令消费为实际订单输入，样例包含成功、拒付和库存不足。
     pub fn requests(self) -> Vec<CheckoutRequest> {
         match self {
             Self::PlaceOrder(request) => vec![request],
@@ -112,6 +116,7 @@ fn command() -> Command {
         .after_help("所有数据、连接和支付均为本地模拟。每次启动使用独立的内存数据。\n依赖图：cargo nestrs graph -p nestrs-di-example")
 }
 
+/// 解析参数；未给子命令时打印帮助并返回 None，避免创建容器。
 pub(crate) fn parse() -> Result<Option<Invocation>, clap::Error> {
     let mut command = command();
     let matches = command.clone().try_get_matches()?;

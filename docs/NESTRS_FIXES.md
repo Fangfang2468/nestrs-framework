@@ -16,7 +16,7 @@
 
 原始日志、任务起点快照、精确差异及工具哈希保存在各轮 `target/` 目录，不随仓库分发。
 本文正文和正式源码、测试链接保留必要说明，使清理 `target/` 后仍能理解修复。
-记录编号 R01～R14 是本文的时间线索引，不是原报告中会重复使用的 F1/P2 编号，
+记录编号 R01～R15 是本文的时间线索引，不是原报告中会重复使用的 F1/P2 编号，
 也不是 Git 提交号。各轮基线均包含当时已有未提交工作，没有用 Git HEAD 代替实际快照。
 
 ## 修复与复核时间线
@@ -37,6 +37,7 @@
 | 2026-10-03 / R12 | build / create_scope 各收敛为接受 Option 的单一入口 | 保留 R11 的初始化契约；None 继承默认，Some 完整覆盖，两者不能混同 |
 | 2026-10-03 / R13 | 修复 IDE 验证脚本对单行字段访问的依赖 | 夹具格式化阻断正式验证；保留原有 LSP 类型和导航断言 |
 | 2026-10-03 / R14 | 收敛工具链查询、正式自动绑定夹具与维护脚本职责 | 构建前准备保留独立入口；安装分发、LSP 与性能验证各有明确边界 |
+| 2026-10-03 / R15 | 对照当前实现核查源码注释、主题文档与基准复现说明 | 修正文义和示例；另确认历史宏服务器探针的构建授权缺失，脚本行为未改 |
 
 这些发现来自逐步扩充的输入组合。后续新缺陷不意味着前一轮的原始修复失效；每轮都应
 同时保留原触发复测和新增失败证据，不能用已有测试全绿替代边界核查。
@@ -617,3 +618,60 @@ alternate 目标实际构建运行成功，两个非法目标各在 check / buil
 重跑完整 compiler-driver、全部跨 crate / 图浏览器矩阵，也没有重新验证 Windows、
 其他 target、性能或 2 GiB / 2 核容量。基线快照、迁移对照、首次失败与最终成功日志
 保存在 `target/tools-boundary-cleanup-20261003/`，不覆盖 R13 或更早轮次的记录。
+
+## R15：对照实现核查注释与文档
+
+**范围与基线。** 本轮从 R14 后的完整工作区保存 724 个非忽略文件，包含此前尚未
+提交的全部修改。核查 core、编译器与 codegen、CLI / IDE / 工具链及维护脚本的注释，
+并检查全仓 21 份 Markdown 的主题说明、本地链接和标题锚点。保留 R01～R14 的
+详细记录、历史性能数字与各轮平台范围，没有以本次文档检查替代历史功能证据。
+
+**运行期说明修正。** [core README](../nestrs-core/README.md)及生产 rustdoc 统一
+使用所属 owner 创建期初始化的语义：root / scope 独立配置，None / Some 的默认
+来源不同，Transient 不作自主初始化入口。ConstructionError 的说明补齐 scope
+与 Lazy 下显式初始化的公开错误出口；关闭 API 和 DisposeError 不再无条件承诺
+cleanup 已完成，协调器提前停止时只能返回无法确认完成的关闭错误。
+[LazyInjection::get](../nestrs-core/src/activation/lazy.rs)明确检查当前句柄的类型化
+结果缓存，而不是仅检查目标实例是否存在；目标已由别处创建也不允许构造 worker
+对未交付句柄首次获取。延迟输入暂未取得 lease 与目标尚不存在也分别解释。
+补齐 crate 根 rustdoc、构造额度、owner / Tokio runtime、'static 类型约束及示例
+应用边界的注释，不改变调度、关闭、实例所有权或错误返回实现。
+
+**编译与工具说明修正。** [rustc 指南](NESTRS_RUSTC_EXTENSION_GUIDE.md)分别解释
+factory 复用业务函数 Ident 的局部绑定和使用定义点 span 的内部辅助项，避免将两种
+卫生策略统称为 def_site。清理旧 slice 注册措辞，补充 constructor 文本快照与真实
+业务 token 的区别。[诊断指南](NESTRS_DIAGNOSTICS_DESIGN.md)明确 options 协议
+握手可能直接使用 rustc fatal，不保证所有工具错误都带 TOOL001。reflect v2、
+Options v3、审阅 JSON v1 与 IDE 模型分别版本化；doctor 的身份与文件指纹检查不
+等于真实过程宏加载。IDE 文档按脚本实际分工说明三种配置的检查与 default 的完整
+编辑恢复流程；维护脚本定义说明补齐输入、职责和失败传播边界。
+
+**基准复现说明修正。** [性能文档](NESTRS_PERFORMANCE.md)与三份基准 README
+明确当前探针使用 Option 创建 API 和异步 scope，历史复现需要同时恢复当时的
+探针、runner、源码与工具。两套匹配工具不能自动修复探针的公开 API 不兼容，
+单工具 runner 还要求两个 core 同时兼容该工具。测量前的预热查询不等于已移除的
+warm_up API；本轮没有修改测量算法、原始样本或历史优化比例。
+
+**另发现但未修改行为的脚本问题。**
+[verify-macro-editor.py](../tools/verify-macro-editor.py)是历史宏服务器低层协议
+探针；它清除 RUSTC_BOOTSTRAP 后直接构建已要求 proc_macro_def_site 的私有 bridge，
+缺少 nestrs_tool_bridge 的限定授权。捕获实际构建参数与子进程环境后，以相同环境
+和 crate 名编译最小 feature 门禁，得到 exit 1 / E0554；再直接执行相同的 bridge
+Cargo 构建命令、保持 bootstrap 未设置，实际退出 101 并报告一条 E0554。未完整
+运行该历史探针，也未把准备失败归因为产品宏或 LSP 功能损坏。本轮仅更新注释和文档，明确其当前不能
+作为应通过的 gate；正式 LSP 入口仍为 [verify-ide.py](../tools/verify-ide.py)。
+
+**本轮实际验证。** 固定 Rust 1.98.0、Linux x86_64 上，普通 core / 工具测试
+389 项、Python 维护测试 25 项通过；259 项显式 ignored 的生成文档测试未计入通过。
+core / 工具、compiler-driver 与私有 bridge 的 rustdoc 构建启用私有项文档及严格警告检查后通过，
+未发现缺失公开文档或损坏的 intra-doc 链接。全仓 Markdown 本地链接和标题锚点、
+格式和差异空白检查通过。core README 调整后的完整 Options 示例使用真实
+cargo nestrs check / run --locked --offline，均退出 0；依赖版本、来源、checksum
+与工作区锁文件一致。该示例为空图，验证 API 可执行，不替代实际服务初始化回归。
+
+相对本轮起点，31 份 Rust 差异文件移除文档属性后的 token 完全一致，10 份 Python
+差异文件移除 docstring 后 AST 完全一致，Cargo.toml 解析值一致；没有改变执行
+逻辑或依赖配置。HEAD、暂存区和非忽略文件集合保持不变。本轮未重新构建整套
+发布工件、运行完整 compiler-driver / LSP / 跨 crate 矩阵，也未验证 Windows、
+其他 target、性能或部署容量。快照、准确差异、检查脚本、日志和单独发现的证据
+保存在 `target/docs-comments-audit-20261003/`，不随仓库分发。

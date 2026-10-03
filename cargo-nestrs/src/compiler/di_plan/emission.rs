@@ -2,7 +2,7 @@
 //!
 //! 这里调用真实 Rust typed sink，并在生成每个调用前核对完整函数签名。生成代码不
 //! 构造枚举布局、不写入宿主指针、不绕过业务借用检查；服务的构造入口仍由标准 Rust
-//! 编译得到。入口只在最终binary/test存在，rlib不导出相互竞争的全局符号。
+//! 编译得到。入口只在最终 binary/test 存在，rlib 不导出相互竞争的全局符号。
 
 use super::*;
 use crate::protocol::{self, Initialization, KeyKind, PlanSink};
@@ -211,6 +211,8 @@ fn emit<'tcx>(
 
 /// 即使 check 不触发链接、图没有 provider，也必须拒绝旧版 core 输入协议。
 /// 使用已有 options sink 的版本和完整签名握手，不增加运行时回调或读取布局。
+/// 当前握手是 unsafe Rust fn(*mut (), bool, bool, usize) -> ()，两个布尔值按顺序
+/// 表示 root 与 scope 的独立初始化默认值；v3 sink 不改变 v2 执行入口的符号。
 pub(super) fn validate_protocol(tcx: TyCtxt<'_>) {
     let available = helpers(tcx);
     let Some(&definition) = available.get(&PlanSink::Options) else {
@@ -323,7 +325,7 @@ struct Writer<'a, 'tcx> {
 }
 
 impl<'tcx> Writer<'_, 'tcx> {
-    /// 把入口 manifest 已确定的初始化策略和并发上限写入计划。
+    /// 按 v3 sink 顺序写入入口 manifest 的 root、scope 独立策略与共享构造上限。
     fn options(&mut self, config: &cargo_nestrs::project_config::DiConfig) {
         self.sink(
             PlanSink::Options,
@@ -342,7 +344,7 @@ impl<'tcx> Writer<'_, 'tcx> {
         self.sink(PlanSink::Binding, vec![self.pointer(), value]);
     }
 
-    /// 编码已验证 provider 的生命周期、key、预热策略和用户来源。
+    /// 编码已验证 provider 的生命周期、key、声明级初始化策略和用户来源。
     fn provider(&mut self, emission: ProviderEmission<'_, 'tcx>) {
         let value = self.descriptor(emission.callback, protocol::ACTIVATION_ADAPTER);
         let provider = emission.declaration;

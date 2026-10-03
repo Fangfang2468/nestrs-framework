@@ -21,6 +21,7 @@ spec.loader.exec_module(verify_autobind)
 
 
 class AutoBindingWrapperTests(unittest.TestCase):
+    """Verify delegation and failure reporting; Rust owns the actual DI contract assertions."""
     def test_prepares_selected_tools_and_delegates_all_contracts_to_rust(self):
         for rustc, skip_build in [(None, False), (None, True), ("chosen-rustc", False), ("chosen-rustc", True)]:
             with self.subTest(rustc=rustc, skip_build=skip_build):

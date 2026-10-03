@@ -12,6 +12,7 @@ from toolchain_support import parse_doctor_output, query_doctor
 
 
 def doctor_record():
+    """Provide opaque example values for JSON-client tests, not an accepted compiler pin."""
     return {
         "version": 1,
         "rustc": {"release": "1.98.0", "commit_hash": "compiler-commit", "host": "test-host"},
@@ -27,6 +28,7 @@ def doctor_record():
 
 
 class DoctorContractTests(unittest.TestCase):
+    """Check JSON shape, path pass-through and command failures without launching tools."""
     def test_query_preserves_cli_selected_paths_without_reconstructing_them(self):
         record = doctor_record()
         record.update({

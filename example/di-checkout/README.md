@@ -125,7 +125,7 @@ CheckoutService 同时依赖两种支付渠道，所以 Lazy 首次构造它也�
 `PaymentMethod` 只决定本次调用哪个已注入渠道。formatter 参数带 `#[lazy]`，
 `format_receipt` 内部才调用 `self.formatter.get().await?`；只有成功订单生成收据，
 四笔样例共创建两个格式器，拒付与缺货不会创建它。它是 Transient，不被 Eager 或
-scope 创建时单独初始化；如果目标改为 Singleton/Scoped，其自主预热需要另外通过
+scope 创建时单独初始化；如果目标改为 Singleton/Scoped，其创建期自主初始化需要另外通过
 服务级 `#[lazy]` 控制。延迟依赖仍参与编译期完整图验证和关闭顺序。
 
 库存预留在短 Mutex 临界区完成，支付等待期间不持锁。未提交的 `Reservation` 在

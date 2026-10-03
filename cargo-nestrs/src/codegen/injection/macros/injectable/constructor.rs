@@ -51,9 +51,8 @@ pub(crate) fn generate_injectable_constructor(
 
 /// 输出开放泛型 `ProviderDefinition` 使用的无捕获构造 closure。
 ///
-/// 它位于 trait 方法内部，因此 `Self` 已是由注入点单态化的服务类型；不像闭合
-/// component 的 编译器注册，这里绝不能生成一个全局命名函数或把开放 provider
-/// 放进 distributed slice。
+/// 它位于本声明专属的 ProviderDefinition 方法内部，`Self` 随真实闭合需求确定。
+/// 闭合后回调才交付相应函数指针；开放蓝图本身不成为运行期注册或全局命名构造函数。
 #[zyn::element]
 pub(crate) fn generate_generic_injectable_constructor(
     analysis: AnalyzedFields,

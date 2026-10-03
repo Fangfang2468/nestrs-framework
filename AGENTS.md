@@ -224,7 +224,7 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 * 服务结构体 / 工厂支持 `#[lazy]`、`#[lazy()]`、`#[lazy(true)]` 和 `#[lazy(false)]`。
   未标记继承所属 owner 默认；true 不选作自主初始化入口，false 在 Lazy 下也初始化。
   build 选择 Singleton，create_scope 选择 Scoped；两者都等待选中服务成功后交付。
-  Transient 不作为预热根。普通依赖仍可提前构造 lazy 目标，服务级标记不改字段包装。
+  Transient 不作为自主初始化入口。普通依赖仍可提前构造 lazy 目标，服务级标记不改字段包装。
   属性支持 injectable/factory 前后及 primary 组合；重复或非布尔参数拒绝。
   策略沿泛型蓝图与上游 metadata 进入最终计划，不改变完整图验证或取消/cleanup 语义。
 * 最终入口编译时验证全部注册及已知闭合类型，结构错误使 cargo nestrs check/build
@@ -238,7 +238,8 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   注入，可单独标注 #[lazy]，也可组合 #[inject] 和字面量 key。延迟参数按值交付
   LazyInjection<T> / Option<LazyInjection<T>>，允许跨 await 并移入返回服务；普通
   参数仍是 frame 内借用。延迟参数共享字段的调度、验证、取消与关闭规则，构造 worker
-  内首次获取尚未交付的目标仍报错，不增加构造重入或动态 resolve 通道。
+  内当前句柄尚未交付并缓存类型化结果时仍报错，即使目标实例已经就绪；已有句柄结果
+  可直接复用。此拒绝本身不缓存，不增加构造重入或动态 resolve 通道。
 * 图编译、激活任务展开、失败传播和实例释放使用非递归算法。
 * Singleton 可以依赖 Transient，但整个激活闭包不得包含 Scoped；需要 Scoped 的
   Transient 只能从 scope 查询。factory 参数同样参与生命周期验证。
@@ -265,7 +266,8 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   关闭先排空接受的任务，再按 owner 的消费者先于依赖约束逐个完成 cleanup/释放；含延迟边时用冻结 DAG 重排 journal，
   可同时清理的实例优先逆发布时间，无延迟边保留原逆发布顺序。每 owner 至多一个
   cleanup worker，root 等 scopes。
-* 当前构造 worker 内首次等待未就绪延迟字段会明确报错，避免占据激活名额等待新任务。
+* 当前构造 worker 内获取尚未缓存类型化结果的延迟句柄会明确报错，避免占据激活名额
+  等待其他 worker；判断基于当前句柄的交付状态，不只是目标实例是否已经就绪。
   task-local 标记不传播到业务自行 spawn 的任务；factory 不得通过派生任务间接等待
   未就绪延迟字段，工具无法自动识别任意用户任务因果。此限制不是自动挂起/归还名额协议。
 * dispose_async 等待取消不取消关闭；Drop 只发送幂等关闭请求，不新建 runtime 或

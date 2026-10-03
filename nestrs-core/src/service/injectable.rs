@@ -1,7 +1,8 @@
 /// 容器可安全交给 Tokio worker 并由强 lease 保存的类型约束。
 ///
-/// `'static` 限制类型不能包含短于容器的外部借用，并不表示实例永不释放；实例仍在
-/// owner 关闭及最后一个 lease 释放后析构。此 trait 不代表服务已经注册。
+/// `'static` 限制类型不能携带非 `'static` 的外部借用，并不表示实例永不释放；
+/// 最后一个 lease 释放后仍按迭代协议析构，与异步 cleanup 是否完成分别处理。
+/// 此 trait 不代表服务已经注册。
 pub trait Injectable: Send + Sync + 'static {}
 
 /// 自动赋予全部线程安全、静态存活的类型可注入能力。

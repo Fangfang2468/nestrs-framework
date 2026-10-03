@@ -113,13 +113,21 @@ constructor 缺失会明确写 `Application::new` 的参数 `_database`，factor
 | `NESTRS-DI008` | 泛型展开超过分析上限；定位引入复杂类型/调用的位置，已知时关联闭合起点 | 限制类型集合或改用运行期数据结构；`TypeExpansionLimit` |
 | `NESTRS-DI009` | 相同 concrete/trait pair 显式绑定多次；关联冲突绑定 | 移除重复显式 binding；`DuplicateBinding` |
 | `NESTRS-DI010` | 显式绑定没有 concrete provider | 声明创建方，投影自身不创建服务；`OrphanBinding` |
-| `NESTRS-TOOL001` | 内部描述或执行协议不一致；无可信来源时没有主位置 | 保留诊断与工具版本排查，不要求业务修改内部槽位；`InvalidMetadata` / 协议异常 |
+| `NESTRS-TOOL001` | 统一诊断入口报告的内部描述或执行协议不一致；无可信来源时没有主位置 | 保留诊断与工具版本排查，不要求业务修改内部槽位；`InvalidMetadata` / 协议异常 |
 
 DI009/DI010 覆盖隐藏显式 binding 协议；正常业务使用普通 impl 自动绑定。
-optional 仅允许目标缺席；服务级 lazy 只影响自主预热。它们都不会跳过已有关系的
-歧义、环或生命周期检查。编译期结构诊断也不替代运行期 `ResolveError` /
-`DisposeError`，连接失败、构造 panic 或 cleanup 失败仍走运行期错误通道。
+optional 仅允许目标缺席；服务级 lazy 只影响 owner 创建时的自主初始化。它们都不会
+跳过已有关系的歧义、环或生命周期检查。查询时的连接失败或构造 panic 返回
+`ResolveError`；创建期间的初始化失败分别进入 `BuildError::Initialization` 或
+`ScopeBuildError`，并在返回前关闭未交付 owner，保留可能发生的清理错误。关闭阶段
+的 cleanup 失败通过 `DisposeError` 报告。这些运行期结果不属于编译期结构诊断。
 Rust 原生类型、trait 与借用错误继续由 rustc 报告，不强制改成 Nestrs 编号。
+
+也不是每项工具错误都有上述编号。例如
+[options ABI 握手](../cargo-nestrs/src/compiler/di_plan/emission.rs) 在缺少
+`plan_set_options_v3` 或完整签名不符时，直接通过 rustc fatal 报告工具与 core
+版本不匹配。验证器应核对对应场景的退出状态和诊断，不能仅以是否出现
+`NESTRS-TOOL001` 判断工具链是否兼容。
 
 ## 位置如何从源码到达诊断
 

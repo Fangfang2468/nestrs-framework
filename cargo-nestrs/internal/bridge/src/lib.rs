@@ -7,7 +7,7 @@
 //! 此处只转换 token；声明分析、字段改写和代码生成复用 cargo-nestrs 后端。
 //! 生成局部绑定和内部辅助项的定义处 span 由本桥接显式传给后端；不改业务 token 的卫生上下文。
 
-/// 声明可注入的结构体，消费其字段上的 `#[inject]` 与 `#[value(...)]`。
+/// 声明可注入的结构体，处理自动字段的 inject/value/lazy 或待 driver 选择的 constructor。
 #[proc_macro_attribute]
 pub fn injectable(
     args: proc_macro::TokenStream,
@@ -35,7 +35,7 @@ pub fn configured_injectable(input: proc_macro::TokenStream) -> proc_macro::Toke
     .into()
 }
 
-/// 声明同步或异步工厂，生成借用真实 activation frame 的参数签名。
+/// 声明同步或异步工厂；普通参数借用真实 frame，lazy 参数按值持有延迟句柄。
 #[proc_macro_attribute]
 pub fn factory(
     args: proc_macro::TokenStream,
@@ -77,7 +77,9 @@ pub fn primary(
     cargo_nestrs::codegen::expand_primary(args.into(), input.into()).into()
 }
 
-/// 设置声明本身的初始化策略：bare/true 延迟，false 提前，无标注则继承容器策略。
+/// 设置声明本身的初始化策略：bare/true 不作为自主初始化入口，false 在创建时选中。
+/// 无标注继承所属 owner：Singleton 使用 root，Scoped 使用 scope；Transient 不自主初始化。
+/// 普通依赖仍可提前构造标为 lazy 的目标，声明策略不改变字段或参数的交付包装。
 /// 必须与 injectable 结构体或 factory 函数配合；上下顺序均可，路径命名边界同 primary。
 #[proc_macro_attribute]
 pub fn lazy(

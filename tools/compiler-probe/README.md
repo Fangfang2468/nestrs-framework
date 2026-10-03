@@ -12,6 +12,12 @@ rustc/rustc-dev。基础与展开探针支持 `--rustc /absolute/path/to/rustc`�
 当前实验 pin 为 1.98.0、`88d9e12ae178fab0fb5cc050a94da85685d449ea`、Linux GNU x86_64。
 探针的固定 Linux 配置不代表生产工具全部 host 的覆盖范围。
 
+仓库另有 [verify-macro-editor.py](../verify-macro-editor.py) 这个历史宏服务器协议
+探针，当前直接构建私有 bridge 时缺少 `nestrs_tool_bridge` 的限定 bootstrap 授权；
+用其实际环境最小复现了 `proc_macro_def_site` 的 E0554。该已知准备问题尚未修复，
+不能将它列为当前应通过的 gate。原版 rust-analyzer 的现行完整 LSP 入口是
+[verify-ide.py](../verify-ide.py)，具体覆盖见 [IDE 指南](../../docs/NESTRS_IDE.md#验证与边界)。
+
 ## 基础语义
 
 ```sh
@@ -78,8 +84,16 @@ python3 tools/compiler-probe/verify_autobind.py --skip-build
 harness 分别构建并运行有效图，覆盖私有类型、泛型、key、factory 优先级、cfg、
 实例共享及投影身份；alternate 配置单独检查。`ambiguity` 和 `duplicate_explicit`
 在 check / build 阶段核对准确的编译诊断，不再构建全部 binary 后等待运行期 panic。
-原有效图的业务与投影断言继续保留。薄脚本日志写入 `target/nestrs-autobind/`，
-逐项编译与执行证据由正式 harness 写入 target。
+原有效图的业务与投影断言继续保留。薄脚本每次使用新的
+`target/nestrs-autobind/run-*/` 目录保存原始 stdout、stderr、命令退出码及报告，
+逐项编译与执行证据由正式 harness 写入 target。构建或测试命令失败会终止后续
+步骤，并传播实际退出状态；不能仅凭生成了 report.json 就认定通过。
+
+不显式选择编译器时，包装脚本让正式 doctor 发现匹配工具链。`--rustc` 或
+`NESTRS_RUSTC` 显式选择的编译器先用于查询 sysroot，再把实际编译器路径交给
+doctor 完成身份检查；脚本不复制该检查或缓存规则。`--skip-build` 只跳过前置
+工具链构建，后续仍执行 Cargo 测试，并非跳过全部编译。完整 driver 单元测试、
+源码快照/overlay 契约与真实 IDE 验证有各自入口，不包含在这个包装脚本内。
 
 只观察一个目标时，可以直接调用真实 CLI：
 

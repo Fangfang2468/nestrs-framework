@@ -237,13 +237,16 @@ Self 兼容性前提，否则可能把无法匹配的泛型 Self 交给 typeck �
 
 生成一个较长的固定名称仍可能与合法业务常量、函数或类型冲突。私有
 [bridge](../cargo-nestrs/internal/bridge/src/lib.rs) 为共享 codegen 提供
-`proc_macro::Span::def_site()`；自动字段构造、constructor、factory 的生成绑定及
-内部项使用该卫生来源，定位信息仍指向对应业务声明。业务签名、类型、表达式与
-函数体继续保留原 token 来源，不批量改写为工具作用域。
+`proc_macro::Span::def_site()`；自动字段构造和 constructor 的生成绑定，以及
+factory 的内部辅助项使用该卫生来源，定位信息仍指向对应业务声明。factory 的
+输入、元组和结果绑定复用原函数 `Ident`：该函数已占据模块的值命名空间，不会同时
+是业务常量；调用原函数时使用 `self::函数名`，避免被局部绑定遮蔽。业务签名、类型、
+表达式与函数体继续保留原 token 来源，不批量改写为工具作用域。
 
 | 生成位置 | 当前处理 |
 | --- | --- |
-| 输入、实例、错误等局部绑定 | 定义处卫生隔离生成绑定及其引用，业务 `const error` 不会被解释为生成闭包的常量模式 |
+| 自动字段构造和 constructor 的输入、实例、错误绑定 | 定义处卫生隔离生成绑定及其引用，业务 `const error` 不会被解释为生成闭包的常量模式 |
+| factory 的输入、元组和 `Ok` / `Err` 绑定 | 复用业务函数已有的值名称和原 `Ident`，对函数的调用使用 `self::` 路径；不另造可能命中业务常量的局部名 |
 | 反射模块、provider 常量、字段模式和 cfg 辅助项 | 同样隔离生成项名称，业务同名声明及 `#[value(...)]` 调用保留原解析 |
 | 跨属性展开的 constructor 关联项 | 使用上文已认证的辅助 `AssocFn DefId` 和服务 Self 身份连接，不依靠字符串改名 |
 | 自动 trait 投影 | 在匿名常量的独立模块内生成，避免参数捕获业务常量；类型路径及 coercion 继续接受 Rust 检查 |
@@ -520,6 +523,12 @@ Class 取得拥有 lease 的令牌；Factory 的普通参数借用真实 `Factor
 
 当前入口 `__nestrs_reflect_v2` 配套 `graph::plan::plan_set_options_v3`，options sink 分别接收 root 和 scope 的初始化默认值及共享构造上限。新增 scope 配置使 sink 升级为 v3；执行入口仍为 v2，JSON 格式 version 仍为 1，不把三者混为同一个版本。driver 在引用 core 的最终 check/build 中核对该 sink 的存在与完整 unsafe Rust 签名，**没有 provider 的空图也检查**，不等链接才发现旧 core。core、driver、bridge 需要配套重编译；CLI 的 driver/bridge 指纹隔离旧缓存。未经工具链生成计划的生产应用调用 build（传 None 或 Some）均会返回 `BuildError::CompilerPlanUnavailable`，不会静默构造空容器。
 
+options sink 的参数顺序是输出指针、root Eager 标志、scope Eager 标志、共享构造
+上限，签名为 `unsafe fn(*mut (), bool, bool, usize) -> ()`，使用 Rust ABI 且没有
+泛型或可变参数。这里只写入编译期默认值，不调用初始化流程；运行时
+`build(None)` 使用这些默认值，`build(Some(options))` 完整覆盖，scope 再按其创建
+参数选择配置。创建与失败清理语义统一见 [core README](../nestrs-core/README.md)。
+
 ### 10.5 在哪里审阅生成计划
 
 [artifact.rs](../cargo-nestrs/src/compiler/di_plan/artifact.rs) 在最终入口 metadata 路径上替换扩展名，写入 `*.nestrs-reflect.json`。普通 Linux 构建路径通常为：
@@ -757,6 +766,7 @@ Eager 配置或声明要求的提前初始化，可以在 build 阶段完成相�
 | 契约 | 现有验证入口 |
 | --- | --- |
 | driver、真实类型和生成行为 | [compiler_contracts.rs](../cargo-nestrs/tests/compiler_contracts.rs) |
+| 自动绑定的需求数、投影身份和 check/build 负例 | [autobind_contracts.rs](../cargo-nestrs/tests/autobind_contracts.rs)、[正式 auto-binding 夹具](../cargo-nestrs/tests/fixtures/auto-binding/Cargo.toml) |
 | constructor 的名称解析与来源映射 | [constructor_contracts.rs](../cargo-nestrs/tests/constructor_contracts.rs) |
 | 普通查询、泛型、trait 方法与常量摘要 | [query_method_contracts.rs](../cargo-nestrs/tests/query_method_contracts.rs) |
 | 隐式 Deref/DerefMut、析构胶水与关联字段 | [query_implicit_contracts.rs](../cargo-nestrs/tests/query_implicit_contracts.rs) |
