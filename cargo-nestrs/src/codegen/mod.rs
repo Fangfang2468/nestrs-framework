@@ -66,7 +66,11 @@ use crate::codegen::utility::{
 /// 该 adapter 不是类型成员且只由编译器收集的 Provider 持有函数指针，因而用户不能以
 /// `Service::__nestrs_construct(...)` 调用。由于它仍是非捕获函数，`#[value]` 不能
 /// 引用调用点局部变量或另一字段；表达式必须能转换为字段类型。
-fn injectable(item: syn::ItemStruct, args: Args) -> zyn::Output {
+fn injectable(
+    item: syn::ItemStruct,
+    args: Args,
+    binding_span: zyn::proc_macro2::Span,
+) -> zyn::Output {
     let input = syn::Item::Struct(item.clone());
     // 1) 严格校验参数形态：只允许命名参数，且不允许重复
     let mut seen: Vec<String> = Vec::new();
@@ -147,6 +151,7 @@ fn injectable(item: syn::ItemStruct, args: Args) -> zyn::Output {
                 {{ primary_attribute_use }}
                 {{ lazy_attribute_use }}
                 @DefineGenericInjectableProvider(
+                    binding_span = binding_span,
                     analysis = analyzed_fields,
                     config = config,
                     primary = primary.is_primary(),
@@ -159,6 +164,7 @@ fn injectable(item: syn::ItemStruct, args: Args) -> zyn::Output {
                     {{ primary_attribute_use }}
                     {{ lazy_attribute_use }}
                     @GenerateInjectableConstructor(
+                        binding_span = binding_span,
                         analysis = analyzed_fields.clone(),
                         mode = constructor_mode,
                     )
@@ -360,20 +366,44 @@ fn bind(item: syn::ItemImpl, args: Args) -> zyn::Output {
 /// 展开 `#[injectable]`，供过程宏和编译器适配层共享。
 #[doc(hidden)]
 pub fn expand_injectable(args: zyn::TokenStream, input: zyn::TokenStream) -> zyn::TokenStream {
+    expand_injectable_with_binding_span(args, input, zyn::proc_macro2::Span::mixed_site())
+}
+
+/// 私有 bridge 显式提供定义处卫生；仅生成绑定使用它，业务 token 保留原 span。
+/// 普通进程中的 token 单测仍可使用上面的便捷入口，不需要 proc_macro 运行环境。
+#[doc(hidden)]
+pub fn expand_injectable_with_binding_span(
+    args: zyn::TokenStream,
+    input: zyn::TokenStream,
+    binding_span: zyn::proc_macro2::Span,
+) -> zyn::TokenStream {
     if let Ok(item) = syn::parse2::<syn::ItemStruct>(input.clone())
         && conditional_fields::needs_filtering(&item)
     {
         return conditional_fields::defer(args, item)
             .unwrap_or_else(syn::Error::into_compile_error);
     }
-    expand_attribute(args, input, injectable)
+    expand_attribute(args, input, |item, args| {
+        injectable(item, args, binding_span)
+    })
 }
 
 /// 由标准 derive 展开取得 rustc 已筛选的字段，再调用同一声明后端。
 #[doc(hidden)]
 pub fn expand_configured_injectable(input: zyn::TokenStream) -> zyn::TokenStream {
+    expand_configured_injectable_with_binding_span(input, zyn::proc_macro2::Span::mixed_site())
+}
+
+/// cfg 筛选后的 derive 入口使用自身的定义处卫生，与直接声明走同一生成后端。
+#[doc(hidden)]
+pub fn expand_configured_injectable_with_binding_span(
+    input: zyn::TokenStream,
+    binding_span: zyn::proc_macro2::Span,
+) -> zyn::TokenStream {
     match conditional_fields::restore(input) {
-        Ok((args, item)) => expand_attribute(args, zyn::quote::quote!(#item), injectable),
+        Ok((args, item)) => expand_attribute(args, zyn::quote::quote!(#item), |item, args| {
+            injectable(item, args, binding_span)
+        }),
         Err(error) => error.into_compile_error(),
     }
 }
@@ -387,7 +417,18 @@ pub fn expand_factory(args: zyn::TokenStream, input: zyn::TokenStream) -> zyn::T
 /// 展开同步关联构造函数；所属服务身份由编译器在名称解析后关联。
 #[doc(hidden)]
 pub fn expand_constructor(args: zyn::TokenStream, input: zyn::TokenStream) -> zyn::TokenStream {
-    constructor_codegen::expand(args, input).unwrap_or_else(syn::Error::into_compile_error)
+    expand_constructor_with_binding_span(args, input, zyn::proc_macro2::Span::mixed_site())
+}
+
+/// 显式 constructor 只对生成输入、结果和错误绑定使用 bridge 提供的卫生上下文。
+#[doc(hidden)]
+pub fn expand_constructor_with_binding_span(
+    args: zyn::TokenStream,
+    input: zyn::TokenStream,
+    binding_span: zyn::proc_macro2::Span,
+) -> zyn::TokenStream {
+    constructor_codegen::expand(args, input, binding_span)
+        .unwrap_or_else(syn::Error::into_compile_error)
 }
 
 /// 展开 `#[primary]`，包括其与服务声明之间的属性交接。

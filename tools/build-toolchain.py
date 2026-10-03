@@ -29,9 +29,10 @@ def main():
     libraries = sysroot / "lib/rustlib" / actual["host"] / "lib"
     if not list(libraries.glob("librustc_middle-*.rmeta")):
         raise RuntimeError("The matching rustc-dev component is required; no components were installed")
-    # Limit unstable compiler APIs to the toolchain driver crate. Applications
-    # never inherit this setting; the CLI explicitly removes it in child builds.
-    environment["RUSTC_BOOTSTRAP"] = "nestrs_driver"
+    # Only the driver and private bridge need unstable compiler APIs. The bridge
+    # uses definition-site spans for generated bindings; application builds never
+    # inherit this setting because the CLI explicitly removes it in child builds.
+    environment["RUSTC_BOOTSTRAP"] = "nestrs_driver,nestrs_tool_bridge"
     environment["RUSTC"] = str(sysroot / "bin" / executable_name("rustc"))
     compiler_library_environment(environment, sysroot, actual["host"])
     cmd = ["cargo", "build", "-p", "cargo-nestrs", "-p", "nestrs-tool-bridge", "--features", "cargo-nestrs/compiler-driver"]

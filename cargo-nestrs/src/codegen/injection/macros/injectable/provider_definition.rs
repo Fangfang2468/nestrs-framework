@@ -31,6 +31,7 @@ pub(crate) fn define_generic_injectable_provider(
     lazy: Option<bool>,
     source: crate::codegen::source::ProviderOrigin,
     mode: ConstructorMode,
+    binding_span: zyn::proc_macro2::Span,
 ) -> zyn::TokenStream {
     let service = analysis.item.ident.clone();
     let provider_definition_generics = provider_definition_generics(analysis);
@@ -72,6 +73,7 @@ pub(crate) fn define_generic_injectable_provider(
                         constructor: ::nestrs_core::activation::adapter::Constructor::Class(@GenerateGenericInjectableConstructor(
                             analysis = analysis.clone(),
                             mode = *mode,
+                            binding_span = *binding_span,
                         )),
                     }
                 }
@@ -125,6 +127,7 @@ mod tests {
     fn render_definition_in_mode(item: syn::ItemStruct, mode: ConstructorMode) -> String {
         let analysis = analyze_fields(item).expect("generic item should analyze");
         DefineGenericInjectableProvider {
+            binding_span: zyn::proc_macro2::Span::mixed_site(),
             source: crate::codegen::source::ProviderOrigin::from_args(
                 analysis.item.ident.clone(),
                 &syn::parse_quote!(),

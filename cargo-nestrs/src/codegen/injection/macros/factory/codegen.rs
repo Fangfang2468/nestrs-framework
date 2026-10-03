@@ -16,7 +16,7 @@ use crate::{
     codegen::reflection::ident,
     protocol::{self, Marker},
 };
-use zyn::{quote::quote, syn, zyn};
+use zyn::{quote::quote, syn, syn::ext::IdentExt, zyn};
 
 /// 渲染已移除参数 marker 且已经改写参数类型的用户 factory 函数。
 ///
@@ -54,7 +54,9 @@ pub(crate) fn emit_factory_provider(
     let factory_marker = ident(Marker::PlanFactory.name());
     let provider_marker = ident(Marker::Provider.name());
     let origins = source.render();
-    let provider_const = zyn::format_ident!("__nestrs_factory_provider_for_{factory}");
+    // raw 前缀只属于业务标识符语法，不能嵌入生成符号的中间；业务引用仍使用原 Ident。
+    let provider_name = factory.unraw();
+    let provider_const = zyn::format_ident!("__nestrs_factory_provider_for_{provider_name}");
 
     zyn! {
         #[doc(hidden)]
@@ -371,6 +373,14 @@ mod tests {
         .render(&zyn::Input::default())
         .tokens()
         .to_string()
+    }
+
+    #[test]
+    fn raw_factory_names_only_unraw_the_generated_symbol() {
+        let output = render("fn r#type() -> Service { todo!() }");
+        assert!(output.contains("const __nestrs_factory_provider_for_type : ()"));
+        assert!(output.contains("self :: r#type"));
+        assert!(output.contains("r#type : :: nestrs_core :: activation :: FactoryInputs"));
     }
 
     #[test]

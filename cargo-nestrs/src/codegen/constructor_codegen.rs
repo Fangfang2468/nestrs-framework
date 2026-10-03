@@ -15,6 +15,7 @@ use super::{
 pub(super) fn expand(
     args: zyn::TokenStream,
     input: zyn::TokenStream,
+    binding_span: zyn::proc_macro2::Span,
 ) -> syn::Result<zyn::TokenStream> {
     if !args.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -25,6 +26,12 @@ pub(super) fn expand(
     let analysis = analyze_constructor(syn::parse2(input)?)?;
     let item = &analysis.item;
     let method = &item.sig.ident;
+    // 真正的定义处卫生阻止业务同名 const 被当成参数/局部模式。所有引用复用这些
+    // Ident；业务 constructor 的签名、函数体和参数类型不改 span 或求值上下文。
+    let binding_span = binding_span.located_at(method.span());
+    let inputs = syn::Ident::new("__nestrs_inputs", binding_span);
+    let instance = syn::Ident::new("__nestrs_instance", binding_span);
+    let error = syn::Ident::new("error", binding_span);
     let mapping = serde_json::to_string(&constructor::Metadata {
         method: method.to_string(),
         result: analysis.result_kind == ConstructorResultKind::Result,
@@ -63,35 +70,35 @@ pub(super) fn expand(
             zyn::proc_macro2::Span::call_site(),
         );
         acquisitions.push(quote!(
-            __nestrs_inputs.#take::<#ty>(::nestrs_core::activation::InputSlot::new(#slot))?
+            #inputs.#take::<#ty>(::nestrs_core::activation::InputSlot::new(#slot))?
         ));
         let index = syn::Index::from(slot);
-        arguments.push(quote!(__nestrs_inputs.#index));
+        arguments.push(quote!(#inputs.#index));
     }
     let call = quote!(Self::#method(#(#arguments),*));
     let construct = match analysis.result_kind {
         ConstructorResultKind::Direct => call,
         ConstructorResultKind::Result => {
-            quote!(#call.map_err(|error| ::nestrs_core::activation::ConstructionError::ConstructorFailed {
+            quote!(#call.map_err(|#error| ::nestrs_core::activation::ConstructionError::ConstructorFailed {
             provider: ::core::any::type_name::<Self>(),
             provider_source: ::nestrs_core::service::ServiceSource::new(file!(), line!(), column!()),
-            detail: ::std::format!("{error:?}"),
+            detail: ::std::format!("{:?}", #error),
         })?)
         }
     };
     let acquire_inputs = if analysis.parameters.is_empty() {
         quote! {
-            __nestrs_inputs.ensure_all_consumed()?;
-            ::core::mem::drop(__nestrs_inputs);
+            #inputs.ensure_all_consumed()?;
+            ::core::mem::drop(#inputs);
         }
     } else {
-        // 复用已有参数绑定名，避免逐参数临时量与调用点同名 const 冲突。
+        // 复用输入绑定名；tuple 仍先读完全部 typed 参数，再执行业务构造。
         quote! {
-            let __nestrs_inputs = (
+            let #inputs = (
                 #(#acquisitions,)*
                 {
-                    __nestrs_inputs.ensure_all_consumed()?;
-                    ::core::mem::drop(__nestrs_inputs);
+                    #inputs.ensure_all_consumed()?;
+                    ::core::mem::drop(#inputs);
                 },
             );
         }
@@ -116,11 +123,11 @@ pub(super) fn expand(
         #[doc(hidden)]
         #[allow(dead_code)]
         pub(crate) fn #activate(
-            #mutable __nestrs_inputs: ::nestrs_core::activation::ConstructionInputs,
+            #mutable #inputs: ::nestrs_core::activation::ConstructionInputs,
         ) -> ::core::result::Result<::nestrs_core::activation::ErasedService, ::nestrs_core::activation::ConstructionError> {
             #acquire_inputs
-            let __nestrs_instance = #construct;
-            ::core::result::Result::Ok(::nestrs_core::activation::ErasedService::new(__nestrs_instance))
+            let #instance = #construct;
+            ::core::result::Result::Ok(::nestrs_core::activation::ErasedService::new(#instance))
         }
     })
 }

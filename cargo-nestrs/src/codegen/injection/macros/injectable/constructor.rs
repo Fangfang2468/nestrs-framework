@@ -11,7 +11,7 @@ use super::{
 use crate::codegen::constructor::ConstructorMode;
 use zyn::{
     quote::quote,
-    syn::{self, Fields, ItemStruct},
+    syn::{self, Fields, ItemStruct, ext::IdentExt},
     zyn,
 };
 
@@ -23,9 +23,10 @@ use zyn::{
 pub(crate) fn generate_injectable_constructor(
     analysis: AnalyzedFields,
     mode: ConstructorMode,
+    binding_span: zyn::proc_macro2::Span,
 ) -> zyn::TokenStream {
     let service = analysis.item.ident.clone();
-    let context = context_identifier(&analysis.item);
+    let context = context_identifier(&analysis.item, *binding_span);
     let context_binding = context_binding(analysis, &context);
     let service = quote!(#service);
 
@@ -55,8 +56,9 @@ pub(crate) fn generate_injectable_constructor(
 pub(crate) fn generate_generic_injectable_constructor(
     analysis: AnalyzedFields,
     mode: ConstructorMode,
+    binding_span: zyn::proc_macro2::Span,
 ) -> zyn::TokenStream {
-    let context = context_identifier(&analysis.item);
+    let context = context_identifier(&analysis.item, *binding_span);
     let context_binding = context_binding(analysis, &context);
     let service = quote!(Self);
 
@@ -117,9 +119,11 @@ fn construct_automatic_injectable(
     service: zyn::TokenStream,
     context: syn::Ident,
 ) -> zyn::TokenStream {
+    // 输入和结果绑定共享 bridge 的定义处卫生；字段中的业务表达式保持原 token。
+    let instance = syn::Ident::new("__nestrs_injectable_instance", context.span());
     zyn! {
         @if (analysis.has_injected_fields()) {
-            // 重用现有输入绑定名，避免新临时量与调用点 const 发生模式解析冲突。
+            // 重用带定义处卫生的输入绑定名，不增加逐参数临时量。
             // tuple 全部求值成功并通过消费检查后，才执行下面的业务字段表达式。
             let {{ context }} = (
                 @for (spec in analysis.specs.iter().filter(|spec| spec.is_injected())) {
@@ -137,13 +141,13 @@ fn construct_automatic_injectable(
             {{ context }}.ensure_all_consumed()?;
             ::core::mem::drop({{ context }});
         }
-        let __nestrs_injectable_instance = @ConstructInjectableInstance(
+        let {{ instance }} = @ConstructInjectableInstance(
             analysis = analysis.clone(),
             service = service.clone(),
             context = context.clone(),
         );
         ::core::result::Result::Ok(
-            ::nestrs_core::activation::ErasedService::new(__nestrs_injectable_instance)
+            ::nestrs_core::activation::ErasedService::new({{ instance }})
         )
     }
 }
@@ -264,9 +268,13 @@ fn context_binding(analysis: &AnalyzedFields, context: &syn::Ident) -> zyn::Toke
     }
 }
 
-fn context_identifier(item: &ItemStruct) -> syn::Ident {
-    let service = &item.ident;
-    zyn::format_ident!("__nestrs_injectable_context_for_{service}")
+fn context_identifier(item: &ItemStruct, binding_span: zyn::proc_macro2::Span) -> syn::Ident {
+    // 业务类型继续使用原 Ident；只有拼接内部符号时移除 raw 前缀。
+    let service = item.ident.unraw();
+    syn::Ident::new(
+        &format!("__nestrs_injectable_context_for_{service}"),
+        binding_span.located_at(item.ident.span()),
+    )
 }
 
 #[cfg(test)]
@@ -279,6 +287,7 @@ mod tests {
 
     fn render_constructor(item: ItemStruct, specs: Vec<FieldSpec>) -> String {
         GenerateInjectableConstructor {
+            binding_span: zyn::proc_macro2::Span::mixed_site(),
             analysis: AnalyzedFields { item, specs },
             mode: ConstructorMode::Deferred,
         }
@@ -312,9 +321,19 @@ mod tests {
                 let analysis = AnalyzedFields { item, specs };
                 let input = zyn::Input::default();
                 let rendered = if generic {
-                    GenerateGenericInjectableConstructor { analysis, mode }.render(&input)
+                    GenerateGenericInjectableConstructor {
+                        analysis,
+                        mode,
+                        binding_span: zyn::proc_macro2::Span::mixed_site(),
+                    }
+                    .render(&input)
                 } else {
-                    GenerateInjectableConstructor { analysis, mode }.render(&input)
+                    GenerateInjectableConstructor {
+                        analysis,
+                        mode,
+                        binding_span: zyn::proc_macro2::Span::mixed_site(),
+                    }
+                    .render(&input)
                 };
                 let tokens = rendered.tokens().to_string();
                 assert_eq!(
@@ -351,6 +370,7 @@ mod tests {
         };
         let specs = collect_field_specs(&item.fields).unwrap();
         let rendered = GenerateInjectableConstructor {
+            binding_span: zyn::proc_macro2::Span::mixed_site(),
             analysis: AnalyzedFields { item, specs },
             mode: ConstructorMode::Automatic,
         }
@@ -410,6 +430,17 @@ mod tests {
         assert!(last_input < ensure);
         assert!(ensure < release_inputs && release_inputs < construct && construct < erase);
         assert!(!generated.contains("unsafe"));
+    }
+
+    #[test]
+    fn raw_service_names_only_unraw_the_generated_context() {
+        let item: ItemStruct = syn::parse_quote!(
+            struct r#type;
+        );
+        let specs = collect_field_specs(&item.fields).unwrap();
+        let generated = render_constructor(item, specs);
+        assert!(generated.contains("__nestrs_injectable_context_for_type"));
+        assert!(generated.contains("let __nestrs_injectable_instance = r#type"));
     }
 
     #[test]
