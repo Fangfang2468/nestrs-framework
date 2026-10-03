@@ -7,17 +7,30 @@ use std::{
     os::unix::{ffi::OsStrExt, fs::PermissionsExt},
     path::{Path, PathBuf},
     process::Command,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use cargo_nestrs::toolchain::CompilerIdentity;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+// A concurrent fork can inherit another fixture's open script writer until exec,
+// making that script temporarily fail with ETXTBSY even after fs::write returns.
+static FIXTURE_LOCK: Mutex<()> = Mutex::new(());
 
-struct Fixture(PathBuf);
+struct Fixture(
+    PathBuf,
+    // Hold the lock through script creation, child commands and directory removal.
+    #[allow(dead_code)] MutexGuard<'static, ()>,
+);
 
 impl Fixture {
     fn new() -> Self {
+        let guard = FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = std::env::temp_dir().join(format!(
             "nestrs-cli-{}-{}",
             std::process::id(),
@@ -62,7 +75,7 @@ impl Fixture {
             &root.join("cargo"),
             "printf '%s\\n' \"$@\" > \"$RECORD_ARGS\"\nprintf '%s\\n' \"$CARGO_TARGET_DIR\" \"$NESTRS_COMPILER_OUTPUT\" \"$RUSTC_WRAPPER\" \"$CARGO_INCREMENTAL\" \"${RUSTC_BOOTSTRAP:-unset}\" \"${NESTRS_GRAPH_TARGET:-unset}\" \"$RUSTDOC\" \"$NESTRS_REAL_RUSTDOC\" \"$NESTRS_MACRO_BRIDGE\" > \"$RECORD_ENV\"\nexit 37\n",
         );
-        Self(root)
+        Self(root, guard)
     }
 
     fn command(&self) -> Command {
@@ -469,7 +482,13 @@ fn doctor_requires_a_matching_full_compiler_identity() {
 fn driver_changes_create_a_new_cargo_cache_namespace() {
     let fixture = Fixture::new();
     let first = fixture.command().arg("build").output().unwrap();
-    assert_eq!(first.status.code(), Some(37));
+    assert_eq!(
+        first.status.code(),
+        Some(37),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&first.stdout),
+        String::from_utf8_lossy(&first.stderr)
+    );
     let old = fs::read_to_string(fixture.0.join("environment")).unwrap();
     let driver = fixture.0.join("nestrs-driver");
     let changed = format!(
@@ -478,7 +497,13 @@ fn driver_changes_create_a_new_cargo_cache_namespace() {
     );
     fs::write(driver, changed).unwrap();
     let second = fixture.command().arg("build").output().unwrap();
-    assert_eq!(second.status.code(), Some(37));
+    assert_eq!(
+        second.status.code(),
+        Some(37),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr)
+    );
     let new = fs::read_to_string(fixture.0.join("environment")).unwrap();
     assert_ne!(old.lines().next(), new.lines().next());
 }
@@ -487,7 +512,13 @@ fn driver_changes_create_a_new_cargo_cache_namespace() {
 fn bridge_changes_create_a_new_cargo_cache_namespace() {
     let fixture = Fixture::new();
     let first = fixture.command().arg("build").output().unwrap();
-    assert_eq!(first.status.code(), Some(37));
+    assert_eq!(
+        first.status.code(),
+        Some(37),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&first.stdout),
+        String::from_utf8_lossy(&first.stderr)
+    );
     let old = fs::read_to_string(fixture.0.join("environment")).unwrap();
     fs::write(
         fixture.0.join(bridge_filename()),
@@ -495,7 +526,13 @@ fn bridge_changes_create_a_new_cargo_cache_namespace() {
     )
     .unwrap();
     let second = fixture.command().arg("build").output().unwrap();
-    assert_eq!(second.status.code(), Some(37));
+    assert_eq!(
+        second.status.code(),
+        Some(37),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr)
+    );
     let new = fs::read_to_string(fixture.0.join("environment")).unwrap();
     assert_ne!(old.lines().next(), new.lines().next());
 }
@@ -521,7 +558,13 @@ fn explicit_private_bridge_is_forwarded_to_the_driver() {
         .arg("check")
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(37));
+    assert_eq!(
+        output.status.code(),
+        Some(37),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let environment = fs::read_to_string(fixture.0.join("environment")).unwrap();
     assert_eq!(Path::new(environment.lines().nth(8).unwrap()), selected);
 }
