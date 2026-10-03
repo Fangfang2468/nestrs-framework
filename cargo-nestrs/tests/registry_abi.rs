@@ -278,7 +278,7 @@ fn closed_generic_blueprints_keep_demand_and_exact_factory_priority() {
 }
 
 #[test]
-fn source_cannot_call_reflection_entry_or_forge_declaration_callbacks() {
+fn source_cannot_call_reflection_entry() {
     let directory = artifacts("source-audit");
     fs::create_dir_all(directory.join("src")).unwrap();
     fs::write(
@@ -323,31 +323,6 @@ fn source_cannot_call_reflection_entry_or_forge_declaration_callbacks() {
             "{case}: unexpected diagnostic: {stderr}",
         );
     }
-    for callback in [
-        "__nestrs_reflect_provider",
-        "__nestrs_reflected_factory",
-        "__nestrs_reflect_trait_binding",
-        "__nestrs_query_root",
-        "__nestrs_reflect_automatic_binding",
-        "__nestrs_reflect_blueprint",
-        "__nestrs_reflect_blueprint_path",
-    ] {
-        fs::write(
-            directory.join("src/main.rs"),
-            format!("fn {callback}() {{}} fn main() {{}}"),
-        )
-        .unwrap();
-        let output = run(&directory, &["check", "--offline"], callback);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            !output.status.success(),
-            "{callback}: forged callback compiled"
-        );
-        assert!(
-            stderr.contains("callback names are reserved for authenticated declarations"),
-            "{callback}: unexpected diagnostic: {stderr}",
-        );
-    }
 }
 
 #[test]
@@ -381,7 +356,20 @@ mod __nestrs_reflect {
     pub fn provider_definition<T: ProviderDefinition>() { T::provider() }
 }
 impl __nestrs_reflect::ProviderDefinition for Pretend { fn provider() {} }
+// Callback spelling does not reserve business names or confer registration
+// authority. Wrong descriptor signatures would fail if any were misclassified.
+fn __nestrs_reflect_provider() -> usize { 1 }
+fn __nestrs_reflected_factory() -> usize { 2 }
+fn __nestrs_reflect_trait_binding() -> usize { 3 }
+fn __nestrs_query_root() -> usize { 4 }
+fn __nestrs_reflect_automatic_binding() -> usize { 5 }
+fn __nestrs_reflect_blueprint() -> usize { 6 }
+fn __nestrs_reflect_blueprint_path() -> usize { 7 }
 fn ordinary_user_function() {
+    assert_eq!(__nestrs_reflect_provider() + __nestrs_reflected_factory()
+        + __nestrs_reflect_trait_binding() + __nestrs_query_root()
+        + __nestrs_reflect_automatic_binding() + __nestrs_reflect_blueprint()
+        + __nestrs_reflect_blueprint_path(), 28);
     __nestrs_reflect::compiler_provider::<Pretend>(__nestrs_reflect::CompilerKey::Default);
     __nestrs_reflect::compiler_plan_provider::<Pretend, 0, false, 0>(__nestrs_reflect::CompilerKey::Default);
     __nestrs_reflect::provider_definition::<Pretend>();

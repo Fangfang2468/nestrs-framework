@@ -20,19 +20,25 @@ use zyn::{quote::quote_spanned, syn, syn::spanned::Spanned, zyn};
 
 /// 一条输入仅保留类型化执行能力；key、槽位策略和标签供编译器读 MIR 后消解。
 #[zyn::element]
-pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenStream {
+pub(crate) fn emit_dependency_request(
+    request: DependencyRequest,
+    binding_span: zyn::proc_macro2::Span,
+) -> zyn::TokenStream {
     let service_type = request.service_type.clone();
     let is_trait_object = is_trait_object(&service_type);
     let key = request.key.clone();
     let optional = request.optional;
     let lazy = request.lazy;
     let input_slot = request.input_slot;
-    let kind = ident(match (lazy, optional) {
-        (false, false) => "Required",
-        (false, true) => "Optional",
-        (true, false) => "LazyRequired",
-        (true, true) => "LazyOptional",
-    });
+    let kind = ident(
+        match (lazy, optional) {
+            (false, false) => "Required",
+            (false, true) => "Optional",
+            (true, false) => "LazyRequired",
+            (true, true) => "LazyOptional",
+        },
+        *binding_span,
+    );
     let span = service_type.span();
     let label = syn::LitStr::new(
         &request
@@ -42,19 +48,26 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
             .unwrap_or_default(),
         request.label.as_ref().map(syn::Ident::span).unwrap_or(span),
     );
-    let reflection = ident(protocol::REFLECTION_MODULE);
-    let dependency = ident(Marker::Dependency.name());
-    let plan_input = syn::Ident::new(Marker::PlanInput.name(), span);
-    let source_module = syn::Ident::new(protocol::REFLECTION_MODULE, span);
-    let compiler_key = compiler_key_tokens(key.as_ref());
-    let type_end = crate::codegen::source::type_end(&service_type)
-        .map(|end| crate::codegen::source::origin(OriginKind::InputTypeEnd, input_slot, "", end));
+    let reflection = ident(protocol::REFLECTION_MODULE, *binding_span);
+    let dependency = ident(Marker::Dependency.name(), *binding_span);
+    let plan_input = syn::Ident::new(Marker::PlanInput.name(), binding_span.located_at(span));
+    let source_module = syn::Ident::new(protocol::REFLECTION_MODULE, binding_span.located_at(span));
+    let compiler_key = compiler_key_tokens(key.as_ref(), *binding_span);
+    let type_end = crate::codegen::source::type_end(&service_type).map(|end| {
+        crate::codegen::source::origin(OriginKind::InputTypeEnd, input_slot, "", end, *binding_span)
+    });
     let input_marker = quote_spanned!(span=>
         #source_module::#plan_input::<#service_type, #input_slot, #optional, #lazy>(#compiler_key, #label);
     );
-    let key_origin = key
-        .as_ref()
-        .map(|key| crate::codegen::source::origin(OriginKind::InputKey, input_slot, "", key.span));
+    let key_origin = key.as_ref().map(|key| {
+        crate::codegen::source::origin(
+            OriginKind::InputKey,
+            input_slot,
+            "",
+            key.span,
+            *binding_span,
+        )
+    });
     zyn! {
         ::nestrs_core::activation::adapter::InputAdapter {
             service_type: {
@@ -94,6 +107,7 @@ pub(crate) fn emit_plan_provider(
     lifetime: ServiceLifetime,
     primary: bool,
     lazy: Option<bool>,
+    binding_span: zyn::proc_macro2::Span,
 ) -> zyn::TokenStream {
     let lifetime_id = match lifetime {
         ServiceLifetime::Singleton => Lifetime::Singleton,
@@ -103,14 +117,15 @@ pub(crate) fn emit_plan_provider(
     // 与工具内的初始化策略同源编码，driver 不从源码属性重新猜测策略。
     let initialization = Initialization::from_lazy(*lazy) as u8;
     let span = service_type.span();
-    let reflection = syn::Ident::new(protocol::REFLECTION_MODULE, span);
-    let provider = syn::Ident::new(Marker::PlanProvider.name(), span);
-    let compiler_key = compiler_key_tokens(key.as_ref());
-    let key_origin = key
-        .as_ref()
-        .map(|key| crate::codegen::source::origin(OriginKind::ProviderKey, 0, "", key.span));
-    let type_end = crate::codegen::source::type_end(service_type)
-        .map(|end| crate::codegen::source::origin(OriginKind::ProviderTypeEnd, 0, "", end));
+    let reflection = syn::Ident::new(protocol::REFLECTION_MODULE, binding_span.located_at(span));
+    let provider = syn::Ident::new(Marker::PlanProvider.name(), binding_span.located_at(span));
+    let compiler_key = compiler_key_tokens(key.as_ref(), *binding_span);
+    let key_origin = key.as_ref().map(|key| {
+        crate::codegen::source::origin(OriginKind::ProviderKey, 0, "", key.span, *binding_span)
+    });
+    let type_end = crate::codegen::source::type_end(service_type).map(|end| {
+        crate::codegen::source::origin(OriginKind::ProviderTypeEnd, 0, "", end, *binding_span)
+    });
     quote_spanned! {span=>
         #reflection::#provider::<#service_type, #lifetime_id, #primary, #initialization>(#compiler_key);
         #type_end
@@ -120,16 +135,22 @@ pub(crate) fn emit_plan_provider(
 
 /// 将同一个静态 key 直接写入编译器 marker，供语义发现按精确身份选择蓝图。
 #[zyn::element]
-pub(crate) fn emit_compiler_key(key: Option<ServiceKeySpec>) -> zyn::TokenStream {
-    compiler_key_tokens(key.as_ref())
+pub(crate) fn emit_compiler_key(
+    key: Option<ServiceKeySpec>,
+    binding_span: zyn::proc_macro2::Span,
+) -> zyn::TokenStream {
+    compiler_key_tokens(key.as_ref(), *binding_span)
 }
 
-fn compiler_key_tokens(key: Option<&ServiceKeySpec>) -> zyn::TokenStream {
+fn compiler_key_tokens(
+    key: Option<&ServiceKeySpec>,
+    binding_span: zyn::proc_macro2::Span,
+) -> zyn::TokenStream {
     let span = key
         .map(|key| key.span)
         .unwrap_or_else(zyn::proc_macro2::Span::call_site);
-    let reflection = syn::Ident::new(protocol::REFLECTION_MODULE, span);
-    let compiler_key = syn::Ident::new(protocol::COMPILER_KEY, span);
+    let reflection = syn::Ident::new(protocol::REFLECTION_MODULE, binding_span.located_at(span));
+    let compiler_key = syn::Ident::new(protocol::COMPILER_KEY, binding_span.located_at(span));
     match key.map(|key| &key.kind) {
         Some(ServiceKeyKind::Named(name)) => {
             let name = syn::LitStr::new(name, span);

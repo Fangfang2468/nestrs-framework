@@ -119,7 +119,7 @@ fn injectable(
     let lazy_attribute_use = lazy.consumed_attribute_use();
 
     // 分析阶段只产出共享数据和去除 marker 的 AST；它不负责渲染后续阶段。
-    let analyzed_fields = match analyze_fields(item) {
+    let mut analyzed_fields = match analyze_fields(item) {
         Ok(fields) => fields,
         Err(error) => return error.into_compile_error().into(),
     };
@@ -129,10 +129,16 @@ fn injectable(
     };
     let constructor_mode = match &ide_selection {
         None => ConstructorMode::Deferred,
-        Some(selection) if selection.constructor => ConstructorMode::Explicit,
+        Some(selection) if selection.selection.constructor => ConstructorMode::Explicit,
         Some(_) => ConstructorMode::Automatic,
     };
-    let declaration = match rewrite_injection_field(&analyzed_fields, ide_selection.as_ref()) {
+    analyzed_fields.constructor_helpers = ide_selection
+        .as_ref()
+        .and_then(|selection| selection.helpers.clone());
+    let declaration = match rewrite_injection_field(
+        &analyzed_fields,
+        ide_selection.as_ref().map(|selection| &selection.selection),
+    ) {
         Ok(declaration) => declaration,
         Err(error) => return error.into_compile_error().into(),
     };
@@ -160,7 +166,7 @@ fn injectable(
                     mode = constructor_mode,
                 )
             } @else {
-                @EmitInjectableRegistration {
+                @EmitInjectableRegistration(binding_span = binding_span) {
                     {{ primary_attribute_use }}
                     {{ lazy_attribute_use }}
                     @GenerateInjectableConstructor(
@@ -169,6 +175,7 @@ fn injectable(
                         mode = constructor_mode,
                     )
                     @CollectInjectableProvider(
+                        binding_span = binding_span,
                         analysis = analyzed_fields,
                         config = config,
                         primary = primary.is_primary(),
@@ -313,7 +320,7 @@ fn primary(item: syn::Item, args: Args) -> zyn::Output {
     }
 }
 
-fn bind(item: syn::ItemImpl, args: Args) -> zyn::Output {
+fn bind(item: syn::ItemImpl, args: Args, binding_span: zyn::proc_macro2::Span) -> zyn::Output {
     let input = syn::Item::Impl(item.clone());
     if let Some(arg) = args.iter().next() {
         return syn::Error::new(arg.span(), "`#[bind]` 不接受参数")
@@ -355,6 +362,7 @@ fn bind(item: syn::ItemImpl, args: Args) -> zyn::Output {
                 @CheckInterfaceType(interface = interface.clone()) {
                     {{ item }}
                     @EmitBoundProvider(
+                        binding_span = binding_span,
                         service = (*service).clone(),
                         interface = interface.clone(),
                     )
@@ -459,7 +467,17 @@ pub fn expand_lazy(args: zyn::TokenStream, input: zyn::TokenStream) -> zyn::Toke
 /// 展开迁移期保留的显式 `#[bind]`。
 #[doc(hidden)]
 pub fn expand_bind(args: zyn::TokenStream, input: zyn::TokenStream) -> zyn::TokenStream {
-    expand_attribute(args, input, bind)
+    expand_bind_with_binding_span(args, input, zyn::proc_macro2::Span::mixed_site())
+}
+
+/// 显式绑定回归入口与业务声明共用定义处卫生，不捕获业务常量或类型。
+#[doc(hidden)]
+pub fn expand_bind_with_binding_span(
+    args: zyn::TokenStream,
+    input: zyn::TokenStream,
+    binding_span: zyn::proc_macro2::Span,
+) -> zyn::TokenStream {
+    expand_attribute(args, input, |item, args| bind(item, args, binding_span))
 }
 
 /// 保留原 `zyn::attribute` 的解析顺序和 FromInput 诊断，独立于 proc_macro ABI。

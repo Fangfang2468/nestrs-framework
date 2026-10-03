@@ -251,5 +251,6 @@ pub(crate) mod constructor {
     pub(crate) struct Metadata {
         pub(crate) method: String,
         pub(crate) result: bool,
+        pub(crate) input: String,
     }
 }

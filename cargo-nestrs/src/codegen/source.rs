@@ -32,18 +32,19 @@ impl ProviderOrigin {
         }
     }
 
-    pub(crate) fn render(&self) -> TokenStream {
+    pub(crate) fn render(&self, binding_span: Span) -> TokenStream {
         let mut output = origin(
             OriginKind::Declaration,
             0,
             &self.name.to_string(),
             self.name.span(),
+            binding_span,
         );
         if let Some(span) = self.lifetime {
-            output.extend(origin(OriginKind::Lifetime, 0, "", span));
+            output.extend(origin(OriginKind::Lifetime, 0, "", span, binding_span));
         }
         if let Some(span) = self.primary {
-            output.extend(origin(OriginKind::Primary, 0, "", span));
+            output.extend(origin(OriginKind::Primary, 0, "", span, binding_span));
         }
         output
     }
@@ -68,9 +69,15 @@ pub(crate) fn type_end(ty: &impl ToTokens) -> Option<Span> {
 
 /// call 本身和 callee 均使用源位置，MIR source_info 因而不退化为整个属性调用。
 /// 保留 label token 的位置，让 Cargo JSON 与跨 crate metadata 使用相同来源。
-pub(crate) fn origin(kind: OriginKind, slot: usize, label: &str, span: Span) -> TokenStream {
-    let module = syn::Ident::new(protocol::REFLECTION_MODULE, span);
-    let marker = syn::Ident::new(Marker::PlanOrigin.name(), span);
+pub(crate) fn origin(
+    kind: OriginKind,
+    slot: usize,
+    label: &str,
+    span: Span,
+    binding_span: Span,
+) -> TokenStream {
+    let module = syn::Ident::new(protocol::REFLECTION_MODULE, binding_span.located_at(span));
+    let marker = syn::Ident::new(Marker::PlanOrigin.name(), binding_span.located_at(span));
     let kind = kind as u8;
     let label = syn::LitStr::new(label, span);
     quote_spanned!(span=> #module::#marker::<#kind, #slot>(#label);)

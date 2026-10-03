@@ -350,22 +350,29 @@ fn validate_constructor_dependencies<'tcx>(
 
 fn callback_kind(tcx: TyCtxt<'_>, definition: DefId) -> Option<Kind> {
     let name = tcx.opt_item_name(definition)?;
-    // 旧蓝图载体已经由编译器的真实 Ty/Instance 索引取代。保留名称仍不能由业务
-    // 伪造以混入反射目录；明确拒绝也能诊断依赖使用了不匹配的旧工具链。
-    if matches!(
+    let obsolete = matches!(
         name.as_str(),
         "__nestrs_reflect_blueprint" | "__nestrs_reflect_blueprint_path" | "__nestrs_query_root"
-    ) {
+    );
+    let kind = Kind::from_callback(name.as_str());
+    if !obsolete && kind.is_none() {
+        return None;
+    }
+    // 名称仅筛选已经认证的生成项。普通业务可以使用同样的函数/成员名，
+    // 但不会因此贡献注册；其余私有 ABI 访问仍由独立的来源审计拒绝。
+    if !crate::internal_access::trusted_definition(tcx, definition) {
+        return None;
+    }
+    // 旧蓝图载体已经由真实 Ty/Instance 索引取代。只对认证的旧工具产物诊断
+    // 协议不匹配，不能把普通业务的同名函数误当成旧工具产物。
+    if obsolete {
         tcx.dcx().span_fatal(
             tcx.def_span(definition),
             "Nestrs registration callback names are reserved for authenticated declarations; obsolete blueprint callbacks are unsupported",
         );
     }
-    let kind = Kind::from_callback(name.as_str())?;
-    if tcx.def_kind(definition) != DefKind::Fn
-        || tcx.is_foreign_item(definition)
-        || !crate::internal_access::trusted_definition(tcx, definition)
-    {
+    let kind = kind?;
+    if tcx.def_kind(definition) != DefKind::Fn || tcx.is_foreign_item(definition) {
         tcx.dcx().span_fatal(
             tcx.def_span(definition),
             "Nestrs registration callback names are reserved for authenticated declarations",

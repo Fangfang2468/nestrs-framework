@@ -38,11 +38,11 @@ pub(crate) fn define_generic_injectable_provider(
     let (impl_generics, type_generics, where_clause) =
         provider_definition_generics.split_for_impl();
     let service_type = quote_spanned!(service.span()=> Self);
-    let reflection = reflection::support(true);
-    let reflection_module = reflection::ident(protocol::REFLECTION_MODULE);
-    let provider_definition = reflection::ident(protocol::PROVIDER_DEFINITION);
-    let provider_marker = reflection::ident(Marker::Provider.name());
-    let origins = source.render();
+    let reflection = reflection::support(true, *binding_span);
+    let reflection_module = reflection::ident(protocol::REFLECTION_MODULE, *binding_span);
+    let provider_definition = reflection::ident(protocol::PROVIDER_DEFINITION, *binding_span);
+    let provider_marker = reflection::ident(Marker::Provider.name(), *binding_span);
+    let origins = source.render(*binding_span);
 
     zyn! {
         #[allow(clippy::unused_unit)]
@@ -53,10 +53,11 @@ pub(crate) fn define_generic_injectable_provider(
             {
                 fn provider() -> ::nestrs_core::activation::adapter::ActivationAdapter {
                     {{ reflection_module }}::{{ provider_marker }}::<Self>(
-                        @EmitCompilerKey(key = config.key.clone())
+                        @EmitCompilerKey(key = config.key.clone(), binding_span = *binding_span)
                     );
                     {{ origins }}
                     @EmitPlanProvider(
+                        binding_span = *binding_span,
                         service_type = service_type.clone(),
                         key = config.key.clone(),
                         lifetime = config.lifetime,
@@ -65,6 +66,7 @@ pub(crate) fn define_generic_injectable_provider(
                     )
                     ::nestrs_core::activation::adapter::ActivationAdapter {
                         @EmitClassProviderFields(
+                            binding_span = *binding_span,
                             analysis = analysis.clone(),
                             config = config.clone(),
                             service_type = service_type.clone(),

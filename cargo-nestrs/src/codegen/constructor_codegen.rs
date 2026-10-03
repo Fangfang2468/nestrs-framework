@@ -5,7 +5,11 @@
 //! 字段赋值仍交给 Rust 的类型、借用和可见性检查。
 
 use crate::protocol::constructor;
-use zyn::{Render, quote::quote, syn};
+use zyn::{
+    Render,
+    quote::{ToTokens, quote},
+    syn,
+};
 
 use super::{
     constructor::{ConstructorResultKind, analyze_constructor},
@@ -23,7 +27,10 @@ pub(super) fn expand(
             "#[constructor] 不接受参数；服务策略由 #[injectable] 声明",
         ));
     }
-    let analysis = analyze_constructor(syn::parse2(input)?)?;
+    let original: syn::ImplItemFn = syn::parse2(input)?;
+    let ide_helpers = super::constructor_ide::method_helpers(&original)?;
+    let original_input = original.to_token_stream().to_string();
+    let analysis = analyze_constructor(original)?;
     let item = &analysis.item;
     let method = &item.sig.ident;
     // 真正的定义处卫生阻止业务同名 const 被当成参数/局部模式。所有引用复用这些
@@ -35,23 +42,34 @@ pub(super) fn expand(
     let mapping = serde_json::to_string(&constructor::Metadata {
         method: method.to_string(),
         result: analysis.result_kind == ConstructorResultKind::Result,
+        input: original_input,
     })
     .expect("constructor metadata contains only a string and boolean");
-    let metadata = super::reflection::ident(constructor::METADATA);
-    let dependencies_helper = syn::Ident::new(constructor::DEPENDENCIES, method.span());
+    let metadata = super::reflection::ident(constructor::METADATA, binding_span);
+    let dependencies_helper = match &ide_helpers {
+        Some(helpers) => {
+            syn::Ident::new(&helpers.dependencies, zyn::proc_macro2::Span::call_site())
+        }
+        None => super::reflection::ident(constructor::DEPENDENCIES, binding_span),
+    };
     let origin = super::source::origin(
         crate::protocol::OriginKind::Constructor,
         0,
         &method.to_string(),
         method.span(),
+        binding_span,
     );
-    let activate = super::reflection::ident(constructor::ACTIVATE);
+    let activate = match &ide_helpers {
+        Some(helpers) => syn::Ident::new(&helpers.activate, zyn::proc_macro2::Span::call_site()),
+        None => super::reflection::ident(constructor::ACTIVATE, binding_span),
+    };
     let mut dependencies = Vec::new();
     let mut arguments = Vec::new();
     let mut acquisitions = Vec::new();
     for parameter in &analysis.parameters {
         dependencies.push(
             EmitDependencyRequest {
+                binding_span,
                 request: parameter.dependency_request(),
             }
             .render(&zyn::Input::default())
@@ -103,7 +121,7 @@ pub(super) fn expand(
             );
         }
     };
-    let reflection = super::reflection::support(false);
+    let reflection = super::reflection::support(false, binding_span);
     let mutable = (!analysis.parameters.is_empty()).then(|| quote!(mut));
     Ok(quote! {
         #item

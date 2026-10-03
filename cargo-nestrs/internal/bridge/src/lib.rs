@@ -94,5 +94,10 @@ pub fn bind(
     args: proc_macro::TokenStream,
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    cargo_nestrs::codegen::expand_bind(args.into(), input.into()).into()
+    cargo_nestrs::codegen::expand_bind_with_binding_span(
+        args.into(),
+        input.into(),
+        proc_macro::Span::def_site().into(),
+    )
+    .into()
 }

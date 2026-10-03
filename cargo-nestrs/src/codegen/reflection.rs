@@ -7,15 +7,15 @@
 use crate::protocol::{self, Marker};
 use zyn::{TokenStream, quote::quote, syn};
 
-pub(crate) fn ident(name: &str) -> syn::Ident {
-    syn::Ident::new(name, zyn::proc_macro2::Span::call_site())
+pub(crate) fn ident(name: &str, span: zyn::proc_macro2::Span) -> syn::Ident {
+    syn::Ident::new(name, span)
 }
 
-pub(crate) fn support(generic: bool) -> TokenStream {
-    let module = ident(protocol::REFLECTION_MODULE);
-    let key = ident(protocol::COMPILER_KEY);
-    let definition = ident(protocol::PROVIDER_DEFINITION);
-    let helper = ident(protocol::PROVIDER_HELPER);
+pub(crate) fn support(generic: bool, binding_span: zyn::proc_macro2::Span) -> TokenStream {
+    let module = ident(protocol::REFLECTION_MODULE, binding_span);
+    let key = ident(protocol::COMPILER_KEY, binding_span);
+    let definition = ident(protocol::PROVIDER_DEFINITION, binding_span);
+    let helper = ident(protocol::PROVIDER_HELPER, binding_span);
     let [
         provider,
         dependency,
@@ -35,7 +35,7 @@ pub(crate) fn support(generic: bool) -> TokenStream {
         Marker::PlanFactory,
         Marker::PlanOrigin,
     ]
-    .map(|marker| ident(marker.name()));
+    .map(|marker| ident(marker.name(), binding_span));
     let blueprint = generic.then(|| quote! {
         pub trait #definition {
             fn provider() -> ::nestrs_core::activation::adapter::ActivationAdapter;

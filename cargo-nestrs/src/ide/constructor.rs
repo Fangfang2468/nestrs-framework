@@ -14,13 +14,15 @@ use serde::{Deserialize, Serialize};
 
 use super::capture::Unit;
 
-pub const MODEL_VERSION: u32 = 1;
+pub const MODEL_VERSION: u32 = 2;
 pub const MODEL_ENV: &str = "NESTRS_IDE_CONSTRUCTORS";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ConstructorModel {
     pub version: u32,
     pub declarations: Vec<Declaration>,
+    pub helpers: Option<HelperNames>,
+    pub methods: Vec<MethodDeclaration>,
 }
 
 impl Default for ConstructorModel {
@@ -28,8 +30,23 @@ impl Default for ConstructorModel {
         Self {
             version: MODEL_VERSION,
             declarations: Vec::new(),
+            helpers: None,
+            methods: Vec::new(),
         }
     }
+}
+
+/// 由当前编译单元标准展开后的标识符目录分配，两个属性展开只重放同一已验证结果。
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct HelperNames {
+    pub activate: String,
+    pub dependencies: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MethodDeclaration {
+    pub anchor: SourceAnchor,
+    pub input: String,
 }
 
 /// 定位原始结构体标识符；行从 1 开始，列从 0 开始，与 proc_macro2 相同。
@@ -74,6 +91,24 @@ impl ConstructorModel {
                 self.version
             ));
         }
+        if self.helpers.is_none() && !self.methods.is_empty() {
+            return Err("constructor IDE 模型缺少已分配的辅助项身份".into());
+        }
+        if let Some(helpers) = &self.helpers {
+            for name in [&helpers.activate, &helpers.dependencies] {
+                if name.starts_with("r#") || zyn::syn::parse_str::<zyn::syn::Ident>(name).is_err() {
+                    return Err("constructor IDE 模型包含无效辅助项身份".into());
+                }
+            }
+            if helpers.activate == helpers.dependencies {
+                return Err("constructor IDE 模型包含重复辅助项身份".into());
+            }
+        }
+        for method in &self.methods {
+            if method.anchor.line == 0 || method.anchor.end_line == 0 {
+                return Err("constructor IDE 模型缺少准确构造方法位置".into());
+            }
+        }
         for declaration in &self.declarations {
             if declaration.anchor.line == 0 || declaration.anchor.end_line == 0 {
                 return Err(
@@ -91,6 +126,27 @@ impl ConstructorModel {
             }
         }
         Ok(())
+    }
+
+    pub fn lookup_method(
+        &self,
+        anchor: Option<&SourceAnchor>,
+        input: &str,
+    ) -> Result<HelperNames, String> {
+        self.validate()?;
+        let matched = self.methods.iter().any(|method| {
+            method.input == input && anchor.is_none_or(|anchor| method.anchor == *anchor)
+        }) || anchor.is_some_and(|anchor| {
+            self.methods
+                .iter()
+                .any(|method| method.input == input && method.anchor.file == anchor.file)
+        });
+        if !matched {
+            return Err("当前构造方法与编译器 constructor 模型不一致，请保存文件并运行 cargo nestrs init check 刷新 IDE 模型".into());
+        }
+        self.helpers
+            .clone()
+            .ok_or_else(|| "constructor IDE 模型缺少已分配的辅助项身份".into())
     }
 
     /// 同一宏定义可能贡献多个同位置声明。只有选择完全一致才可安全复用，否则报错。
@@ -175,6 +231,13 @@ pub fn write_constructor_model(
             .fields
             .sort_by(|left, right| left.name.cmp(&right.name));
     }
+    for method in &mut model.methods {
+        method.anchor.file = method
+            .anchor
+            .file
+            .canonicalize()
+            .unwrap_or_else(|_| method.anchor.file.clone());
+    }
     model.declarations.sort_by(|left, right| {
         (&left.anchor, &left.input, &left.definition).cmp(&(
             &right.anchor,
@@ -217,12 +280,82 @@ mod tests {
     use super::*;
 
     #[test]
+    fn method_model_requires_complete_tokens_and_retains_file_scoped_shift_fallback() {
+        let anchor = declaration("crate::Service", true).anchor;
+        let input = "fn new(input: Dependency) -> Self { Self { input } }";
+        let helpers = HelperNames {
+            activate: "__nestrs_ide_constructor_1_activate".into(),
+            dependencies: "__nestrs_ide_constructor_1_dependencies".into(),
+        };
+        let mut model = ConstructorModel {
+            helpers: Some(helpers.clone()),
+            methods: vec![MethodDeclaration {
+                anchor: anchor.clone(),
+                input: input.into(),
+            }],
+            ..ConstructorModel::default()
+        };
+        assert_eq!(model.lookup_method(Some(&anchor), input).unwrap(), helpers);
+        assert_eq!(model.lookup_method(None, input).unwrap(), helpers);
+        let mut moved = anchor.clone();
+        moved.line += 4;
+        moved.end_line += 4;
+        assert_eq!(model.lookup_method(Some(&moved), input).unwrap(), helpers);
+        moved.file = "/different.rs".into();
+        assert!(model.lookup_method(Some(&moved), input).is_err());
+        assert!(
+            model
+                .lookup_method(None, "fn new(input: Other) -> Self { Self { input } }")
+                .is_err()
+        );
+        assert!(
+            model
+                .lookup_method(
+                    None,
+                    "fn new(input: Dependency) -> Self { Self::other(input) }"
+                )
+                .is_err()
+        );
+        model.methods.push(model.methods[0].clone());
+        assert_eq!(model.lookup_method(None, input).unwrap(), helpers);
+        model.helpers = None;
+        assert!(model.lookup_method(None, input).is_err());
+    }
+
+    #[test]
+    fn invalid_editor_helper_identities_are_rejected_before_codegen() {
+        for invalid in ["", "123", "_", "fn", "a::b", "a b", "r#type", "r#valid"] {
+            let model = ConstructorModel {
+                helpers: Some(HelperNames {
+                    activate: invalid.into(),
+                    dependencies: "valid_dependencies".into(),
+                }),
+                ..ConstructorModel::default()
+            };
+            assert!(model.validate().is_err(), "invalid helper {invalid}");
+        }
+        let mut model = ConstructorModel {
+            version: 1,
+            ..ConstructorModel::default()
+        };
+        assert!(model.validate().unwrap_err().contains("版本"));
+        model.version = MODEL_VERSION;
+        model.helpers = Some(HelperNames {
+            activate: "same".into(),
+            dependencies: "same".into(),
+        });
+        assert!(model.validate().is_err());
+    }
+
+    #[test]
     fn unlocated_editor_spans_require_unambiguous_complete_input_in_the_exact_unit() {
         let first = declaration("crate::first::Service", true);
         let mut second = declaration("crate::second::Service", false);
         second.anchor.file = "/another.rs".into();
         let mut model = ConstructorModel {
             version: MODEL_VERSION,
+            helpers: None,
+            methods: Vec::new(),
             declarations: vec![first.clone(), second],
         };
         assert!(
@@ -264,6 +397,8 @@ mod tests {
         let first = declaration("crate::first::Service", true);
         let model = ConstructorModel {
             version: MODEL_VERSION,
+            helpers: None,
+            methods: Vec::new(),
             declarations: vec![first.clone()],
         };
         assert!(
@@ -289,6 +424,8 @@ mod tests {
         let first = declaration("crate::first::Service", true);
         let mut model = ConstructorModel {
             version: MODEL_VERSION,
+            helpers: None,
+            methods: Vec::new(),
             declarations: vec![first.clone(), declaration("crate::second::Service", false)],
         };
         assert!(

@@ -50,11 +50,12 @@ pub(crate) fn emit_factory_provider(
     let success_type = &analysis.output.success_type;
     let service_type = quote!(#success_type);
     let async_factory = matches!(analysis.output.invocation, FactoryInvocation::Async);
-    let reflection = crate::codegen::reflection::support(false);
-    let reflection_module = ident(protocol::REFLECTION_MODULE);
-    let factory_marker = ident(Marker::PlanFactory.name());
-    let provider_marker = ident(Marker::Provider.name());
-    let origins = source.render();
+    let reflection = crate::codegen::reflection::support(false, *binding_span);
+    let reflection_module = ident(protocol::REFLECTION_MODULE, *binding_span);
+    let factory_marker = ident(Marker::PlanFactory.name(), *binding_span);
+    let provider_marker = ident(Marker::Provider.name(), *binding_span);
+    let origins = source.render(*binding_span);
+    let callback = ident("__nestrs_reflected_factory", *binding_span);
     // raw 前缀只属于业务标识符语法，不能嵌入生成符号的中间；业务引用仍使用原 Ident。
     let provider_name = factory.unraw();
     let provider_const = zyn::format_ident!(
@@ -68,16 +69,18 @@ pub(crate) fn emit_factory_provider(
         const {{ provider_const }}: () = {
             {{ reflection }}
             @GenerateFactoryAdapter(
+                binding_span = *binding_span,
                 analysis = analysis.clone(),
             )
         #[allow(dead_code)]
-            fn __nestrs_reflected_factory() -> ::nestrs_core::activation::adapter::ActivationAdapter {
+            fn {{ callback }}() -> ::nestrs_core::activation::adapter::ActivationAdapter {
                 {{ reflection_module.clone() }}::{{ factory_marker }}::<{{ async_factory }}>();
                 {{ reflection_module }}::{{ provider_marker }}::<{{ analysis.output.success_type.clone() }}>(
-                    @EmitCompilerKey(key = config.key.clone())
+                    @EmitCompilerKey(key = config.key.clone(), binding_span = *binding_span)
                 );
                 {{ origins }}
                 @EmitPlanProvider(
+                    binding_span = *binding_span,
                     service_type = service_type.clone(),
                     key = config.key.clone(),
                     lifetime = config.lifetime,
@@ -89,10 +92,11 @@ pub(crate) fn emit_factory_provider(
                         cleanup: @RenderCleanupHook(cleanup = config.cleanup.clone()),
                         inputs: ::std::vec![
                             @for (parameter in analysis.parameters.iter()) {
-                                @EmitDependencyRequest(request = parameter.dependency_request()),
+                                @EmitDependencyRequest(request = parameter.dependency_request(), binding_span = *binding_span),
                             }
                         ],
                         constructor: ::nestrs_core::activation::adapter::Constructor::Factory(@RenderFactoryInvoker(
+                            binding_span = *binding_span,
                             invocation = analysis.output.invocation,
                         )),
                 }
@@ -105,14 +109,18 @@ pub(crate) fn emit_factory_provider(
 
 /// 为同步、`async fn` 与显式 Future factory 生成正确的构造 adapter。
 #[zyn::element]
-fn generate_factory_adapter(analysis: FactoryAnalysis) -> zyn::TokenStream {
+fn generate_factory_adapter(
+    analysis: FactoryAnalysis,
+    binding_span: zyn::proc_macro2::Span,
+) -> zyn::TokenStream {
     let invocation = analysis.output.invocation;
     let is_async = matches!(invocation, FactoryInvocation::Async);
     let context_binding = factory_context_binding(analysis);
+    let construct = ident("__nestrs_factory_construct", *binding_span);
 
     zyn! {
         @if (is_async) {
-            fn __nestrs_factory_construct<'frame>(
+            fn {{ construct }}<'frame>(
                 {{ context_binding.clone() }}
             ) -> ::nestrs_core::activation::FactoryFuture<'frame> {
                 ::std::boxed::Box::pin(async move {
@@ -124,7 +132,7 @@ fn generate_factory_adapter(analysis: FactoryAnalysis) -> zyn::TokenStream {
                 })
             }
         } @else {
-            fn __nestrs_factory_construct<'frame>(
+            fn {{ construct }}<'frame>(
                 {{ context_binding }}
             ) -> ::core::result::Result<
                 ::nestrs_core::activation::ErasedService,
@@ -335,14 +343,18 @@ fn take_factory_parameters(
 }
 
 #[zyn::element]
-fn render_factory_invoker(invocation: FactoryInvocation) -> zyn::TokenStream {
+fn render_factory_invoker(
+    invocation: FactoryInvocation,
+    binding_span: zyn::proc_macro2::Span,
+) -> zyn::TokenStream {
     let is_async = matches!(invocation, FactoryInvocation::Async);
+    let construct = ident("__nestrs_factory_construct", *binding_span);
 
     zyn! {
         @if (is_async) {
-            ::nestrs_core::activation::adapter::FactoryInvoker::Async(__nestrs_factory_construct)
+            ::nestrs_core::activation::adapter::FactoryInvoker::Async({{ construct }})
         } @else {
-            ::nestrs_core::activation::adapter::FactoryInvoker::Sync(__nestrs_factory_construct)
+            ::nestrs_core::activation::adapter::FactoryInvoker::Sync({{ construct }})
         }
     }
 }

@@ -29,9 +29,10 @@ pub(crate) fn generate_injectable_constructor(
     let context = context_identifier(&analysis.item, *binding_span);
     let context_binding = context_binding(analysis, &context);
     let service = quote!(#service);
+    let construct = crate::codegen::reflection::ident("__nestrs_construct", *binding_span);
 
     zyn! {
-        fn __nestrs_construct(
+        fn {{ construct }}(
             {{ context_binding }}
         ) -> ::core::result::Result<
             ::nestrs_core::activation::ErasedService,
@@ -41,6 +42,7 @@ pub(crate) fn generate_injectable_constructor(
                 analysis = analysis.clone(),
                 service = service.clone(),
                 context = context.clone(),
+                binding_span = *binding_span,
                 mode = *mode,
             )
         }
@@ -71,6 +73,7 @@ pub(crate) fn generate_generic_injectable_constructor(
                 analysis = analysis.clone(),
                 service = service.clone(),
                 context = context.clone(),
+                binding_span = *binding_span,
                 mode = *mode,
             )
         }
@@ -83,9 +86,15 @@ fn render_constructor_body(
     analysis: AnalyzedFields,
     service: zyn::TokenStream,
     context: syn::Ident,
+    binding_span: zyn::proc_macro2::Span,
     mode: ConstructorMode,
 ) -> zyn::TokenStream {
-    let activate = crate::codegen::reflection::ident(crate::protocol::constructor::ACTIVATE);
+    let activate = match &analysis.constructor_helpers {
+        Some(helpers) => syn::Ident::new(&helpers.activate, zyn::proc_macro2::Span::call_site()),
+        None => {
+            crate::codegen::reflection::ident(crate::protocol::constructor::ACTIVATE, *binding_span)
+        }
+    };
     zyn! {
         @match (*mode) {
             ConstructorMode::Deferred => {
@@ -288,7 +297,11 @@ mod tests {
     fn render_constructor(item: ItemStruct, specs: Vec<FieldSpec>) -> String {
         GenerateInjectableConstructor {
             binding_span: zyn::proc_macro2::Span::mixed_site(),
-            analysis: AnalyzedFields { item, specs },
+            analysis: AnalyzedFields {
+                item,
+                specs,
+                constructor_helpers: None,
+            },
             mode: ConstructorMode::Deferred,
         }
         .render(&zyn::Input::default())
@@ -318,7 +331,11 @@ mod tests {
                     )
                 };
                 let specs = collect_field_specs(&item.fields).unwrap();
-                let analysis = AnalyzedFields { item, specs };
+                let analysis = AnalyzedFields {
+                    item,
+                    specs,
+                    constructor_helpers: None,
+                };
                 let input = zyn::Input::default();
                 let rendered = if generic {
                     GenerateGenericInjectableConstructor {
@@ -371,7 +388,11 @@ mod tests {
         let specs = collect_field_specs(&item.fields).unwrap();
         let rendered = GenerateInjectableConstructor {
             binding_span: zyn::proc_macro2::Span::mixed_site(),
-            analysis: AnalyzedFields { item, specs },
+            analysis: AnalyzedFields {
+                item,
+                specs,
+                constructor_helpers: None,
+            },
             mode: ConstructorMode::Automatic,
         }
         .render(&zyn::Input::default());

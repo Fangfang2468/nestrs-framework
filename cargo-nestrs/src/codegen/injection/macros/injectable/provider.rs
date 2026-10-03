@@ -35,21 +35,25 @@ pub(crate) fn collect_injectable_provider(
     lazy: Option<bool>,
     source: crate::codegen::source::ProviderOrigin,
     mode: ConstructorMode,
+    binding_span: zyn::proc_macro2::Span,
 ) -> zyn::TokenStream {
     let service = analysis.item.ident.clone();
     let service_type = quote!(#service);
-    let reflection_module = reflection::ident(protocol::REFLECTION_MODULE);
-    let provider_marker = reflection::ident(Marker::Provider.name());
-    let origins = source.render();
+    let reflection_module = reflection::ident(protocol::REFLECTION_MODULE, *binding_span);
+    let provider_marker = reflection::ident(Marker::Provider.name(), *binding_span);
+    let origins = source.render(*binding_span);
+    let callback = reflection::ident("__nestrs_reflect_provider", *binding_span);
+    let construct = reflection::ident("__nestrs_construct", *binding_span);
 
     zyn! {
         #[allow(dead_code)]
-        fn __nestrs_reflect_provider() -> ::nestrs_core::activation::adapter::ActivationAdapter {
+        fn {{ callback }}() -> ::nestrs_core::activation::adapter::ActivationAdapter {
             {{ reflection_module }}::{{ provider_marker }}::<{{ service_type.clone() }}>(
-                @EmitCompilerKey(key = config.key.clone())
+                @EmitCompilerKey(key = config.key.clone(), binding_span = *binding_span)
             );
             {{ origins }}
             @EmitPlanProvider(
+                binding_span = *binding_span,
                 service_type = service_type.clone(),
                 key = config.key.clone(),
                 lifetime = config.lifetime,
@@ -58,12 +62,13 @@ pub(crate) fn collect_injectable_provider(
             )
             ::nestrs_core::activation::adapter::ActivationAdapter {
                     @EmitClassProviderFields(
+                        binding_span = *binding_span,
                         analysis = analysis.clone(),
                         config = config.clone(),
                         service_type = service_type.clone(),
                         mode = *mode,
                     )
-                    constructor: ::nestrs_core::activation::adapter::Constructor::Class(__nestrs_construct),
+                    constructor: ::nestrs_core::activation::adapter::Constructor::Class({{ construct }}),
             }
         }
     }
@@ -80,9 +85,15 @@ pub(crate) fn emit_class_provider_fields(
     config: InjectableConfig,
     service_type: zyn::TokenStream,
     mode: ConstructorMode,
+    binding_span: zyn::proc_macro2::Span,
 ) -> zyn::TokenStream {
     let cleanup = config.cleanup.clone();
-    let dependencies = reflection::ident(protocol::constructor::DEPENDENCIES);
+    let dependencies = match &analysis.constructor_helpers {
+        Some(helpers) => {
+            zyn::syn::Ident::new(&helpers.dependencies, zyn::proc_macro2::Span::call_site())
+        }
+        None => reflection::ident(protocol::constructor::DEPENDENCIES, *binding_span),
+    };
     zyn! {
         service_type: ::nestrs_core::service::ServiceType::create::<{{ service_type.clone() }}>(),
         cleanup: @RenderCleanupHook(cleanup = cleanup.clone()),
@@ -91,11 +102,11 @@ pub(crate) fn emit_class_provider_fields(
                 if false {
                     {{ service_type.clone() }}::{{ dependencies.clone() }}()
                 } else {
-                    @RenderFieldInputs(analysis = analysis.clone())
+                    @RenderFieldInputs(analysis = analysis.clone(), binding_span = *binding_span)
                 }
             }
             ConstructorMode::Automatic => {
-                { @RenderFieldInputs(analysis = analysis.clone()) }
+                { @RenderFieldInputs(analysis = analysis.clone(), binding_span = *binding_span) }
             }
             ConstructorMode::Explicit => {
                 { {{ service_type.clone() }}::{{ dependencies.clone() }}() }
@@ -105,7 +116,10 @@ pub(crate) fn emit_class_provider_fields(
 }
 
 #[zyn::element]
-fn render_field_inputs(analysis: AnalyzedFields) -> zyn::TokenStream {
+fn render_field_inputs(
+    analysis: AnalyzedFields,
+    binding_span: zyn::proc_macro2::Span,
+) -> zyn::TokenStream {
     // 两个候选都先交给标准 Rust 名称解析；driver 在 HIR 降低前按真实服务身份
     // 选择一种构造模式。未选中的自动 Default/value 不参与类型检查或求值。
     let field_mode = analysis
@@ -113,14 +127,16 @@ fn render_field_inputs(analysis: AnalyzedFields) -> zyn::TokenStream {
         .iter()
         .any(|spec| !matches!(spec.strategy, FieldStrategy::Default));
     let original_input = analysis.item.to_token_stream().to_string();
+    let field_mode_ident = reflection::ident("__nestrs_constructor_field_mode", *binding_span);
+    let original_input_ident = reflection::ident("__nestrs_constructor_input", *binding_span);
 
     zyn! {
-            let __nestrs_constructor_field_mode = {{ field_mode }};
-            let __nestrs_constructor_input = {{ original_input }};
+            let {{ field_mode_ident }} = {{ field_mode }};
+            let {{ original_input_ident }} = {{ original_input }};
             ::std::vec![
             @for (spec in analysis.specs.iter()) {
                 @if (spec.is_injected()) {
-                    @EmitDependencyRequest(request = spec.dependency_request()),
+                    @EmitDependencyRequest(request = spec.dependency_request(), binding_span = *binding_span),
                 }
             }
             ]
@@ -144,12 +160,17 @@ mod tests {
         lazy: Option<bool>,
     ) -> String {
         CollectInjectableProvider {
+            binding_span: zyn::proc_macro2::Span::mixed_site(),
             source: crate::codegen::source::ProviderOrigin::from_args(
                 item.ident.clone(),
                 &syn::parse_quote!(),
                 None,
             ),
-            analysis: AnalyzedFields { item, specs },
+            analysis: AnalyzedFields {
+                item,
+                specs,
+                constructor_helpers: None,
+            },
             config,
             primary,
             lazy,
@@ -172,6 +193,7 @@ mod tests {
             })
             .unwrap();
             let rendered = CollectInjectableProvider {
+                binding_span: zyn::proc_macro2::Span::mixed_site(),
                 source: crate::codegen::source::ProviderOrigin::from_args(
                     analysis.item.ident.clone(),
                     &syn::parse_quote!(),

@@ -46,7 +46,42 @@ struct ConstructorService {
     later: External,
 }
 
+trait LocalConstructorNames {
+    fn __nestrs_ide_constructor_1_activate() -> usize {
+        47
+    }
+
+    fn __nestrs_ide_constructor_1_dependencies() -> usize {
+        53
+    }
+}
+
+impl LocalConstructorNames for ConstructorService {}
+
+use nestrs_ide_contracts::ExternalConstructorNames;
+impl ExternalConstructorNames for ConstructorService {}
+
 impl ConstructorService {
+    // 这些是合法业务成员。生成 adapter 必须与它们隔离，编辑器也应解析到业务定义。
+    const __NESTRS_CONSTRUCTOR: usize = 31;
+
+    fn __nestrs_constructor_activate() -> usize {
+        29
+    }
+
+    fn __nestrs_constructor_dependencies() -> usize {
+        37
+    }
+
+    // 编辑器连接名也必须依据本编译单元分配，不能换成长一点的固定保留名。
+    fn __nestrs_ide_constructor_0_activate() -> usize {
+        41
+    }
+
+    fn __nestrs_ide_constructor_0_dependencies() -> usize {
+        43
+    }
+
     #[constructor]
     fn new(input: dyn Port, #[lazy] delayed: External) -> Self {
         let actual_port = input;
@@ -115,5 +150,14 @@ async fn main() {
         .unwrap();
     assert_eq!(constructed.describe(), "generated-by-build-script");
     assert_eq!(constructed.delayed_number().await, 23);
+    assert_eq!(ConstructorService::__nestrs_constructor_activate(), 29);
+    assert_eq!(ConstructorService::__nestrs_constructor_dependencies(), 37);
+    assert_eq!(ConstructorService::__NESTRS_CONSTRUCTOR, 31);
+    assert_eq!(ConstructorService::__nestrs_ide_constructor_0_activate(), 41);
+    assert_eq!(ConstructorService::__nestrs_ide_constructor_0_dependencies(), 43);
+    assert_eq!(ConstructorService::__nestrs_ide_constructor_1_activate(), 47);
+    assert_eq!(ConstructorService::__nestrs_ide_constructor_1_dependencies(), 53);
+    assert_eq!(ConstructorService::__nestrs_ide_constructor_2_activate(), 59);
+    assert_eq!(ConstructorService::__nestrs_ide_constructor_2_dependencies(), 61);
     provider.dispose_async().await.unwrap();
 }

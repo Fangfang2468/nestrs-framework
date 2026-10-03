@@ -99,6 +99,7 @@ impl FieldSpec {
 /// 三个 consumer 始终共享同一份 [`FieldSpec`]。
 #[derive(Clone, Debug)]
 pub(crate) struct AnalyzedFields {
+    pub constructor_helpers: Option<crate::ide::constructor::HelperNames>,
     /// 已移除 `#[inject]` / `#[value]` marker 的原始结构体。
     pub item: syn::ItemStruct,
     /// 所有字段的稳定分析事实。
@@ -120,7 +121,11 @@ pub(crate) fn analyze_fields(mut item: syn::ItemStruct) -> syn::Result<AnalyzedF
     let specs = collect_field_specs(&item.fields)?;
     remove_field_strategy_attributes(&mut item.fields);
 
-    Ok(AnalyzedFields { item, specs })
+    Ok(AnalyzedFields {
+        item,
+        specs,
+        constructor_helpers: None,
+    })
 }
 
 /// 分析一个 `#[injectable]` 的所有字段。

@@ -265,7 +265,17 @@ def validate_model(path, project, alternate, release):
     assert 'panic="unwind"' in cfg and 'target_arch="x86_64"' in cfg, cfg
     assert app["env"]["NESTRS_FIXTURE_LABEL"] == "generated-by-build-script", app["env"]
     constructor_model = json.loads(app["env"]["NESTRS_IDE_CONSTRUCTORS"])
-    assert constructor_model["version"] == 1, constructor_model
+    assert constructor_model["version"] == 2, constructor_model
+    helpers = constructor_model["helpers"]
+    assert helpers and helpers["activate"] != helpers["dependencies"], constructor_model
+    assert not set(helpers.values()) & {
+        "__nestrs_constructor_activate", "__nestrs_constructor_dependencies",
+        "__nestrs_ide_constructor_0_activate", "__nestrs_ide_constructor_0_dependencies",
+        "__nestrs_ide_constructor_1_activate", "__nestrs_ide_constructor_1_dependencies",
+        "__nestrs_ide_constructor_2_activate", "__nestrs_ide_constructor_2_dependencies",
+    }, helpers
+    assert any("fn new" in method["input"] and "constructor_port" in method["input"]
+               for method in constructor_model["methods"]), constructor_model
     selections = [entry["selection"] for entry in constructor_model["declarations"] if "struct ConstructorService" in entry["input"]]
     assert len(selections) == 1 and selections[0]["constructor"], selections
     fields = {field["name"]: field for field in selections[0]["fields"]}
@@ -300,12 +310,39 @@ def lsp_cases(server, project, settings, environment, output, full, release):
         constructor_params = params(uri, source, "#[injectable]\nstruct ConstructorService", len("#["))
         constructor_expanded = session.until(
             lambda: session.request("rust-analyzer/expandMacro", constructor_params),
-            lambda item: item and "LazyInjection" in item.get("expansion", "") and "__nestrs_constructor_activate" in item.get("expansion", ""),
+            lambda item: item and "LazyInjection" in item.get("expansion", "") and "__nestrs_ide_constructor_" in item.get("expansion", ""),
             "constructor service expansion",
         )
         assert "Default::default" not in constructor_expanded["expansion"], constructor_expanded
         evidence["constructor_expansion"] = constructor_expanded
         evidence["cold_diagnostics"] = session.clean_diagnostics(uri)
+        # Generated associated helpers must neither shadow these business
+        # members nor redirect navigation into a macro expansion.
+        members = {}
+        for name, declaration, definition_file in [
+            ("__nestrs_constructor_activate", "fn __nestrs_constructor_activate()", main),
+            ("__nestrs_constructor_dependencies", "fn __nestrs_constructor_dependencies()", main),
+            ("__NESTRS_CONSTRUCTOR", "const __NESTRS_CONSTRUCTOR:", main),
+            ("__nestrs_ide_constructor_0_activate", "fn __nestrs_ide_constructor_0_activate()", main),
+            ("__nestrs_ide_constructor_0_dependencies", "fn __nestrs_ide_constructor_0_dependencies()", main),
+            ("__nestrs_ide_constructor_1_activate", "fn __nestrs_ide_constructor_1_activate()", main),
+            ("__nestrs_ide_constructor_1_dependencies", "fn __nestrs_ide_constructor_1_dependencies()", main),
+            ("__nestrs_ide_constructor_2_activate", "fn __nestrs_ide_constructor_2_activate()", project / "src/lib.rs"),
+            ("__nestrs_ide_constructor_2_dependencies", "fn __nestrs_ide_constructor_2_dependencies()", project / "src/lib.rs"),
+        ]:
+            location = params(uri, source, f"ConstructorService::{name}", len("ConstructorService::"))
+            hover = session.request("textDocument/hover", location)
+            assert hover and "usize" in json.dumps(hover), (name, hover)
+            definitions = session.request("textDocument/definition", location)
+            definitions = [definitions] if isinstance(definitions, dict) else definitions or []
+            expected_line = position(definition_file.read_text(encoding="utf-8"), declaration)["line"]
+            assert any(
+                file_uri_matches(item.get("targetUri", item.get("uri")), definition_file)
+                and item.get("targetSelectionRange", item.get("range", {})).get("start", {}).get("line") == expected_line
+                for item in definitions
+            ), (name, definitions)
+            members[name] = {"hover": hover, "definitions": definitions}
+        evidence["constructor_business_members"] = members
         profile_hover = session.request("textDocument/hover", params(uri, source, "let _ = editor_profile_value();", len("let _ = ")))
         assert profile_hover and ("usize" if release else "str") in json.dumps(profile_hover), profile_hover
         evidence["profile_cfg_hover"] = profile_hover

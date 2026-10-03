@@ -21,7 +21,7 @@ use rustc_ast::{
 };
 use rustc_data_structures::steal::Steal;
 use rustc_hir::{
-    def::{DefKind, Res},
+    def::{DefKind, PartialRes, Res},
     def_id::DefId,
 };
 use rustc_middle::{
@@ -63,7 +63,16 @@ pub fn provide(providers: &mut Providers) {
 
 struct Constructor {
     span: Span,
+    input: String,
     fields: BTreeMap<String, (usize, Box<ast::Ty>)>,
+    activate: Helper,
+    dependencies: Helper,
+}
+
+#[derive(Clone, Copy)]
+struct Helper {
+    ident: rustc_span::Ident,
+    definition: DefId,
 }
 
 /// impl -> 实际 struct 的映射只依赖名称解析，不能在这里调用 type_of 等 HIR 查询。
@@ -72,12 +81,33 @@ struct Declarations<'a, 'tcx> {
     resolver: &'a ty::ResolverAstLowering<'tcx>,
     impls: HashMap<DefId, DefId>,
     structs: HashMap<DefId, rustc_span::Ident>,
+    struct_parameters: HashMap<DefId, Vec<ParameterKind>>,
+    capture_identifiers: bool,
+    identifiers: HashSet<String>,
 }
 impl<'ast> Visitor<'ast> for Declarations<'_, '_> {
+    fn visit_ident(&mut self, ident: &'ast rustc_span::Ident) {
+        // IDE 的 inherent adapter 也可能遮蔽 trait 默认成员，或影响通过 Deref
+        // 查找的业务方法。标准展开后的完整标识符目录同时包括本地声明及真实
+        // 路径/方法调用，覆盖上游 blanket impl 和隐式 Deref，且无需在 HIR
+        // 尚未形成时触发 trait/type 查询。保守多排除一个名称不会改变业务语义。
+        if self.capture_identifiers {
+            self.identifiers.insert(ident.name.to_string());
+        }
+    }
+
     fn visit_item(&mut self, item: &'ast ast::Item) {
         if let Some(owner) = self.resolver.owners.get(&item.id) {
             match &item.kind {
-                ast::ItemKind::Struct(..) => {
+                ast::ItemKind::Struct(_, generics, _) => {
+                    self.struct_parameters.insert(
+                        owner.def_id.to_def_id(),
+                        generics
+                            .params
+                            .iter()
+                            .map(|parameter| parameter_kind(&parameter.kind))
+                            .collect(),
+                    );
                     self.structs.insert(
                         owner.def_id.to_def_id(),
                         item.kind.ident().expect("struct identifier"),
@@ -146,7 +176,10 @@ impl<'ast> Visitor<'ast> for Collect<'_, '_> {
                     .get(&item.id)
                     .and_then(|owner| self.declarations.impls.get(&owner.def_id.to_def_id()))
                     .copied();
-                let Some(service) = service.filter(|_| implementation.of_trait.is_none()) else {
+                let Some(service) = service.filter(|service| {
+                    implementation.of_trait.is_none()
+                        && self.declarations.struct_parameters.contains_key(service)
+                }) else {
                     self.tcx.dcx().span_err(associated.span, "#[constructor] 必须位于本 crate 服务结构体的 inherent impl 中；不能用于 trait impl 或无法确定服务身份的类型别名");
                     continue;
                 };
@@ -168,7 +201,42 @@ impl<'ast> Visitor<'ast> for Collect<'_, '_> {
                         .span_err(associated.span, "constructor 元数据没有对应的构造函数");
                     continue;
                 };
+                if !generic_constructor_covers_service(
+                    self.resolver,
+                    item.id,
+                    implementation,
+                    &self.declarations.struct_parameters[&service],
+                ) {
+                    self.tcx.dcx().span_err(function.ident.span, "#[constructor] 的 impl Self 必须覆盖服务的全部泛型实例：按服务参数位置使用 impl 自身互不重复的类型、生命周期或 const 参数；不支持具体类型、嵌套类型或重复参数的专门化构造 impl");
+                    continue;
+                }
                 let mut fields = BTreeMap::new();
+                // 不按业务成员的拼写连接 adapter。两个属性宏的 def-site 上下文
+                // 不同；保存本次 constructor 真正生成的 DefId，选中候选时完成
+                // 工具生成调用的解析，业务类型和参数 token 的上下文不变。
+                let helper = |name| {
+                    implementation.items.iter().find_map(|candidate| {
+                        let ast::AssocItemKind::Fn(function) = &candidate.kind else {
+                            return None;
+                        };
+                        (function.ident.as_str() == name
+                            && internal_access::trusted_span(self.tcx, function.ident.span))
+                        .then(|| {
+                            self.resolver.owners.get(&candidate.id).map(|owner| Helper {
+                                ident: function.ident,
+                                definition: owner.def_id.to_def_id(),
+                            })
+                        })
+                        .flatten()
+                    })
+                };
+                let (Some(activate), Some(dependencies)) = (helper(ACTIVATE), helper(DEPENDENCIES))
+                else {
+                    self.tcx
+                        .dcx()
+                        .span_err(associated.span, "constructor 缺少对应的内部执行适配器");
+                    continue;
+                };
                 match body::fields(
                     self.tcx,
                     self.resolver,
@@ -192,7 +260,10 @@ impl<'ast> Visitor<'ast> for Collect<'_, '_> {
                         service,
                         Constructor {
                             span: function.ident.span,
+                            input: metadata.input,
                             fields,
+                            activate,
+                            dependencies,
                         },
                     )
                     .is_some()
@@ -210,6 +281,123 @@ impl<'ast> Visitor<'ast> for Collect<'_, '_> {
 
 fn unraw(name: &str) -> &str {
     name.strip_prefix("r#").unwrap_or(name)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ParameterKind {
+    Lifetime,
+    Type,
+    Const,
+}
+
+fn parameter_kind(kind: &ast::GenericParamKind) -> ParameterKind {
+    match kind {
+        ast::GenericParamKind::Lifetime => ParameterKind::Lifetime,
+        ast::GenericParamKind::Type { .. } => ParameterKind::Type,
+        ast::GenericParamKind::Const { .. } => ParameterKind::Const,
+    }
+}
+
+/// 连接真实 AssocFn 前必须保证其 impl Self 对完整服务类型通用。原生关联方法
+/// probe 原本会做这一步，直接完成 Res 不能跳过此前提后让 typeck 假定它已成立。
+/// 这里只接受已解析的参数身份一一覆盖，允许改名、重排与 const 的无运算括号；
+/// 具体/嵌套/重复实参不是通用 constructor。剩余业务 bounds 继续由 rustc 检查。
+fn generic_constructor_covers_service(
+    resolver: &ty::ResolverAstLowering<'_>,
+    owner: ast::NodeId,
+    implementation: &ast::Impl,
+    parameters: &[ParameterKind],
+) -> bool {
+    if parameters.is_empty() {
+        return true;
+    }
+    let Some(owner) = resolver.owners.get(&owner) else {
+        return false;
+    };
+    let declared: HashMap<_, _> = implementation
+        .generics
+        .params
+        .iter()
+        .filter_map(|parameter| {
+            owner
+                .node_id_to_def_id
+                .get(&parameter.id)
+                .map(|definition| (definition.to_def_id(), parameter_kind(&parameter.kind)))
+        })
+        .collect();
+    let ast::TyKind::Path(None, path) = &implementation.self_ty.kind else {
+        return false;
+    };
+    let Some(ast::GenericArgs::AngleBracketed(arguments)) = path
+        .segments
+        .last()
+        .and_then(|segment| segment.args.as_deref())
+    else {
+        return false;
+    };
+    if arguments.args.len() != parameters.len() {
+        return false;
+    }
+    let direct_parameter = |id| match resolver.partial_res_map.get(&id)?.full_res()? {
+        Res::Def(DefKind::TyParam | DefKind::ConstParam, definition) => Some(definition),
+        _ => None,
+    };
+    fn type_parameter(value: &ast::Ty) -> Option<ast::NodeId> {
+        match &value.kind {
+            ast::TyKind::Path(None, path)
+                if path.segments.len() == 1 && path.segments[0].args.is_none() =>
+            {
+                Some(value.id)
+            }
+            ast::TyKind::Paren(inner) => type_parameter(inner),
+            _ => None,
+        }
+    }
+    fn const_parameter(value: &ast::Expr) -> Option<ast::NodeId> {
+        match &value.kind {
+            ast::ExprKind::Path(None, path)
+                if path.segments.len() == 1 && path.segments[0].args.is_none() =>
+            {
+                Some(value.id)
+            }
+            ast::ExprKind::Paren(inner) => const_parameter(inner),
+            ast::ExprKind::Block(block, None) if block.stmts.len() == 1 => {
+                if let ast::StmtKind::Expr(inner) = &block.stmts[0].kind {
+                    const_parameter(inner)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+    let mut seen = HashSet::new();
+    for (argument, expected) in arguments.args.iter().zip(parameters) {
+        let definition = match argument {
+            ast::AngleBracketedArg::Arg(ast::GenericArg::Lifetime(lifetime)) => {
+                match owner.get_lifetime_res(lifetime.id) {
+                    Some(rustc_hir::def::LifetimeRes::Param { param, .. }) => {
+                        Some(param.to_def_id())
+                    }
+                    _ => None,
+                }
+            }
+            ast::AngleBracketedArg::Arg(ast::GenericArg::Type(value)) => {
+                type_parameter(value).and_then(direct_parameter)
+            }
+            ast::AngleBracketedArg::Arg(ast::GenericArg::Const(value)) => {
+                const_parameter(&value.value).and_then(direct_parameter)
+            }
+            _ => None,
+        };
+        let Some(definition) = definition else {
+            return false;
+        };
+        if declared.get(&definition) != Some(expected) || !seen.insert(definition) {
+            return false;
+        }
+    }
+    seen.len() == declared.len()
 }
 
 fn service_resolution(
@@ -333,6 +521,16 @@ impl MutVisitor for Rewrite<'_, '_> {
             }
             if let ast::ExprKind::If(_, branch, Some(otherwise)) = &mut expression.kind {
                 expression.kind = if use_constructor {
+                    let constructor = &self.constructors[&service];
+                    connect_helper(
+                        self.resolver,
+                        branch,
+                        if dependencies {
+                            constructor.dependencies
+                        } else {
+                            constructor.activate
+                        },
+                    );
                     ast::ExprKind::Block(branch.clone(), None)
                 } else {
                     otherwise.kind.clone()
@@ -340,6 +538,59 @@ impl MutVisitor for Rewrite<'_, '_> {
             }
         }
         mut_visit::walk_expr(self, expression);
+    }
+}
+
+/// candidate 已认证分支及真实服务身份。以真实 DefId 完成内部关联调用的解析；
+/// def-site 标识符仍隔离业务同名成员，不通过改业务 impl 的上下文连接两个宏。
+/// 原路径前缀变为 QSelf，保留原有泛型参数和解析结果，继续由原生 typeck 检查
+/// 目标 impl 的 Self、参数、返回类型与约束；不向业务表达式传播生成访问权限。
+fn connect_helper(
+    resolver: &mut ty::ResolverAstLowering<'_>,
+    branch: &mut ast::Block,
+    helper: Helper,
+) {
+    let Some(statement) = branch.stmts.last_mut() else {
+        return;
+    };
+    let (ast::StmtKind::Expr(call) | ast::StmtKind::Semi(call)) = &mut statement.kind else {
+        return;
+    };
+    let ast::ExprKind::Call(function, _) = &mut call.kind else {
+        return;
+    };
+    let ast::ExprKind::Path(qself, path) = &mut function.kind else {
+        return;
+    };
+    let Some(original) = resolver.partial_res_map.get(&function.id).copied() else {
+        return;
+    };
+    if qself.is_none() && path.segments.len() > 1 {
+        let mut prefix = path.clone();
+        prefix.segments.pop();
+        let id = fresh_node(resolver, function.id);
+        resolver
+            .partial_res_map
+            .insert(id, PartialRes::new(original.base_res()));
+        *qself = Some(Box::new(ast::QSelf {
+            ty: Box::new(ast::Ty {
+                id,
+                kind: ast::TyKind::Path(None, prefix),
+                span: path.span,
+                tokens: None,
+            }),
+            path_span: path.span.shrink_to_lo(),
+            position: 0,
+        }));
+        let last = path.segments.pop().expect("nonempty helper path");
+        path.segments.clear();
+        path.segments.push(last);
+    }
+    if let Some(segment) = path.segments.last_mut() {
+        segment.ident.span = segment.ident.span.with_ctxt(helper.ident.span.ctxt());
+        let resolution = PartialRes::new(Res::Def(DefKind::AssocFn, helper.definition));
+        resolver.partial_res_map.insert(function.id, resolution);
+        resolver.partial_res_map.insert(segment.id, resolution);
     }
 }
 #[derive(Default)]
@@ -458,6 +709,9 @@ fn lower_constructors<'tcx>(
         resolver: &resolver,
         impls: HashMap::new(),
         structs: HashMap::new(),
+        struct_parameters: HashMap::new(),
+        capture_identifiers: CAPTURE_IDE.load(Ordering::Relaxed),
+        identifiers: HashSet::new(),
     };
     declarations.visit_crate(&krate);
     let mut collect = Collect {
@@ -470,6 +724,7 @@ fn lower_constructors<'tcx>(
     let constructors = collect.constructors;
     let impls = declarations.impls;
     let structs = declarations.structs;
+    let identifiers = declarations.identifiers;
     let mut rewrite = Rewrite {
         tcx,
         resolver: &mut resolver,
@@ -488,7 +743,7 @@ fn lower_constructors<'tcx>(
         }
     }
     if CAPTURE_IDE.load(Ordering::Relaxed) {
-        capture_model(tcx, &structs, &constructors, &rewrite.inputs);
+        capture_model(tcx, &structs, &constructors, &rewrite.inputs, &identifiers);
     }
     (
         tcx.arena.alloc(Steal::new(resolver)),
@@ -586,14 +841,60 @@ fn capture_model(
     structs: &HashMap<DefId, rustc_span::Ident>,
     constructors: &HashMap<DefId, Constructor>,
     inputs: &HashMap<DefId, String>,
+    identifiers: &HashSet<String>,
 ) {
     use cargo_nestrs::ide::constructor::{
-        ConstructorModel, Declaration, FieldPlan, Selection, SourceAnchor, write_constructor_model,
+        ConstructorModel, Declaration, FieldPlan, HelperNames, MethodDeclaration, Selection,
+        SourceAnchor, write_constructor_model,
     };
     if std::env::var_os("NESTRS_IDE_CAPTURE").is_none() {
         return;
     }
     let mut model = ConstructorModel::default();
+    let source_anchor = |span: Span| {
+        let start = tcx.sess.source_map().lookup_char_pos(span.lo());
+        let end = tcx.sess.source_map().lookup_char_pos(span.hi());
+        let rustc_span::FileName::Real(file) = &start.file.name else {
+            return None;
+        };
+        Some(SourceAnchor {
+            file: crate::documentation::remap_source_path(file.local_path()?),
+            line: start.line,
+            column: start.col.0,
+            end_line: end.line,
+            end_column: end.col.0,
+        })
+    };
+    if !constructors.is_empty() {
+        // RA 的标准宏协议不能传递两个独立展开的 rustc DefId。按当前完整标识符目录
+        // 分配一对可命名的编辑器连接，避免给业务成员设置任何永久保留的名称。
+        // 单元内共享分配结果，使同位置、同 token 的重复宏展开也得到一致的连接。
+        let names = (0u64..)
+            .find_map(|index| {
+                let activate = format!("__nestrs_ide_constructor_{index}_activate");
+                let dependencies = format!("__nestrs_ide_constructor_{index}_dependencies");
+                (!identifiers.contains(&activate) && !identifiers.contains(&dependencies))
+                    .then_some(HelperNames {
+                        activate,
+                        dependencies,
+                    })
+            })
+            .expect("finite identifier catalog");
+        model.helpers = Some(names);
+        for constructor in constructors.values() {
+            if let Some(anchor) = source_anchor(constructor.span) {
+                model.methods.push(MethodDeclaration {
+                    anchor,
+                    input: constructor.input.clone(),
+                });
+            }
+        }
+        model.methods.sort_by(|left, right| {
+            left.anchor
+                .cmp(&right.anchor)
+                .then_with(|| left.input.cmp(&right.input))
+        });
+    }
     for (service, input) in inputs {
         let Some(ident) = structs.get(service) else {
             continue;

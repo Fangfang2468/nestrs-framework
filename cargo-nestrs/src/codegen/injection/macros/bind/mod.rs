@@ -17,23 +17,34 @@ use zyn::{syn, zyn};
 /// 校验；本 element 只生成与该 impl 同一展开位置的类型化 projector 和描述
 /// binding callback。
 #[zyn::element]
-pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> zyn::TokenStream {
-    let reflection = crate::codegen::reflection::support(false);
-    let reflection_module = ident(protocol::REFLECTION_MODULE);
-    let binding_marker = ident(Marker::Binding.name());
+pub(crate) fn emit_bound_provider(
+    service: syn::Type,
+    interface: syn::Path,
+    binding_span: zyn::proc_macro2::Span,
+) -> zyn::TokenStream {
+    let reflection = crate::codegen::reflection::support(false, *binding_span);
+    let reflection_module = ident(protocol::REFLECTION_MODULE, *binding_span);
+    let binding_marker = ident(Marker::Binding.name(), *binding_span);
+    let projector = ident("__nestrs_project_bound_service", *binding_span);
+    let callback = ident("__nestrs_reflect_trait_binding", *binding_span);
+    let service_ref = ident("service", *binding_span);
+    let projected = ident("projected", *binding_span);
+    let slot = ident("slot", *binding_span);
+    let input = ident("input", *binding_span);
+    let target = ident("target", *binding_span);
     zyn! {
         #[allow(clippy::unused_unit)]
         const _: () = {
             {{ reflection }}
-            fn __nestrs_project_bound_service(
-                service: &{{ service }}
+            fn {{ projector }}(
+                {{ service_ref }}: &{{ service }}
             ) -> &(dyn {{ interface }} + 'static) {
-                let projected: &(dyn {{ interface }} + 'static) = service;
-                projected
+                let {{ projected }}: &(dyn {{ interface }} + 'static) = {{ service_ref }};
+                {{ projected }}
             }
         #[allow(dead_code)]
             #[allow(clippy::needless_borrow)]
-            fn __nestrs_reflect_trait_binding()
+            fn {{ callback }}()
                 -> ::nestrs_core::activation::adapter::ProjectionAdapter
             {
                 {{ reflection_module }}::{{ binding_marker }}::<{{ service }}, dyn {{ interface }}>();
@@ -45,18 +56,18 @@ pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> z
                         {{ service }}
                     >(),
                     project: (|
-                        slot: ::nestrs_core::activation::InputSlot,
-                        input: ::nestrs_core::activation::ErasedServiceRef,
-                        target: &mut ::nestrs_core::activation::ProjectionTarget<'_>,
+                        {{ slot }}: ::nestrs_core::activation::InputSlot,
+                        {{ input }}: ::nestrs_core::activation::ErasedServiceRef,
+                        {{ target }}: &mut ::nestrs_core::activation::ProjectionTarget<'_>,
                     | {
                         ::nestrs_core::activation::project_bound::<
                             {{ service }},
                             dyn {{ interface }},
                         >(
-                            slot,
-                            input,
-                            target,
-                            __nestrs_project_bound_service,
+                            {{ slot }},
+                            {{ input }},
+                            {{ target }},
+                            {{ projector }},
                         )
                     }) as ::nestrs_core::activation::ServiceProjector,
                 }
@@ -75,6 +86,7 @@ mod tests {
     #[test]
     fn emits_a_binding_with_typed_projectors_without_a_separate_key_policy() {
         let rendered = EmitBoundProvider {
+            binding_span: zyn::proc_macro2::Span::mixed_site(),
             service: syn::parse_str("ConcreteService").expect("service type should parse"),
             interface: syn::parse_str("Port").expect("trait path should parse"),
         }

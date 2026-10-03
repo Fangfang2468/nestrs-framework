@@ -14,8 +14,11 @@ use zyn::zyn;
 /// children 的 block 解析为 item scope；它对 const 的值是必要的自然 unit，因此由
 /// 生成 const 的局部 lint allow 屏蔽，而不会泄漏到调用方。
 #[zyn::element]
-pub(crate) fn emit_injectable_registration(children: zyn::TokenStream) -> zyn::TokenStream {
-    let reflection = crate::codegen::reflection::support(false);
+pub(crate) fn emit_injectable_registration(
+    children: zyn::TokenStream,
+    binding_span: zyn::proc_macro2::Span,
+) -> zyn::TokenStream {
+    let reflection = crate::codegen::reflection::support(false, *binding_span);
     zyn! {
         #[allow(clippy::unused_unit)]
         const _: () = {
@@ -35,6 +38,7 @@ mod tests {
     fn keeps_supplied_constructor_and_provider_in_one_lexical_scope() {
         let input = zyn::Input::default();
         let rendered = EmitInjectableRegistration {
+            binding_span: zyn::proc_macro2::Span::mixed_site(),
             children: quote! {
                 fn __nestrs_construct() {}
 

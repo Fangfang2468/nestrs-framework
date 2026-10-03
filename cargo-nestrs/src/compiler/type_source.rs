@@ -11,8 +11,8 @@ use rustc_hir::definitions::{DefPathData, DefPathDataName, DisambiguatedDefPathD
 use rustc_middle::ty::print::{
     FmtPrinter, PrettyPrinter, Print, PrintError, Printer, WrapBinderMode,
 };
-use rustc_middle::ty::{self, GenericArg, Ty, TyCtxt, TypeFoldable, TypeFolder};
-use rustc_span::{Ident, Symbol};
+use rustc_middle::ty::{self, GenericArg, Ty, TyCtxt, TypeFoldable, TypeFolder, Upcast as _};
+use rustc_span::Symbol;
 use std::collections::HashMap;
 use std::fmt::{self, Write};
 use std::rc::Rc;
@@ -202,7 +202,86 @@ impl<'tcx> Printer<'tcx> for SourcePrinter<'tcx> {
         &mut self,
         predicates: &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>,
     ) -> Result<(), PrintError> {
-        self.pretty_print_dyn_existential(predicates)
+        // rustc's diagnostic projection printer writes the associated item's
+        // Symbol directly, bypassing print_path_with_simple. Only these names
+        // need a source-specific path; retain the standard Fn(...) sugar and
+        // other diagnostic formatting whenever every binding name is legal.
+        if !predicates.projection_bounds().any(|projection| {
+            self.identifier_needs_raw(self.tcx.item_name(projection.skip_binder().def_id))
+        }) {
+            return self.pretty_print_dyn_existential(predicates);
+        }
+
+        let mut first = true;
+        if let Some(bound_principal) = predicates.principal() {
+            self.wrap_binder(
+                &bound_principal,
+                WrapBinderMode::ForAll,
+                |principal, printer| {
+                    let tcx = printer.tcx;
+                    printer.print_def_path(principal.def_id, &[])?;
+                    let principal_with_self =
+                        principal.with_self_ty(tcx, tcx.types.trait_object_dummy_self);
+                    let args = tcx
+                        .generics_of(principal.def_id)
+                        .own_args_no_defaults(tcx, principal_with_self.args);
+
+                    // A supertrait may already bind an associated type under its
+                    // own lifetime binder. Reprinting that equality on the outer
+                    // object can be invalid, so preserve rustc's typed implication
+                    // check instead of reconstructing bindings from display text.
+                    let clause: ty::Clause<'tcx> = bound_principal
+                        .with_self_ty(tcx, tcx.types.trait_object_dummy_self)
+                        .upcast(tcx);
+                    let implied: Vec<_> = ty::elaborate::elaborate(tcx, [clause])
+                        .filter_only_self()
+                        .filter_map(|clause| clause.as_projection_clause())
+                        .map(|projection| {
+                            tcx.erase_and_anonymize_regions(projection.map_bound(|projection| {
+                                ty::ExistentialProjection::erase_self_ty(tcx, projection)
+                            }))
+                        })
+                        .collect();
+                    let mut projections: Vec<_> = predicates
+                        .projection_bounds()
+                        .filter(|projection| {
+                            !implied.contains(&tcx.erase_and_anonymize_regions(*projection))
+                        })
+                        .map(|projection| projection.skip_binder())
+                        .collect();
+                    projections.sort_by_cached_key(|projection| {
+                        tcx.item_name(projection.def_id).to_string()
+                    });
+
+                    if !args.is_empty() || !projections.is_empty() {
+                        printer.generic_delimiters(|printer| {
+                            printer.comma_sep(args.iter().copied())?;
+                            let mut separator = !args.is_empty();
+                            for projection in projections {
+                                if separator {
+                                    printer.write_str(", ")?;
+                                }
+                                separator = true;
+                                printer.print_source_projection(projection)?;
+                            }
+                            Ok(())
+                        })?;
+                    }
+                    Ok(())
+                },
+            )?;
+            first = false;
+        }
+        let mut auto_traits: Vec<_> = predicates.auto_traits().collect();
+        auto_traits.sort_by_cached_key(|definition| self.tcx.def_path_str(*definition));
+        for definition in auto_traits {
+            if !first {
+                self.write_str(" + ")?;
+            }
+            first = false;
+            self.print_def_path(definition, &[])?;
+        }
+        Ok(())
     }
 
     fn print_const(&mut self, value: ty::Const<'tcx>) -> Result<(), PrintError> {
@@ -226,7 +305,7 @@ impl<'tcx> Printer<'tcx> for SourcePrinter<'tcx> {
             .get(&krate)
             .cloned()
             .unwrap_or_else(|| self.tcx.crate_name(krate).to_string());
-        let raw = Ident::with_dummy_span(Symbol::intern(&name)).is_raw_guess();
+        let raw = self.identifier_needs_raw(Symbol::intern(&name));
         write!(self, "::{}{name}", if raw { "r#" } else { "" })
     }
 
@@ -243,7 +322,7 @@ impl<'tcx> Printer<'tcx> for SourcePrinter<'tcx> {
             self.write_str("::")?;
         }
         if let DefPathDataName::Named(name) = data.data.name()
-            && Ident::with_dummy_span(name).is_raw_guess()
+            && self.identifier_needs_raw(name)
         {
             self.write_str("r#")?;
         }
@@ -301,6 +380,31 @@ impl<'tcx> Printer<'tcx> for SourcePrinter<'tcx> {
     fn reset_path(&mut self) -> Result<(), PrintError> {
         self.empty_path = true;
         Ok(())
+    }
+}
+
+impl<'tcx> SourcePrinter<'tcx> {
+    fn identifier_needs_raw(&self, name: Symbol) -> bool {
+        // Generated overlays are parsed in the consuming crate's edition,
+        // even when a name originated in metadata from an older edition.
+        name.can_be_raw() && name.is_reserved(|| self.tcx.sess.edition())
+    }
+
+    fn print_source_projection(
+        &mut self,
+        projection: ty::ExistentialProjection<'tcx>,
+    ) -> Result<(), PrintError> {
+        let name = self.tcx.associated_item(projection.def_id).name();
+        let raw = self.identifier_needs_raw(name);
+        // Existential args omit Self; the associated item's generics still
+        // include it. Keep only the item's own arguments, as rustc does.
+        let args = &projection.args[self.tcx.generics_of(projection.def_id).parent_count - 1..];
+        self.print_path_with_generic_args(
+            |printer| write!(printer, "{}{name}", if raw { "r#" } else { "" }),
+            args,
+        )?;
+        self.write_str(" = ")?;
+        projection.term.print(self)
     }
 }
 

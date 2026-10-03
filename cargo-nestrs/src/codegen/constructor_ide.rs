@@ -6,27 +6,67 @@
 
 use zyn::{quote::ToTokens, syn};
 
-use crate::ide::constructor::{ConstructorModel, MODEL_ENV, Selection, SourceAnchor};
+use crate::ide::constructor::{ConstructorModel, HelperNames, MODEL_ENV, Selection, SourceAnchor};
 
 use super::injection::sub_macros::inject::{GrammarMessages, split_optional};
 
 /// 无环境模型表示正常编译；有模型时必须精确匹配，不能在编辑内容变化后退回猜测。
-pub(super) fn selection(item: &syn::ItemStruct) -> syn::Result<Option<Selection>> {
+pub(super) struct EditorSelection {
+    pub selection: Selection,
+    pub helpers: Option<HelperNames>,
+}
+
+fn model(span: zyn::proc_macro2::Span) -> syn::Result<Option<ConstructorModel>> {
     let Some(environment) = std::env::var_os(MODEL_ENV) else {
         return Ok(None);
     };
     let environment = environment
         .into_string()
-        .map_err(|_| syn::Error::new_spanned(&item.ident, "constructor IDE 模型必须为 UTF-8"))?;
+        .map_err(|_| syn::Error::new(span, "constructor IDE 模型必须为 UTF-8"))?;
     let model: ConstructorModel = serde_json::from_str(&environment).map_err(|error| {
-        syn::Error::new_spanned(
-            &item.ident,
+        syn::Error::new(
+            span,
             format!("constructor IDE 模型损坏：{error}；请重新运行 cargo nestrs init"),
         )
     })?;
-    let model = normalize_model(model)?;
+    normalize_model(model).map(Some)
+}
+
+pub(super) fn selection(item: &syn::ItemStruct) -> syn::Result<Option<EditorSelection>> {
     let span = item.ident.span();
+    let Some(model) = model(span)? else {
+        return Ok(None);
+    };
     let input = item.to_token_stream().to_string();
+    let selected = match anchor(span) {
+        Some(anchor) => model.lookup(&anchor, &input),
+        None => model.lookup_without_anchor(&input),
+    }
+    .map_err(|message| syn::Error::new(span, message))?;
+    if selected.constructor && model.helpers.is_none() {
+        return Err(syn::Error::new(
+            span,
+            "constructor IDE 模型缺少已分配的辅助项身份，请刷新项目模型",
+        ));
+    }
+    Ok(Some(EditorSelection {
+        selection: selected,
+        helpers: model.helpers,
+    }))
+}
+
+pub(super) fn method_helpers(item: &syn::ImplItemFn) -> syn::Result<Option<HelperNames>> {
+    let span = item.sig.ident.span();
+    let Some(model) = model(span)? else {
+        return Ok(None);
+    };
+    model
+        .lookup_method(anchor(span).as_ref(), &item.to_token_stream().to_string())
+        .map(Some)
+        .map_err(|message| syn::Error::new(span, message))
+}
+
+fn anchor(span: zyn::proc_macro2::Span) -> Option<SourceAnchor> {
     // 原版 RA 的部分 proc-macro 协议不给 local_file；可用的真实 file 路径优先，
     // 完全无位置时让模型执行严格的整声明匹配，不伪造一个源码 anchor。
     let file = span.local_file().or_else(|| {
@@ -36,25 +76,16 @@ pub(super) fn selection(item: &syn::ItemStruct) -> syn::Result<Option<Selection>
         }
         std::path::PathBuf::from(display).canonicalize().ok()
     });
-    let Some(file) = file else {
-        return model
-            .lookup_without_anchor(&input)
-            .map(Some)
-            .map_err(|message| syn::Error::new_spanned(&item.ident, message));
-    };
+    let file = file?;
     let start = span.start();
     let end = span.end();
-    let anchor = SourceAnchor {
+    Some(SourceAnchor {
         file: file.canonicalize().unwrap_or(file),
         line: start.line,
         column: start.column,
         end_line: end.line,
         end_column: end.column,
-    };
-    model
-        .lookup(&anchor, &input)
-        .map(Some)
-        .map_err(|message| syn::Error::new_spanned(&item.ident, message))
+    })
 }
 
 /// rustc 与不同版本的 RA 宏服务可能给 TokenStream::Display 使用不同空白格式。
@@ -64,6 +95,10 @@ fn normalize_model(mut model: ConstructorModel) -> syn::Result<ConstructorModel>
     for declaration in &mut model.declarations {
         let item = syn::parse_str::<syn::ItemStruct>(&declaration.input)?;
         declaration.input = item.to_token_stream().to_string();
+    }
+    for method in &mut model.methods {
+        let item = syn::parse_str::<syn::ImplItemFn>(&method.input)?;
+        method.input = item.to_token_stream().to_string();
     }
     Ok(model)
 }
@@ -135,6 +170,8 @@ mod tests {
         let item: syn::ItemStruct = syn::parse_str(source).unwrap();
         let model = ConstructorModel {
             version: MODEL_VERSION,
+            helpers: None,
+            methods: Vec::new(),
             declarations: vec![Declaration {
                 anchor: SourceAnchor {
                     file: "/main.rs".into(),

@@ -56,6 +56,56 @@ fn constructors_preserve_dependency_and_lifetime_semantics_across_crates() {
 }
 
 #[test]
+fn generic_constructor_identity_is_total_before_connecting_associated_adapters() {
+    for release in [false, true] {
+        let mut valid = command("run", "generic_identity");
+        if release {
+            valid.arg("--release");
+        }
+        let output = valid.output().unwrap();
+        assert!(
+            output.status.success(),
+            "generic identity release={release}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains("constructor generic parameter identities passed")
+        );
+        // 必须是准确的边界诊断，不能把旧的 rustc ICE/任意 exit101 当成拒绝成功。
+        for binary in [
+            "invalid_specialized",
+            "invalid_nested_generic",
+            "invalid_repeated_generic",
+            "invalid_specialized_const",
+        ] {
+            let mut invalid = command("check", binary);
+            if release {
+                invalid.arg("--release");
+            }
+            let output = invalid.output().unwrap();
+            let diagnostic = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{binary} release={release}");
+            assert!(
+                diagnostic.contains("impl Self 必须覆盖服务的全部泛型实例"),
+                "{binary} release={release}: {diagnostic}"
+            );
+            assert!(
+                !diagnostic.contains("internal compiler error")
+                    && !diagnostic.contains("custom attribute panicked"),
+                "{binary} release={release}: {diagnostic}"
+            );
+            assert!(
+                diagnostic
+                    .replace('\\', "/")
+                    .contains(&format!("src/bin/{binary}.rs")),
+                "{diagnostic}"
+            );
+        }
+    }
+}
+
+#[test]
 fn invalid_constructors_fail_during_check_with_contextual_diagnostics() {
     // 不绑定完整 rustc 排版；要求明确拒绝对应 constructor 契约，避免把其他类型错误
     // 或驱动崩溃误当成预期失败。图错误另外核对其类型与相关服务名。
@@ -75,18 +125,28 @@ fn invalid_constructors_fail_during_check_with_contextual_diagnostics() {
         ("arguments", &["constructor"][..]),
         ("orphan", &["constructor"][..]),
         ("free_function", &["constructor"][..]),
+        ("specialized", &["impl Self 必须覆盖服务的全部泛型实例"][..]),
+        (
+            "nested_generic",
+            &["impl Self 必须覆盖服务的全部泛型实例"][..],
+        ),
+        (
+            "repeated_generic",
+            &["impl Self 必须覆盖服务的全部泛型实例"][..],
+        ),
+        (
+            "specialized_const",
+            &["impl Self 必须覆盖服务的全部泛型实例"][..],
+        ),
         (
             "helper_dependencies",
-            &["内部 adapter 和元数据只能由工具链生成代码访问"][..],
+            &["E0599", "__nestrs_constructor_dependencies"][..],
         ),
         (
             "helper_activate",
-            &["内部 adapter 和元数据只能由工具链生成代码访问"][..],
+            &["E0599", "__nestrs_constructor_activate"][..],
         ),
-        (
-            "helper_metadata",
-            &["内部 adapter 和元数据只能由工具链生成代码访问"][..],
-        ),
+        ("helper_metadata", &["E0599", "__NESTRS_CONSTRUCTOR"][..]),
         ("error_debug", &["Debug"][..]),
         ("missing", &["MissingDependency", "Missing"][..]),
         ("scope", &["ScopeRequired", "Session"][..]),

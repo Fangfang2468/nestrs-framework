@@ -351,6 +351,13 @@ fn native_ide_preserves_nonstandard_cargo_source_paths_and_constructor_models() 
         let constructors: Value =
             serde_json::from_str(entry["env"]["NESTRS_IDE_CONSTRUCTORS"].as_str().unwrap())
                 .unwrap();
+        let methods = constructors["methods"].as_array().unwrap();
+        assert!(!methods.is_empty());
+        for method in methods {
+            let file = Path::new(method["anchor"]["file"].as_str().unwrap());
+            assert!(file.is_absolute(), "constructor method anchor: {method}");
+            assert_eq!(file, root.canonicalize().unwrap());
+        }
         assert!(
             constructors["declarations"]
                 .as_array()
