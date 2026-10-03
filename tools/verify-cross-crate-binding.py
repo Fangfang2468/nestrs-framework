@@ -15,6 +15,7 @@ from toolchain_support import bridge_name, executable_name
 
 
 BINARIES = {
+    "transitive_visibility": "cross-crate visibility: inaccessible transitive capabilities skipped and reexported blanket trait preserved",
     "lazy_cross_crate": "cross-crate lazy: library field shares the upstream private async factory instance",
     "downstream_demand": "cross-crate downstream demand: public class and private factory share singleton projections",
     "sibling_selection": "cross-crate siblings: primary, exact key and present/absent optional injection passed",
@@ -72,6 +73,12 @@ def verify_graph(path, binary):
         found = [node for node in nodes if node["name"].endswith(suffix) and node["key"] == key]
         assert len(found) == 1, f"{binary}: expected exactly one {suffix} with key {key}: {found}"
         return found[0]
+
+    if binary == "transitive_visibility":
+        # 本入口只链接 contracts 和自己的服务；不为了复用其它入口断言引入无关 provider。
+        service = select("transitive_visibility::Service")
+        assert len(nodes) == 1 and not service["dependencies"]
+        return {"nodes": len(nodes), "dormant_generic_absent": True}
 
     primary = select("nestrs_cross_primary_provider::implementation::Service")
     fallback = select("nestrs_cross_fallback_provider::implementation::Service")

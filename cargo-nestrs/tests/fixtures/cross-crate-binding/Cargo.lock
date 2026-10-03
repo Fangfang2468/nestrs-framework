@@ -63,6 +63,9 @@ dependencies = [
 [[package]]
 name = "nestrs-cross-contracts"
 version = "0.0.0"
+dependencies = [
+ "nestrs-cross-transitive-contracts",
+]
 
 [[package]]
 name = "nestrs-cross-crate-binding"
@@ -102,6 +105,10 @@ dependencies = [
  "nestrs-core",
  "nestrs-cross-contracts",
 ]
+
+[[package]]
+name = "nestrs-cross-transitive-contracts"
+version = "0.0.0"
 
 [[package]]
 name = "nestrs-cross-upstream-consumer"

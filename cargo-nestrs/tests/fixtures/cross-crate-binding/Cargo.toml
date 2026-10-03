@@ -7,7 +7,7 @@ default-run = "downstream_demand"
 
 [workspace]
 resolver = "3"
-members = ["contracts", "primary-provider", "fallback-provider", "upstream-consumer", "sibling-consumer"]
+members = ["contracts", "transitive-contracts", "primary-provider", "fallback-provider", "upstream-consumer", "sibling-consumer"]
 
 [workspace.dependencies]
 nestrs-core = { path = "../../../../nestrs-core" }

@@ -33,6 +33,21 @@ impl<'tcx> SourceTypes<'tcx> {
     }
 
     pub fn render(&self, ty: Ty<'tcx>) -> String {
+        self.render_source(ty).0
+    }
+
+    /// 只有实际打印路径的每个 crate 根都能被当前源码引用，才交付生成用类型。
+    ///
+    /// rustc 的诊断打印器可以为传递依赖输出规范 crate 名，但该名字未必存在于
+    /// 当前 extern prelude。不能把“metadata 中可见”误认为“源码中可以命名”。
+    /// 这里检查的是 visible-parent 重导出选择之后的实际路径，因此不会排除
+    /// 通过直接依赖重导出的传递类型，也会检查 trait 泛型参数里的隐藏类型。
+    pub fn render_if_nameable(&self, ty: Ty<'tcx>) -> Option<String> {
+        let (source, nameable) = self.render_source(ty);
+        nameable.then_some(source)
+    }
+
+    fn render_source(&self, ty: Ty<'tcx>) -> (String, bool) {
         // Diagnostic printing restarts its region-name allocator for each
         // binder. Give every bound region a unique source name first, including
         // regions captured from an outer binder. Only this printable type copy
@@ -48,10 +63,11 @@ impl<'tcx> SourceTypes<'tcx> {
             empty_path: false,
             in_value: false,
             crate_names: self.crate_names.clone(),
+            nameable: true,
         };
         rustc_middle::ty::print::with_no_trimmed_paths!(printer.print_type(ty))
             .expect("writing a type to String cannot fail");
-        printer.output
+        (printer.output, printer.nameable)
     }
 }
 
@@ -144,6 +160,7 @@ struct SourcePrinter<'tcx> {
     empty_path: bool,
     in_value: bool,
     crate_names: Rc<HashMap<CrateNum, String>>,
+    nameable: bool,
 }
 
 impl fmt::Write for SourcePrinter<'_> {
@@ -197,6 +214,13 @@ impl<'tcx> Printer<'tcx> for SourcePrinter<'tcx> {
         if krate == LOCAL_CRATE {
             return self.write_str("crate");
         }
+        // Cargo 的 --extern 映射包含依赖重命名；直接 extern 还覆盖 rustc 注入的
+        // std/core 和用户显式 extern crate。其余 canonical 根只适合作诊断文本。
+        self.nameable &= self.crate_names.contains_key(&krate)
+            || self
+                .tcx
+                .extern_crate(krate)
+                .is_some_and(|entry| entry.is_direct());
         let name = self
             .crate_names
             .get(&krate)

@@ -3,3 +3,6 @@ name = "nestrs-cross-contracts"
 version = "0.0.0"
 edition = "2024"
 publish = false
+
+[dependencies]
+transitive-contracts = { package = "nestrs-cross-transitive-contracts", path = "../transitive-contracts" }

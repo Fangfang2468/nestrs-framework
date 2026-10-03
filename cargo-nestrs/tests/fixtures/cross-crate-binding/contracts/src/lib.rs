@@ -1,5 +1,9 @@
 //! Business contracts have no dependency on the DI runtime or tooling.
 
+// 业务只通过 contracts 使用这些接口；不能要求每个消费者再直接依赖其定义 crate。
+// HiddenArgument 没有重导出，WithHiddenArgument 的被动能力仍不能生成非法类型实参。
+pub use transitive_contracts::{ExposedMarker, PublicCapability, WithHiddenArgument};
+
 mod ports {
     pub trait InventoryPort: Send + Sync {
         fn available(&self) -> usize;

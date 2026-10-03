@@ -554,9 +554,23 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Analysis, String> {
                 .sess
                 .source_map()
                 .lookup_char_pos(marker.span.source_callsite().lo());
+            let (Some(concrete_source), Some(interface_source)) = (
+                type_source.render_if_nameable(*concrete),
+                type_source.render_if_nameable(*interface),
+            ) else {
+                // 被动能力目录可能包含仅从传递 metadata 看见的 blanket impl。
+                // 它不是业务需求，不能为它生成当前 crate 无法命名的源码路径。
+                // 已明确请求的接口仍报错，不能静默丢掉真实业务依赖。
+                if requests.contains(interface) {
+                    return Err(format!(
+                        "cannot name automatic binding from {concrete} to {interface}: the generated type path requires a direct extern crate or an accessible reexport; private upstream services require a producer capability"
+                    ));
+                }
+                continue;
+            };
             let binding = BindingSpec {
-                concrete: type_source.render(*concrete),
-                interface: type_source.render(*interface),
+                concrete: concrete_source,
+                interface: interface_source,
                 source_file: source.file.name.prefer_local_unconditionally().to_string(),
                 source_line: source.line as u32,
                 source_column: source.col.0 as u32 + 1,
