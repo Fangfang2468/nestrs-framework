@@ -53,7 +53,7 @@ async fn query_entity(provider: &crate::ServiceProvider) {
 }
 
 fn node<T: Send + Sync + 'static>() -> &'static crate::graph::CompiledNode {
-    crate::graph::plan::load()
+    crate::graph::plan::CompiledApplication::load()
         .graph
         .nodes
         .iter()
@@ -80,7 +80,7 @@ fn generic_query_freezes_exact_execution_type_lifetime_and_cleanup() {
 
 #[test]
 fn injected_generic_repository_uses_a_closed_target_without_runtime_materialization() {
-    let graph = &crate::graph::plan::load().graph;
+    let graph = &crate::graph::plan::CompiledApplication::load().graph;
     let service = node::<UserService>();
     assert_eq!(service.dependencies.len(), 1);
     let input = &service.dependencies[0];
@@ -108,7 +108,7 @@ fn injected_generic_repository_uses_a_closed_target_without_runtime_materializat
 
 #[test]
 fn nested_closed_generics_freeze_a_complete_execution_chain() {
-    let graph = &crate::graph::plan::load().graph;
+    let graph = &crate::graph::plan::CompiledApplication::load().graph;
     let c = node::<C>();
     assert_eq!(c.dependencies.len(), 1);
     let b = &graph.nodes[c.dependencies[0].input.target().unwrap()];

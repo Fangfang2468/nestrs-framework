@@ -147,7 +147,7 @@ async fn configured_fields_construct_named_tuple_generic_and_empty_services() {
 
 #[test]
 fn configured_dependency_slots_are_contiguous_and_preserve_requested_fields() {
-    let graph = &crate::graph::plan::load().graph;
+    let graph = &crate::graph::plan::CompiledApplication::load().graph;
     for (service_type, labels) in [
         (
             ServiceType::create::<Named>(),

@@ -192,7 +192,7 @@ fn complete_immediately<T>(mut future: Pin<Box<dyn Future<Output = T> + Send + '
 }
 
 fn node<T: Send + Sync + 'static>() -> &'static crate::graph::CompiledNode {
-    crate::graph::plan::load()
+    crate::graph::plan::CompiledApplication::load()
         .graph
         .nodes
         .iter()
@@ -202,7 +202,7 @@ fn node<T: Send + Sync + 'static>() -> &'static crate::graph::CompiledNode {
 
 #[test]
 fn factory_compiles_configuration_and_parameter_inputs() {
-    let graph = &crate::graph::plan::load().graph;
+    let graph = &crate::graph::plan::CompiledApplication::load().graph;
     let configured = node::<ConfiguredService>();
     assert_eq!(
         configured.identifier,
@@ -338,7 +338,7 @@ async fn factory_invokers_construct_all_supported_return_shapes_and_report_failu
 
 #[test]
 fn factory_primary_order_and_aliases_select_one_real_execution_target() {
-    let graph = &crate::graph::plan::load().graph;
+    let graph = &crate::graph::plan::CompiledApplication::load().graph;
     for (port, service_type) in [
         (
             ServiceType::create::<dyn PrimaryBefore>(),

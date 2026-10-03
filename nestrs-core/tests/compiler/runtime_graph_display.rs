@@ -97,7 +97,7 @@ struct GraphConsumer {
 
 #[tokio::test]
 async fn graph_snapshot_observes_static_graph_without_constructing_or_merging_transient_slots() {
-    let graph = crate::graph::snapshot(&crate::graph::plan::load().graph).to_string();
+    let graph = crate::graph::snapshot(&crate::graph::plan::CompiledApplication::load().graph).to_string();
     assert_eq!(CONSTRUCTIONS.load(Ordering::SeqCst), 0);
     let data: serde_json::Value = serde_json::from_str(&graph).unwrap();
     assert_eq!(data["version"], 1);
@@ -193,6 +193,6 @@ async fn graph_snapshot_observes_static_graph_without_constructing_or_merging_tr
     provider.dispose_async().await.unwrap();
     assert_eq!(
         graph,
-        crate::graph::snapshot(&crate::graph::plan::load().graph).to_string()
+        crate::graph::snapshot(&crate::graph::plan::CompiledApplication::load().graph).to_string()
     );
 }

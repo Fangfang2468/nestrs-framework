@@ -89,7 +89,7 @@ async fn primary_queries(provider: &crate::ServiceProvider) {
 }
 
 fn node<T: Send + Sync + 'static>() -> &'static crate::graph::CompiledNode {
-    crate::graph::plan::load()
+    crate::graph::plan::CompiledApplication::load()
         .graph
         .nodes
         .iter()
@@ -99,7 +99,7 @@ fn node<T: Send + Sync + 'static>() -> &'static crate::graph::CompiledNode {
 
 #[test]
 fn injectable_compiles_execution_policy_and_exact_dependency_slots() {
-    let graph = &crate::graph::plan::load().graph;
+    let graph = &crate::graph::plan::CompiledApplication::load().graph;
     let controller = node::<Controller>();
     assert!(matches!(controller.constructor, Constructor::Class(_)));
     assert_eq!(
@@ -196,7 +196,7 @@ fn generated_value_expressions_cleanup_and_primary_keep_their_business_semantics
         .cleanup
         .expect("cleanup callback")());
 
-    let graph = &crate::graph::plan::load().graph;
+    let graph = &crate::graph::plan::CompiledApplication::load().graph;
     for (port, selected) in [
         (
             ServiceType::create::<dyn BeforePort>(),

@@ -62,7 +62,7 @@ fn reports_token_with_plan(
     let slot = InputSlot::new(0);
     let dependency = LazyDependency {
         resolver,
-        check_wait_allowed: super::check_wait_allowed,
+        check_wait_allowed: super::ActivationContext::check_wait_allowed,
         plan,
     };
     let mut preparation = ActivationPreparation::new(1);
@@ -189,7 +189,7 @@ async fn lazy_edges_skip_activation_waits_but_order_cleanup_after_the_consumer()
 
 #[tokio::test]
 async fn worker_wait_rejection_does_not_poison_or_resubmit_a_lazy_occurrence() {
-    use super::IN_ACTIVATION;
+    use super::ActivationContext;
     use crate::{
         activation::{DependencyLease, ReleaseDomain},
         runtime::{handle::Command, owner::OwnerData},
@@ -201,7 +201,7 @@ async fn worker_wait_rejection_does_not_poison_or_resubmit_a_lazy_occurrence() {
     let owner = OwnerData::new(7, commands.downgrade());
     let token = reports_token(&owner);
 
-    let error = IN_ACTIVATION.scope((), token.get()).await.err().unwrap();
+    let error = ActivationContext::run(token.get()).await.err().unwrap();
     assert!(error.to_string().contains("服务构造期间不能首次获取"));
     assert!(error.to_string().contains("reports"));
     assert!(requests.try_recv().is_err(), "拒绝等待不能提前提交初始化");
@@ -225,7 +225,7 @@ async fn worker_wait_rejection_does_not_poison_or_resubmit_a_lazy_occurrence() {
 
     // 此时第一个调用仍持有 OnceCell 的初始化权。若把保护仅搬进 resolve，
     // 后来的构造 worker 会先等待 OnceCell，永远没有机会检查许可。
-    let mut blocked = Box::pin(IN_ACTIVATION.scope((), token.get()));
+    let mut blocked = Box::pin(ActivationContext::run(token.get()));
     let error = poll_fn(|cx| match blocked.as_mut().poll(cx) {
         Poll::Ready(result) => Poll::Ready(result.err().expect("构造 worker 必须拒绝等待")),
         Poll::Pending => panic!("构造 worker 的拒绝必须立即发生，不能等待其他调用完成"),
@@ -256,7 +256,7 @@ async fn worker_wait_rejection_does_not_poison_or_resubmit_a_lazy_occurrence() {
     assert!(waiter.send(Some(Ok(lease))).is_ok());
     let value = resumed.await.expect("此前的等待拒绝不得污染最终结果");
     assert_eq!(value.0, 42);
-    let cached = IN_ACTIVATION.scope((), token.get()).await.unwrap();
+    let cached = ActivationContext::run(token.get()).await.unwrap();
     assert!(
         std::ptr::eq(value, cached),
         "Ready 快路在构造上下文中也可使用"
@@ -266,7 +266,7 @@ async fn worker_wait_rejection_does_not_poison_or_resubmit_a_lazy_occurrence() {
 
 #[tokio::test]
 async fn accepted_result_can_be_resumed_after_owner_close_and_drop() {
-    use super::IN_ACTIVATION;
+    use super::ActivationContext;
     use crate::{
         activation::{DependencyLease, ReleaseDomain},
         runtime::{handle::Command, owner::OwnerData},
@@ -324,7 +324,7 @@ async fn accepted_result_can_be_resumed_after_owner_close_and_drop() {
 
     // 等待许可独立于 owner 生命周期。即便结果已经进入 watch，字段尚未完成类型化
     // 交付时也保持原先的 worker 拒绝语义，不因弱 owner 消失而误报另一种错误。
-    let error = IN_ACTIVATION.scope((), token.get()).await.err().unwrap();
+    let error = ActivationContext::run(token.get()).await.err().unwrap();
     assert!(error.to_string().contains("服务构造期间不能首次获取"));
     let value = token
         .get()

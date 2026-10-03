@@ -92,7 +92,7 @@ impl KeyedPort for Keyed<Order> {
 #[tokio::test]
 async fn trait_only_queries_materialize_closed_bind_targets_and_preserve_factory_fallbacks() {
     // 最终 reflect 计划已经完成泛型闭合，factory-only 也直接提供同一执行契约。
-    let graph = &crate::graph::plan::load().graph;
+    let graph = &crate::graph::plan::CompiledApplication::load().graph;
     for service_type in [
         ServiceType::create::<Repository<User>>(),
         ServiceType::create::<Cache<User>>(),

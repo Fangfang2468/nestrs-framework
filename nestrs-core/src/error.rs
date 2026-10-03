@@ -136,6 +136,12 @@ pub struct DisposeError {
     failures: Arc<Vec<String>>,
 }
 impl DisposeError {
+    pub(crate) fn coordinator_stopped() -> Self {
+        Self::new(vec![
+            "Tokio 协调任务已经停止；异步 cleanup 未确认完成".to_owned(),
+        ])
+    }
+
     pub(crate) fn new(failures: Vec<String>) -> Self {
         Self {
             failures: Arc::new(failures),

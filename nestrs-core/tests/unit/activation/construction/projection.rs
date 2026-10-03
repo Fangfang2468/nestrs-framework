@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use super::{project_bound, project_required, project_token};
+use super::{ProjectionTarget, ServiceProjection, project_bound, project_required};
 use crate::activation::{
     ConstructionError, DependencyLease, ErasedService, ErasedServiceRef, InputSlot, ReleaseDomain,
     prepare_bound_required, prepare_required,
@@ -95,13 +95,14 @@ fn concrete_and_trait_projection_deliver_without_temporary_allocations() {
     let instance = lease(Adapter(73));
     let slot = InputSlot::new(4);
     let (direct, direct_count) = allocations(|| {
-        project_token::<Adapter>(slot, instance.clone(), project_required::<Adapter>).unwrap()
+        ProjectionTarget::project::<Adapter>(slot, instance.clone(), project_required::<Adapter>)
+            .unwrap()
     });
     assert_eq!(direct.0, 73);
     assert_eq!(direct_count, 0);
 
     let (bound, bound_count) = allocations(|| {
-        project_token::<dyn Port>(slot, instance.clone(), |slot, input, target| {
+        ProjectionTarget::project::<dyn Port>(slot, instance.clone(), |slot, input, target| {
             project_bound::<Adapter, dyn Port>(slot, input, target, |value| value)
         })
         .unwrap()
@@ -139,14 +140,14 @@ fn concrete_and_trait_projection_deliver_without_temporary_allocations() {
 fn wrong_erased_instance_and_wrong_projection_target_are_rejected() {
     let slot = InputSlot::new(7);
     assert!(matches!(
-        project_token::<Adapter>(slot, lease(17_u32), project_required::<Adapter>),
+        ProjectionTarget::project::<Adapter>(slot, lease(17_u32), project_required::<Adapter>),
         Err(ConstructionError::InputTypeMismatch { slot: actual, expected, actual: ty })
             if actual == slot && expected == std::any::type_name::<Adapter>()
                 && ty == std::any::type_name::<u32>()
     ));
 
     assert!(matches!(
-        project_token::<u32>(slot, lease(Adapter(17)), project_required::<Adapter>),
+        ProjectionTarget::project::<u32>(slot, lease(Adapter(17)), project_required::<Adapter>),
         Err(ConstructionError::InputTypeMismatch { slot: actual, expected, actual: ty })
             if actual == slot && expected == std::any::type_name::<u32>()
                 && ty == std::any::type_name::<Adapter>()
@@ -157,12 +158,12 @@ fn wrong_erased_instance_and_wrong_projection_target_are_rejected() {
 fn empty_delivery_and_swallowed_duplicate_writes_do_not_report_success() {
     let slot = InputSlot::new(2);
     assert!(matches!(
-        project_token::<Adapter>(slot, lease(Adapter(1)), |_, _, _| Ok(())),
+        ProjectionTarget::project::<Adapter>(slot, lease(Adapter(1)), |_, _, _| Ok(())),
         Err(ConstructionError::UnfilledSlot { slot: actual }) if actual == slot
     ));
 
     assert!(matches!(
-        project_token::<Adapter>(slot, lease(Adapter(1)), |slot, input, target| {
+        ProjectionTarget::project::<Adapter>(slot, lease(Adapter(1)), |slot, input, target| {
             project_required::<Adapter>(slot, input.clone(), target)?;
             let _ignored = project_required::<Adapter>(slot, input, target);
             Ok(())
@@ -175,8 +176,8 @@ fn empty_delivery_and_swallowed_duplicate_writes_do_not_report_success() {
 fn a_swallowed_wrong_type_write_invalidates_the_whole_delivery() {
     let slot = InputSlot::new(9);
     assert!(matches!(
-        project_token::<Adapter>(slot, lease(Adapter(1)), |slot, input, target| {
-            let wrong = super::required_token::<u32>(slot, lease(3_u32).erased_ref())?;
+        ProjectionTarget::project::<Adapter>(slot, lease(Adapter(1)), |slot, input, target| {
+            let wrong = ServiceProjection::new(slot, lease(3_u32).erased_ref()).concrete::<u32>()?;
             let _ignored = target.write(wrong);
             let _ignored = project_required::<Adapter>(slot, input, target);
             Ok(())
@@ -205,7 +206,7 @@ fn replacement_instance(
     slot: InputSlot,
     input: ErasedServiceRef,
 ) -> Result<ErasedServiceRef, ConstructionError> {
-    let original = super::required_token::<TrackedAdapter>(slot, input)?;
+    let original = ServiceProjection::new(slot, input).concrete::<TrackedAdapter>()?;
     Ok(lease(TrackedAdapter(original.0.clone())).erased_ref())
 }
 
@@ -214,18 +215,25 @@ fn same_type_replacement_is_rejected_and_only_the_substitute_is_released() {
     let drops = Arc::new(AtomicUsize::new(0));
     let original = lease(TrackedAdapter(drops.clone()));
     let slot = InputSlot::new(11);
-    let result = project_token::<TrackedAdapter>(slot, original.clone(), |slot, input, target| {
-        project_required::<TrackedAdapter>(slot, replacement_instance(slot, input)?, target)
-    });
+    let result = ProjectionTarget::project::<TrackedAdapter>(
+        slot,
+        original.clone(),
+        |slot, input, target| {
+            project_required::<TrackedAdapter>(slot, replacement_instance(slot, input)?, target)
+        },
+    );
     assert!(matches!(
         result,
         Err(ConstructionError::ProjectionOwnerMismatch { slot: actual }) if actual == slot
     ));
     // 拒绝错误投影时立即回滚替代实例；原实例的 lease 仍由调用者持有。
     assert_eq!(drops.load(Ordering::SeqCst), 1);
-    let correct =
-        project_token::<TrackedAdapter>(slot, original.clone(), project_required::<TrackedAdapter>)
-            .unwrap();
+    let correct = ProjectionTarget::project::<TrackedAdapter>(
+        slot,
+        original.clone(),
+        project_required::<TrackedAdapter>,
+    )
+    .unwrap();
     assert!(Arc::ptr_eq(&correct.0, &drops));
     drop(correct);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
@@ -238,14 +246,15 @@ fn valid_trait_coercion_cannot_hide_a_different_instance_owner() {
     let drops = Arc::new(AtomicUsize::new(0));
     let original = lease(TrackedAdapter(drops.clone()));
     let slot = InputSlot::new(12);
-    let result = project_token::<dyn Port>(slot, original.clone(), |slot, input, target| {
-        project_bound::<TrackedAdapter, dyn Port>(
-            slot,
-            replacement_instance(slot, input)?,
-            target,
-            |value| value,
-        )
-    });
+    let result =
+        ProjectionTarget::project::<dyn Port>(slot, original.clone(), |slot, input, target| {
+            project_bound::<TrackedAdapter, dyn Port>(
+                slot,
+                replacement_instance(slot, input)?,
+                target,
+                |value| value,
+            )
+        });
     assert!(matches!(
         result,
         Err(ConstructionError::ProjectionOwnerMismatch { slot: actual }) if actual == slot
@@ -264,7 +273,7 @@ fn projected_token_owns_the_instance_after_the_original_lease_is_gone() {
         }
     }
     let drops = Arc::new(AtomicUsize::new(0));
-    let token = project_token::<Tracked>(
+    let token = ProjectionTarget::project::<Tracked>(
         InputSlot::new(0),
         lease(Tracked(drops.clone())),
         project_required::<Tracked>,

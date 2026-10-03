@@ -56,7 +56,7 @@ impl Runtime {
             self.commands.downgrade(),
         );
         if self.commands.send(Command::Register(data.clone())).is_err() {
-            data.complete_close(Err(coordinator_stopped()));
+            data.complete_close(Err(DisposeError::coordinator_stopped()));
         }
         Arc::new(Owner {
             data,
@@ -143,11 +143,11 @@ impl Runtime {
             return owner
                 .data
                 .completed_close()
-                .unwrap_or_else(|| Err(coordinator_stopped()));
+                .unwrap_or_else(|| Err(DisposeError::coordinator_stopped()));
         }
         receiver
             .await
-            .unwrap_or_else(|_| Err(coordinator_stopped()))
+            .unwrap_or_else(|_| Err(DisposeError::coordinator_stopped()))
     }
 }
 
@@ -176,12 +176,6 @@ impl Drop for ResolutionRequest<'_> {
             let _ = self.commands.send(Command::CancelQuery(self.query));
         }
     }
-}
-
-pub(super) fn coordinator_stopped() -> DisposeError {
-    DisposeError::new(vec![
-        "Tokio 协调任务已经停止；异步 cleanup 未确认完成".to_owned(),
-    ])
 }
 
 /// 协调器接收的 owner 与查询动作。Close 幂等，等待端可以不存在或被取消。

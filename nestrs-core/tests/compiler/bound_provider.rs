@@ -19,7 +19,7 @@ impl HealthCheck for HealthCheckService {}
 
 #[test]
 fn bind_freezes_typed_routes_without_additional_service_nodes() {
-    let graph = &crate::graph::plan::load().graph;
+    let graph = &crate::graph::plan::CompiledApplication::load().graph;
     assert_eq!(graph.nodes.len(), 2);
     assert_eq!(
         graph
@@ -42,7 +42,7 @@ fn bind_freezes_typed_routes_without_additional_service_nodes() {
 #[test]
 fn bind_inherits_concrete_keys_without_default_or_cross_key_fallback() {
     // 直接验证工具链产出的运行期计划；不在测试中再次执行另一份候选选择算法。
-    let graph = &crate::graph::plan::load().graph;
+    let graph = &crate::graph::plan::CompiledApplication::load().graph;
     for (interface, concrete, key) in [
         (
             ServiceType::create::<dyn Greeter>(),

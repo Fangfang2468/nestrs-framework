@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use crate::{
     InitializationMode, ServiceKey, ServiceLifetime, ServiceProviderOptions,
-    activation::{InputSlot, construction::project_token},
+    activation::{InputSlot, ProjectionTarget},
     error::{BuildError, DisposeError, ResolveError},
-    graph::{ValidatedGraph, plan},
+    graph::{ValidatedGraph, plan::CompiledApplication},
     runtime::{Owner, Runtime},
     service::{ServiceIdentifier, ServiceType},
 };
@@ -52,7 +52,7 @@ impl ServiceProvider {
         if !cfg!(any(nestrs_compiler, test)) {
             return Err(BuildError::CompilerPlanUnavailable);
         }
-        let application = plan::load();
+        let application = CompiledApplication::load();
         let options = overrides.unwrap_or_else(|| application.options.clone());
         let graph = application.graph.clone();
         tokio::runtime::Handle::try_current().map_err(|_| BuildError::RuntimeUnavailable)?;
@@ -237,10 +237,10 @@ impl<'owner> ServiceProviderRef<'owner> {
         };
         let lease = self.runtime.resolve(self.owner, route.provider).await?;
         // concrete 查询复用实例保存的准确地址；trait 查询与延迟交付共用直接投影，
-        // 不为一次根查询构造 PreparedInput 的临时堆载荷。project_token 同时核对
+        // 不为一次根查询构造 PreparedInput 的临时堆载荷。ProjectionTarget 同时核对
         // 结果类型与实例 lease；投影只能创建当前实例的视图，不能更换它的所有者。
         let pointer = if let Some(project) = route.projection {
-            let token = project_token::<T>(InputSlot::new(0), lease, project)
+            let token = ProjectionTarget::project::<T>(InputSlot::new(0), lease, project)
                 .map_err(|error| ResolveError::new(error.to_string()))?;
             token.into_ptr()
         } else {

@@ -96,7 +96,7 @@ impl PreparedInput {
     }
 
     /// 直接消费一个已准备的必选载荷，供构造协议的隔离校验使用。
-    /// 根查询与延迟目标交付使用 project_token，不再经过此装箱输入路径。
+    /// 根查询与延迟目标交付使用 ProjectionTarget::project，不再经过此装箱输入路径。
     pub(crate) fn into_required<T>(self, slot: InputSlot) -> Result<Injection<T>, ConstructionError>
     where
         T: Injectable + ?Sized,

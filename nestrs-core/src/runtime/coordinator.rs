@@ -22,10 +22,10 @@ use crate::{
 
 use super::{
     CloseWaiter, OwnerId, QueryId, Resolution, TaskId,
-    handle::{Command, coordinator_stopped},
+    handle::Command,
     owner::{CacheEntry, OwnerData, OwnerPhase, OwnerState, ROOT},
     task::{Activation, ResolutionWaiter, TaskRequest, TaskState},
-    worker::{activate, cleanup},
+    worker::{ActivationWorker, CleanupWorker},
 };
 
 /// Tokio 的 JoinError 只携带任务 ID，必须独立记录所属激活/cleanup，才能把 panic
@@ -431,13 +431,10 @@ impl Coordinator {
             // 只传实际 owner 的弱请求能力，Singleton 始终绑定 root。worker 按计划的
             // Lazy 分支现场包装字段句柄；调度器无需另建逐槽位的延迟输入数组。
             let resolver = Arc::downgrade(&self.owners[&activation.owner].data);
-            let handle = self.jobs.spawn(async move {
-                JobCompletion::Activation(
-                    super::lazy::IN_ACTIVATION
-                        .scope((), activate(graph, provider, inputs, resolver, domain))
-                        .await,
-                )
-            });
+            let worker = ActivationWorker::new(graph, provider, inputs, resolver, domain);
+            let handle = self
+                .jobs
+                .spawn(async move { JobCompletion::Activation(worker.run().await) });
             self.job_kinds
                 .insert(handle.id(), JobKind::Activation(task));
             self.running_activations += 1;
@@ -504,7 +501,7 @@ impl Coordinator {
         }
         let Some(state) = self.owners.get_mut(&owner.id) else {
             if let Some(waiter) = waiter {
-                let _ = waiter.send(Err(coordinator_stopped()));
+                let _ = waiter.send(Err(DisposeError::coordinator_stopped()));
             }
             return;
         };
@@ -546,9 +543,10 @@ impl Coordinator {
                 self.owners.get_mut(&owner).unwrap().phase = OwnerPhase::Cleaning { running: true };
                 // 只有上一项 cleanup/释放完成，才会把 running 改回 false 并取下一项。
                 // 仅保证启动次序是不够的：依赖不能先于消费者的异步 hook 完成清理。
+                let worker = CleanupWorker::new(entry, graph);
                 let handle = self
                     .jobs
-                    .spawn(async move { JobCompletion::Cleanup(cleanup(entry, graph).await) });
+                    .spawn(async move { JobCompletion::Cleanup(worker.run().await) });
                 self.job_kinds
                     .insert(handle.id(), JobKind::Cleanup { owner, provider });
             } else {

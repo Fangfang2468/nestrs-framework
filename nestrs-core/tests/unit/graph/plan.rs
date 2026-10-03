@@ -1,8 +1,8 @@
 //! 编译计划装载协议测试。这里手写的是编译器最终写入序列，不是公开的动态注册 API。
 
 use super::{
-    ABSENT, PlanAssembly, load, plan_push_binding, plan_push_dependent, plan_push_order,
-    plan_push_trait_route, plan_set_input, plan_set_options,
+    ABSENT, CompiledApplication, PlanAssembly, plan_push_binding, plan_push_dependent,
+    plan_push_order, plan_push_trait_route, plan_set_input, plan_set_options,
 };
 use crate::activation::adapter::{ActivationAdapter, Constructor, InputAdapter, ProjectionAdapter};
 use crate::{
@@ -208,8 +208,8 @@ fn absent_immediate_and_lazy_slots_deliver_distinct_optional_token_types() {
 
 #[test]
 fn one_entry_shares_immutable_plan_between_loads() {
-    let first = load();
-    let second = load();
+    let first = CompiledApplication::load();
+    let second = CompiledApplication::load();
     assert!(std::ptr::eq(first, second));
     assert!(Arc::ptr_eq(&first.graph, &second.graph));
 }

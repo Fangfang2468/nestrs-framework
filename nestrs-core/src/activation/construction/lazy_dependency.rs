@@ -9,7 +9,7 @@ use std::sync::{Arc, Weak};
 
 use super::{
     InputSlot,
-    projection::{ServiceProjector, project_token},
+    projection::{ProjectionTarget, ServiceProjector},
 };
 use crate::{
     ResolveError,
@@ -75,7 +75,7 @@ impl LazyDependency {
         &self,
         lease: DependencyLease,
     ) -> Result<Injection<T>, ResolveError> {
-        project_token(self.plan.input, lease, self.plan.project)
+        ProjectionTarget::project(self.plan.input, lease, self.plan.project)
             .map_err(|error| self.error(error.to_string()))
     }
 }

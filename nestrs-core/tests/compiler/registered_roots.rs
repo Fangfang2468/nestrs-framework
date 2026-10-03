@@ -46,7 +46,7 @@ fn never_executed_queries(provider: &ServiceProvider) {
 fn reflect_plan_closes_compiled_queries_without_registering_absent_fallbacks() {
     // 未执行分支和同一真实类型的别名仍贡献闭合根。最终计划无需保存根声明清单，
     // 直接以节点唯一性、冻结 key 和缺席路由验证编译收集的结果。
-    let graph = &crate::graph::plan::load().graph;
+    let graph = &crate::graph::plan::CompiledApplication::load().graph;
     assert_eq!(graph.nodes.len(), 3);
     for service_type in [
         ServiceType::create::<Repository<User>>(),

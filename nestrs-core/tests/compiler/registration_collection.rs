@@ -29,7 +29,7 @@ impl Greeter for GreeterService {
 
 #[test]
 fn reflect_contains_execution_nodes_and_shared_trait_routes() {
-    let graph = &crate::graph::plan::load().graph;
+    let graph = &crate::graph::plan::CompiledApplication::load().graph;
     let repository = &graph.nodes
         [graph.routes[&ServiceIdentifier::from(ServiceType::create::<Repository>())].provider];
     assert!(repository.dependencies.is_empty());

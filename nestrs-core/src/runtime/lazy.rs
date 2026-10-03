@@ -4,7 +4,10 @@
 //! 由 activation 的控制块保存。runtime 只负责检查 owner 是否接受新请求、提交命令，
 //! 不为每个字段再建立一份状态机，也不持有字段的缓存。
 
-use std::sync::{Arc, Weak, atomic::Ordering};
+use std::{
+    future::Future,
+    sync::{Arc, Weak, atomic::Ordering},
+};
 
 use tokio::sync::watch;
 
@@ -19,35 +22,45 @@ tokio::task_local! {
     ///
     /// 标记属于 runtime 的调度约束，activation 仅通过等待许可函数访问它。
     /// 它覆盖完整构造 future，随任务而非操作系统线程移动，不传播到用户自行 spawn 的任务。
-    pub(super) static IN_ACTIVATION: ();
+    static IN_ACTIVATION: ();
 }
 
-/// 为固定依赖交付弱 owner 引用和真实投影，不创建目标实例或新的引用计数分配。
+/// 一次激活的 owner 弱能力与延迟等待规则。
 ///
-/// worker 复用实际 owner 的弱请求能力；不会分配 Arc<dyn LazyResolver>。
-/// 保留独立的等待检查函数，使已经接受的请求在 owner 消失后仍可接续其 watch 结果。
-pub(super) fn dependency(
-    resolver: &Weak<dyn LazyResolver>,
-    plan: Arc<LazyInputPlan>,
-) -> LazyDependency {
-    LazyDependency {
-        plan,
-        resolver: resolver.clone(),
-        check_wait_allowed,
-    }
+/// 复用实际 owner 的 Arc 分配，不增加 resolver 分配，也不保存字段的初始化状态。
+/// 等待许可只依赖当前任务，使已接受的请求在 owner 消失后仍可接续 watch 结果。
+pub(super) struct ActivationContext {
+    resolver: Weak<dyn LazyResolver>,
 }
 
-/// 这里只检查当前调用者，不读取 owner，也不触碰延迟字段的接收端或失败缓存。
-///
-/// 每个尚未取得类型化结果的调用都必须检查，包括加入另一调用已开始的初始化。
-/// 缓存命中不等待新任务，由 activation 在调用本函数之前直接返回。
-pub(super) fn check_wait_allowed() -> Result<(), &'static str> {
-    if IN_ACTIVATION.try_with(|()| ()).is_ok() {
-        return Err(
-            "服务构造期间不能首次获取尚未完成的延迟注入；请声明普通注入依赖，或在服务发布后调用 LazyInjection::get",
-        );
+impl ActivationContext {
+    pub(super) fn new(resolver: Weak<dyn LazyResolver>) -> Self {
+        Self { resolver }
     }
-    Ok(())
+
+    pub(super) async fn run<F: Future>(future: F) -> F::Output {
+        IN_ACTIVATION.scope((), future).await
+    }
+
+    /// 为当前槽位组合固定计划与实际 owner；不提交请求或创建目标实例。
+    pub(super) fn dependency(&self, plan: Arc<LazyInputPlan>) -> LazyDependency {
+        LazyDependency {
+            plan,
+            resolver: self.resolver.clone(),
+            check_wait_allowed: Self::check_wait_allowed,
+        }
+    }
+
+    /// 不读取 owner 或字段缓存；每个尚未取得类型化结果的调用都要检查。
+    /// 缓存命中不等待新任务，由 activation 在调用本函数之前直接返回。
+    pub(super) fn check_wait_allowed() -> Result<(), &'static str> {
+        if IN_ACTIVATION.try_with(|()| ()).is_ok() {
+            return Err(
+                "服务构造期间不能首次获取尚未完成的延迟注入；请声明普通注入依赖，或在服务发布后调用 LazyInjection::get",
+            );
+        }
+        Ok(())
+    }
 }
 
 impl LazyResolver for OwnerData {
