@@ -150,12 +150,16 @@ fn consistent_selection(matches: &[&Declaration]) -> Result<Selection, String> {
 }
 
 /// 只在 cargo nestrs init 捕获期间输出；driver 在完成真实类型关联后调用。
-pub fn write_constructor_model(args: &[String], model: &ConstructorModel) -> Result<(), String> {
+pub fn write_constructor_model(
+    args: &[String],
+    source: &Path,
+    model: &ConstructorModel,
+) -> Result<(), String> {
     let Some(directory) = env::var_os("NESTRS_IDE_CAPTURE") else {
         return Ok(());
     };
     let cwd = env::current_dir().map_err(|error| error.to_string())?;
-    let Some(unit) = Unit::parse(args, &cwd, BTreeMap::new()) else {
+    let Some(unit) = Unit::parse(args, source, &cwd, BTreeMap::new()) else {
         return Ok(());
     };
     model.validate()?;

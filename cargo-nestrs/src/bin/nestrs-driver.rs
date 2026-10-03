@@ -20,6 +20,8 @@ extern crate rustc_span;
 #[path = "../protocol.rs"]
 mod protocol;
 
+#[path = "../compiler/arguments.rs"]
+mod arguments;
 #[path = "../compiler/autobind_codegen.rs"]
 mod autobind_codegen;
 #[path = "../compiler/autobind_semantic.rs"]
@@ -372,7 +374,11 @@ fn run() -> Result<ExitCode, String> {
     }
     // Record the original compilation unit before our editor-only/tool-owned
     // extern is added. This includes all dependency and build-script invocations.
-    cargo_nestrs::ide::capture_rustc(&args)?;
+    if std::env::var_os("NESTRS_IDE_CAPTURE").is_some()
+        && let Some(source) = arguments::source_file(&args[1..])?
+    {
+        cargo_nestrs::ide::capture_rustc(&args, &source)?;
+    }
     let rustc = args[0].clone();
     let crate_name = flag_value(&args, "--crate-name").map(str::to_owned);
     let mut uses_core = has_extern(&args, "nestrs_core");

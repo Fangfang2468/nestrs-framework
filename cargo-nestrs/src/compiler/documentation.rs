@@ -326,7 +326,6 @@ pub fn run(rustdoc: &OsStr, arguments: Vec<String>) -> Result<ExitCode, String> 
     }
     let driver = std::env::current_exe().map_err(|error| error.to_string())?;
     let bridge = Bridge::locate(&driver)?;
-    let original_source = source_argument(&arguments)?;
     let crate_name = option_value(&arguments, "--crate-name")
         .ok_or("Nestrs doctest 需要 Cargo 提供 --crate-name")?;
     let mut identity = DefaultHasher::new();
@@ -342,10 +341,13 @@ pub fn run(rustdoc: &OsStr, arguments: Vec<String>) -> Result<ExitCode, String> 
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     let carrier = directory.join("documentation.rs");
     let compiler = compiler_path(rustdoc, &arguments)?;
-    let compiler_arguments = analysis_arguments(&arguments, &original_source, &directory)?;
+    let analysis_arguments = analysis_arguments(&arguments, &directory)?;
+    crate::arguments::source_file(&analysis_arguments.compiler)?
+        .ok_or("Nestrs doctest 需要唯一文件输入，不能使用空输入或标准输入")?;
+    let source_index = analysis_arguments.source_index.ok_or("doctest 输入丢失")?;
     let analysis = Command::new(&driver)
         .arg(&compiler)
-        .args(compiler_arguments)
+        .args(analysis_arguments.compiler)
         .env(CAPTURE, &carrier)
         .env_remove(BUILDER)
         .env_remove("RUSTC_BOOTSTRAP")
@@ -360,11 +362,8 @@ pub fn run(rustdoc: &OsStr, arguments: Vec<String>) -> Result<ExitCode, String> 
         return Err("编译器没有导出经过类型检查的 doctest 文档；拒绝运行空报告".into());
     }
     let mut runner = arguments.clone();
-    let source = runner
-        .iter_mut()
-        .find(|argument| **argument == original_source)
-        .ok_or("doctest 输入丢失")?;
-    *source = carrier.to_string_lossy().into_owned();
+    // 保留位置索引，不能按字符串替换：一个 rustdoc 选项值可能恰好等于源码路径。
+    runner[source_index] = carrier.to_string_lossy().into_owned();
     // 载体只有文档目录，不是原 crate 的实现工件。尤其 proc-macro 不允许导出载体
     // 使用的普通 module，因此 runner 应按 lib 读取它。上面的真实源码分析仍保留
     // 原 crate-type，下面的 snippet 也仍通过原 --extern 加载真实库/过程宏工件。
@@ -653,27 +652,13 @@ fn option_value<'a>(arguments: &'a [String], option: &str) -> Option<&'a str> {
     })
 }
 
-fn source_argument(arguments: &[String]) -> Result<String, String> {
-    let sources: Vec<_> = arguments
-        .iter()
-        .filter(|argument| {
-            !argument.starts_with('-') && argument.ends_with(".rs") && Path::new(argument).is_file()
-        })
-        .collect();
-    if sources.len() != 1 {
-        return Err(format!(
-            "Nestrs doctest 需要唯一 Rust 源文件，发现 {} 个候选",
-            sources.len()
-        ));
-    }
-    Ok(sources[0].clone())
+#[derive(Debug)]
+struct AnalysisArguments {
+    compiler: Vec<String>,
+    source_index: Option<usize>,
 }
 
-fn analysis_arguments(
-    arguments: &[String],
-    source: &str,
-    directory: &Path,
-) -> Result<Vec<String>, String> {
+fn analysis_arguments(arguments: &[String], directory: &Path) -> Result<AnalysisArguments, String> {
     let compiler_options = [
         "--crate-name",
         "--crate-type",
@@ -729,6 +714,7 @@ fn analysis_arguments(
         "--enable-index-page",
     ];
     let mut output = vec![];
+    let mut source_index = None;
     let crate_name = option_value(arguments, "--crate-name");
     let mut index = 0;
     while index < arguments.len() {
@@ -747,7 +733,10 @@ fn analysis_arguments(
             index += consumed;
             continue;
         }
-        if argument == source {
+        // 已知选项及其值在下面作为整体消费；这里只保留位置输入，再交由共享的
+        // rustc 选项解析器检查唯一性。文件扩展名与文件是否存在均不参与选择。
+        if !argument.starts_with('-') {
+            source_index = Some(index);
             output.push(argument.clone());
             index += 1;
             continue;
@@ -808,7 +797,10 @@ fn analysis_arguments(
             .to_string_lossy()
             .into_owned(),
     ]);
-    Ok(output)
+    Ok(AnalysisArguments {
+        compiler: output,
+        source_index,
+    })
 }
 
 #[cfg(test)]
@@ -838,8 +830,9 @@ mod tests {
             "/project",
         ];
         let arguments: Vec<_> = arguments.into_iter().map(str::to_owned).collect();
-        let output =
-            analysis_arguments(&arguments, "src/lib.rs", Path::new("/target/docs")).unwrap();
+        let output = analysis_arguments(&arguments, Path::new("/target/docs"))
+            .unwrap()
+            .compiler;
         assert!(
             output
                 .windows(2)
@@ -869,14 +862,36 @@ mod tests {
     #[test]
     fn unknown_documentation_flags_fail_instead_of_weakening_validation() {
         assert!(
-            analysis_arguments(
-                &["--unrecognized-policy".into()],
-                "src/lib.rs",
-                Path::new("/target")
-            )
-            .unwrap_err()
-            .contains("--unrecognized-policy")
+            analysis_arguments(&["--unrecognized-policy".into()], Path::new("/target"))
+                .unwrap_err()
+                .contains("--unrecognized-policy")
         );
+    }
+
+    #[test]
+    fn documentation_input_uses_compiler_arity_after_removing_rustdoc_options() {
+        for source in ["library", "library.code", "目录 空格/库.code"] {
+            let arguments = [
+                "--crate-name=example",
+                "--crate-type=lib",
+                "--edition=2024",
+                "--test",
+                "--test-run-directory",
+                source,
+                "--test-args=filter.rs",
+                "--extern",
+                "dependency=another.rs",
+                "--remap-path-prefix=before.rs=after.rs",
+                source,
+            ]
+            .map(str::to_owned);
+            let output = analysis_arguments(&arguments, Path::new("/target/docs.rs")).unwrap();
+            assert_eq!(
+                crate::arguments::source_file(&output.compiler).unwrap(),
+                Some(PathBuf::from(source))
+            );
+            assert_eq!(output.source_index, Some(arguments.len() - 1));
+        }
     }
 
     #[test]

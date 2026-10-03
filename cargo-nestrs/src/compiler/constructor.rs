@@ -657,7 +657,10 @@ fn capture_model(
         });
     }
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
-    if let Err(error) = write_constructor_model(&arguments, &model) {
+    let rustc_session::config::Input::File(source) = &tcx.sess.io.input else {
+        return;
+    };
+    if let Err(error) = write_constructor_model(&arguments, source, &model) {
         tcx.dcx()
             .err(format!("无法保存 constructor IDE 模型：{error}"));
     }

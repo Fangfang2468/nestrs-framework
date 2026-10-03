@@ -26,7 +26,7 @@ pub(super) struct Unit {
 
 /// Called before the driver dispatches either ordinary rustc or DI analysis.
 /// Cargo's successful artifact stream later selects which records are current.
-pub fn capture_rustc(args: &[String]) -> Result<(), String> {
+pub fn capture_rustc(args: &[String], source: &Path) -> Result<(), String> {
     let Some(directory) = env::var_os("NESTRS_IDE_CAPTURE") else {
         return Ok(());
     };
@@ -44,7 +44,7 @@ pub fn capture_rustc(args: &[String]) -> Result<(), String> {
                 )
         })
         .collect();
-    let Some(mut unit) = Unit::parse(args, &cwd, environment) else {
+    let Some(mut unit) = Unit::parse(args, source, &cwd, environment) else {
         // Version, target and sysroot queries do not represent compilation units.
         return Ok(());
     };
@@ -86,15 +86,13 @@ pub fn capture_rustc(args: &[String]) -> Result<(), String> {
 impl Unit {
     pub(super) fn parse(
         args: &[String],
+        source: &Path,
         cwd: &Path,
         environment: BTreeMap<String, String>,
     ) -> Option<Self> {
         let crate_name = values(args, "--crate-name").pop()?;
         let out_dir = absolute(cwd, values(args, "--out-dir").pop()?);
-        let root_module = args
-            .iter()
-            .find(|arg| arg.ends_with(".rs") && !arg.starts_with('-'))?;
-        let root_module = absolute(cwd, root_module);
+        let root_module = absolute(cwd, source);
         let manifest_dir = environment
             .get("CARGO_MANIFEST_DIR")
             .map(PathBuf::from)
@@ -234,7 +232,13 @@ mod tests {
             "-Cextra-filename=-cd",
         ]
         .map(str::to_owned);
-        let unit = Unit::parse(&args, Path::new("/project"), BTreeMap::new()).unwrap();
+        let unit = Unit::parse(
+            &args,
+            Path::new("src/main.rs"),
+            Path::new("/project"),
+            BTreeMap::new(),
+        )
+        .unwrap();
         assert_eq!(unit.root_module, Path::new("/project/src/main.rs"));
         assert_eq!(unit.cfg, ["feature=\"audit\"", "has_database", "test"]);
         assert_eq!(
@@ -246,6 +250,7 @@ mod tests {
         assert!(
             Unit::parse(
                 &["rustc".into(), "-vV".into()],
+                Path::new("src/main.rs"),
                 Path::new("/"),
                 BTreeMap::new()
             )
@@ -265,7 +270,13 @@ mod tests {
             "-Cextra-filename=-aaa",
         ]
         .map(str::to_owned);
-        let first = Unit::parse(&args, Path::new("/project"), BTreeMap::new()).unwrap();
+        let first = Unit::parse(
+            &args,
+            Path::new("build.rs"),
+            Path::new("/project"),
+            BTreeMap::new(),
+        )
+        .unwrap();
         let mut second = first.clone();
         second.out_dir = "/target/debug/build/package-bbb".into();
         second.extra_filename = "-bbb".into();

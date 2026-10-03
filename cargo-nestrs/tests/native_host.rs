@@ -302,3 +302,62 @@ fn native_tools_compile_run_export_and_refresh_ide_in_paths_with_spaces() {
     );
     assert_eq!(fs::read(&project_path).unwrap(), project_bytes);
 }
+
+#[test]
+fn native_ide_preserves_nonstandard_cargo_source_paths_and_constructor_models() {
+    let root = std::env::temp_dir().join(format!("nestrs input paths 空格 {}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    let workspace = Workspace(root);
+    let manifest = workspace.fixture("ide");
+    let project = manifest.parent().unwrap();
+    let original_manifest = fs::read_to_string(&manifest).unwrap();
+    let source = fs::read_to_string(project.join("src/main.rs")).unwrap();
+    fs::remove_file(project.join("src/main.rs")).unwrap();
+    for name in ["入口.code", "入口 无后缀", "入口 普通.rs"] {
+        let root = project.join("src").join(name);
+        fs::write(&root, &source).unwrap();
+        fs::write(
+            &manifest,
+            format!(
+                "{original_manifest}\n[[bin]]\nname = \"nestrs-ide-fixture\"\npath = {}\n",
+                serde_json::to_string(&format!("src/{name}")).unwrap()
+            ),
+        )
+        .unwrap();
+        let model = workspace.0.join("model/rust-project.json");
+        success(
+            workspace
+                .command("init", &manifest)
+                .args(["--bin=nestrs-ide-fixture", "--output"])
+                .arg(&model)
+                .env(
+                    "CARGO_ENCODED_RUSTFLAGS",
+                    "--remap-path-prefix\x1funused.rs=remapped.rs",
+                ),
+        );
+        let model: Value = serde_json::from_slice(&fs::read(model).unwrap()).unwrap();
+        let entry = model["crates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["display_name"] == "nestrs_ide_fixture")
+            .expect("Cargo binary must remain an editor crate");
+        assert_eq!(
+            Path::new(entry["root_module"].as_str().unwrap())
+                .canonicalize()
+                .unwrap(),
+            root.canonicalize().unwrap()
+        );
+        let constructors: Value =
+            serde_json::from_str(entry["env"]["NESTRS_IDE_CONSTRUCTORS"].as_str().unwrap())
+                .unwrap();
+        assert!(
+            constructors["declarations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|declaration| declaration["selection"]["constructor"] == true)
+        );
+        fs::remove_file(root).unwrap();
+    }
+}
