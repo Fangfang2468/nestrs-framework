@@ -1,0 +1,16 @@
+[package]
+name = "nestrs-query-clone"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+members = ["plain-helper"]
+
+[dependencies]
+nestrs-core = { path = "../../../../nestrs-core" }
+plain-clone-helper = { path = "plain-helper" }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
+
+[features]
+invalid = []

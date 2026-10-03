@@ -1564,7 +1564,7 @@ pub fn collect_with_providers<'tcx>(
             QueryValue::Constant(id, args) => (id, args),
             QueryValue::Service(_) | QueryValue::Unsize(..) => unreachable!(),
         };
-        let mut drop_instance = None;
+        let mut shim_instance = None;
         let (definition, id, args) = if matches!(
             tcx.def_kind(id),
             DefKind::Closure | DefKind::SyntheticCoroutineBody
@@ -1595,9 +1595,11 @@ pub fn collect_with_providers<'tcx>(
                 Some(instance) if !matches!(instance.def, ty::InstanceKind::Virtual(..)) => {
                     if matches!(
                         instance.def,
-                        ty::InstanceKind::Shim(ty::ShimKind::DropGlue(..))
+                        ty::InstanceKind::Shim(
+                            ty::ShimKind::DropGlue(..) | ty::ShimKind::Clone(..)
+                        )
                     ) {
-                        drop_instance = Some(instance);
+                        shim_instance = Some(instance);
                     }
                     (instance.def, instance.def_id(), instance.args)
                 }
@@ -1622,9 +1624,10 @@ pub fn collect_with_providers<'tcx>(
             size,
         });
         path = discovery.len() - 1;
-        if let Some(instance) = drop_instance {
-            // rustc 的真实胶水覆盖用户 Drop、聚合字段、Box/Vec/数组等结构。
-            // 胶水按 Instance（含实际 T）生成，不能按公共 drop 函数 DefId 缓存。
+        if let Some(instance) = shim_instance {
+            // Drop/Clone 的真实 shim 保留字段的析构/克隆调用，包括元组和闭包。
+            // 这两类 MIR 已按实际类型生成，不再代入 trait 声明的泛型参数。
+            // 必须按完整 Instance 去重，不能按公共 Drop/Clone 方法 DefId 缓存。
             for nested in mir_summary(tcx, tcx.instance_mir(instance.def)) {
                 if relevant_record(&nested) {
                     pending.push_back((nested, owner, path, origin));
