@@ -524,9 +524,8 @@ fn ten_thousand_deferred_nodes_construct_close_and_release_on_small_stack() {
 
 #[test]
 fn an_accepted_lazy_request_reports_runtime_exit_instead_of_waiting_forever() {
-    use crate::{
-        activation::{FactoryFuture, FactoryInputs, prepare_lazy_required},
-        registration::provider::FactoryInvoker,
+    use crate::activation::{
+        FactoryFuture, FactoryInputs, adapter::FactoryInvoker, prepare_lazy_required,
     };
     use std::time::Duration;
 

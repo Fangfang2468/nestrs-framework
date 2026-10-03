@@ -10,7 +10,12 @@ use super::{
     field_analyze::{AnalyzedFields, FieldStrategy},
     provider::EmitClassProviderFields,
 };
+use crate::codegen::constructor::ConstructorMode;
 use crate::codegen::injection::render::{EmitCompilerKey, EmitPlanProvider};
+use crate::{
+    codegen::reflection,
+    protocol::{self, Marker},
+};
 use zyn::{quote::quote, syn, zyn};
 
 /// 为一个开放泛型 provider 输出其按需具体化的 provider definition。
@@ -24,23 +29,27 @@ pub(crate) fn define_generic_injectable_provider(
     config: InjectableConfig,
     primary: bool,
     lazy: Option<bool>,
+    mode: ConstructorMode,
 ) -> zyn::TokenStream {
     let service = analysis.item.ident.clone();
     let provider_definition_generics = provider_definition_generics(analysis);
     let (impl_generics, type_generics, where_clause) =
         provider_definition_generics.split_for_impl();
     let service_type = quote!(Self);
-    let reflection = crate::codegen::reflection::support(true);
+    let reflection = reflection::support(true);
+    let reflection_module = reflection::ident(protocol::REFLECTION_MODULE);
+    let provider_definition = reflection::ident(protocol::PROVIDER_DEFINITION);
+    let provider_marker = reflection::ident(Marker::Provider.name());
 
     zyn! {
         #[allow(clippy::unused_unit)]
         const _: () = {
             {{ reflection }}
-            impl {{ impl_generics }} __nestrs_reflect::ProviderDefinition
+            impl {{ impl_generics }} {{ reflection_module.clone() }}::{{ provider_definition }}
                 for {{ service }} {{ type_generics }} {{ where_clause }}
             {
                 fn provider() -> ::nestrs_core::activation::adapter::ActivationAdapter {
-                    __nestrs_reflect::compiler_provider::<Self>(
+                    {{ reflection_module }}::{{ provider_marker }}::<Self>(
                         @EmitCompilerKey(key = config.key.clone())
                     );
                     @EmitPlanProvider(
@@ -55,9 +64,11 @@ pub(crate) fn define_generic_injectable_provider(
                             analysis = analysis.clone(),
                             config = config.clone(),
                             service_type = service_type.clone(),
+                            mode = *mode,
                         )
                         constructor: ::nestrs_core::activation::adapter::Constructor::Class(@GenerateGenericInjectableConstructor(
                             analysis = analysis.clone(),
+                            mode = *mode,
                         )),
                     }
                 }
@@ -105,6 +116,10 @@ mod tests {
     use zyn::{Render, syn};
 
     fn render_definition(item: syn::ItemStruct) -> String {
+        render_definition_in_mode(item, ConstructorMode::Deferred)
+    }
+
+    fn render_definition_in_mode(item: syn::ItemStruct, mode: ConstructorMode) -> String {
         let analysis = analyze_fields(item).expect("generic item should analyze");
         DefineGenericInjectableProvider {
             analysis,
@@ -115,10 +130,45 @@ mod tests {
             },
             primary: false,
             lazy: None,
+            mode,
         }
         .render(&zyn::Input::default())
         .tokens()
         .to_string()
+    }
+
+    #[test]
+    fn generic_editor_selection_controls_both_inputs_and_construction() {
+        for mode in [ConstructorMode::Automatic, ConstructorMode::Explicit] {
+            let output = render_definition_in_mode(
+                syn::parse_quote! {
+                    struct Repository<Entity: Clone> where Entity: Send {
+                        dependency: Dependency<Entity>,
+                    }
+                },
+                mode,
+            );
+            syn::parse_str::<syn::ItemConst>(&output).unwrap();
+            assert!(output.contains("Entity : Clone"));
+            assert!(output.contains("Entity : Send"));
+            assert!(output.contains("for Repository < Entity >"));
+            assert!(!output.contains("if false"), "{output}");
+            assert_eq!(
+                output.contains("__nestrs_constructor_dependencies"),
+                mode == ConstructorMode::Explicit,
+                "{output}"
+            );
+            assert_eq!(
+                output.contains("__nestrs_constructor_activate"),
+                mode == ConstructorMode::Explicit,
+                "{output}"
+            );
+            assert_eq!(
+                output.contains("Default :: default"),
+                mode == ConstructorMode::Automatic,
+                "{output}"
+            );
+        }
     }
 
     #[test]

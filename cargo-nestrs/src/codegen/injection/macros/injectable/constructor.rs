@@ -1,13 +1,14 @@
 //! `#[injectable]` 隐藏构造 adapter 的生成。
 //!
-//! 此处只定义构造函数本身。它必须由 `registration` 放入与 描述 provider
-//! factory 相同的匿名 `const` 作用域，才能把函数指针写入 `Provider::Class`，同时
-//! 不把 helper 暴露为结构体的 inherent method。
+//! 此处只定义构造函数本身。`registration` 将它与 provider 的执行 adapter
+//! 放入同一匿名 `const` 作用域，由 `ActivationAdapter` 持有的 `Constructor::Class`
+//! 引用函数指针，同时不把 helper 暴露为结构体的 inherent method。
 
 use super::{
     field_analyze::{AnalyzedFields, FieldSpec, FieldStrategy},
     field_initialization::RewriteValueField,
 };
+use crate::codegen::constructor::ConstructorMode;
 use zyn::{
     quote::quote,
     syn::{self, Fields, ItemStruct},
@@ -19,7 +20,10 @@ use zyn::{
 /// 该 element 不自行添加 `const` 包裹。若作为顶层 sibling 输出，provider 就无法
 /// 词法引用 `__nestrs_construct`；因此只能由 `EmitInjectableRegistration` 嵌入。
 #[zyn::element]
-pub(crate) fn generate_injectable_constructor(analysis: AnalyzedFields) -> zyn::TokenStream {
+pub(crate) fn generate_injectable_constructor(
+    analysis: AnalyzedFields,
+    mode: ConstructorMode,
+) -> zyn::TokenStream {
     let service = analysis.item.ident.clone();
     let context = context_identifier(&analysis.item);
     let context_binding = context_binding(analysis, &context);
@@ -32,21 +36,12 @@ pub(crate) fn generate_injectable_constructor(analysis: AnalyzedFields) -> zyn::
             ::nestrs_core::activation::ErasedService,
             ::nestrs_core::activation::ConstructionError,
         > {
-            if false {
-                {{ service.clone() }}::__nestrs_constructor_activate({{ context.clone() }})
-            } else {
-            let __nestrs_injectable_instance = @ConstructInjectableInstance(
+            @RenderConstructorBody(
                 analysis = analysis.clone(),
                 service = service.clone(),
                 context = context.clone(),
-            );
-            {{ context }}.ensure_all_consumed()?;
-            ::core::result::Result::Ok(
-                ::nestrs_core::activation::ErasedService::new(
-                    __nestrs_injectable_instance
-                )
+                mode = *mode,
             )
-            }
         }
     }
 }
@@ -59,6 +54,7 @@ pub(crate) fn generate_injectable_constructor(analysis: AnalyzedFields) -> zyn::
 #[zyn::element]
 pub(crate) fn generate_generic_injectable_constructor(
     analysis: AnalyzedFields,
+    mode: ConstructorMode,
 ) -> zyn::TokenStream {
     let context = context_identifier(&analysis.item);
     let context_binding = context_binding(analysis, &context);
@@ -69,22 +65,68 @@ pub(crate) fn generate_generic_injectable_constructor(
             ::nestrs_core::activation::ErasedService,
             ::nestrs_core::activation::ConstructionError,
         > {
-            if false {
-                Self::__nestrs_constructor_activate({{ context.clone() }})
-            } else {
-            let __nestrs_injectable_instance = @ConstructInjectableInstance(
+            @RenderConstructorBody(
                 analysis = analysis.clone(),
                 service = service.clone(),
                 context = context.clone(),
-            );
-            {{ context }}.ensure_all_consumed()?;
-            ::core::result::Result::Ok(
-                ::nestrs_core::activation::ErasedService::new(
-                    __nestrs_injectable_instance
-                )
+                mode = *mode,
             )
+        }
+    }
+}
+
+/// IDE 已知选择时只生成选中的构造体；普通编译仍把两个候选交给真实名称解析。
+#[zyn::element]
+fn render_constructor_body(
+    analysis: AnalyzedFields,
+    service: zyn::TokenStream,
+    context: syn::Ident,
+    mode: ConstructorMode,
+) -> zyn::TokenStream {
+    let activate = crate::codegen::reflection::ident(crate::protocol::constructor::ACTIVATE);
+    zyn! {
+        @match (*mode) {
+            ConstructorMode::Deferred => {
+                if false {
+                    {{ service.clone() }}::{{ activate.clone() }}({{ context.clone() }})
+                } else {
+                    @ConstructAutomaticInjectable(
+                        analysis = analysis.clone(),
+                        service = service.clone(),
+                        context = context.clone(),
+                    )
+                }
+            }
+            ConstructorMode::Automatic => {
+                @ConstructAutomaticInjectable(
+                    analysis = analysis.clone(),
+                    service = service.clone(),
+                    context = context.clone(),
+                )
+            }
+            ConstructorMode::Explicit => {
+                {{ service.clone() }}::{{ activate.clone() }}({{ context.clone() }})
             }
         }
+    }
+}
+
+#[zyn::element]
+fn construct_automatic_injectable(
+    analysis: AnalyzedFields,
+    service: zyn::TokenStream,
+    context: syn::Ident,
+) -> zyn::TokenStream {
+    zyn! {
+        let __nestrs_injectable_instance = @ConstructInjectableInstance(
+            analysis = analysis.clone(),
+            service = service.clone(),
+            context = context.clone(),
+        );
+        {{ context }}.ensure_all_consumed()?;
+        ::core::result::Result::Ok(
+            ::nestrs_core::activation::ErasedService::new(__nestrs_injectable_instance)
+        )
     }
 }
 
@@ -223,10 +265,87 @@ mod tests {
     fn render_constructor(item: ItemStruct, specs: Vec<FieldSpec>) -> String {
         GenerateInjectableConstructor {
             analysis: AnalyzedFields { item, specs },
+            mode: ConstructorMode::Deferred,
         }
         .render(&zyn::Input::default())
         .tokens()
         .to_string()
+    }
+
+    #[test]
+    fn constructor_modes_render_only_the_requested_candidates() {
+        for generic in [false, true] {
+            for mode in [
+                ConstructorMode::Deferred,
+                ConstructorMode::Automatic,
+                ConstructorMode::Explicit,
+            ] {
+                let item: ItemStruct = if generic {
+                    syn::parse_quote!(
+                        struct Service<T> {
+                            value: T,
+                        }
+                    )
+                } else {
+                    syn::parse_quote!(
+                        struct Service {
+                            value: NoDefault,
+                        }
+                    )
+                };
+                let specs = collect_field_specs(&item.fields).unwrap();
+                let analysis = AnalyzedFields { item, specs };
+                let input = zyn::Input::default();
+                let rendered = if generic {
+                    GenerateGenericInjectableConstructor { analysis, mode }.render(&input)
+                } else {
+                    GenerateInjectableConstructor { analysis, mode }.render(&input)
+                };
+                let tokens = rendered.tokens().to_string();
+                assert_eq!(
+                    tokens.contains("if false"),
+                    mode == ConstructorMode::Deferred,
+                    "{tokens}"
+                );
+                assert_eq!(
+                    tokens.contains("__nestrs_constructor_activate"),
+                    mode != ConstructorMode::Automatic,
+                    "{tokens}"
+                );
+                assert_eq!(
+                    tokens.contains("Default :: default"),
+                    mode != ConstructorMode::Explicit,
+                    "{tokens}"
+                );
+                assert_eq!(
+                    tokens.contains("ensure_all_consumed"),
+                    mode != ConstructorMode::Explicit,
+                    "{tokens}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn automatic_mode_preserves_business_conditionals_even_with_matching_helper_names() {
+        let item: ItemStruct = syn::parse_quote! {
+            struct Service {
+                #[value(if false { Business::__nestrs_constructor_activate(()) } else { 3 })]
+                value: usize,
+            }
+        };
+        let specs = collect_field_specs(&item.fields).unwrap();
+        let rendered = GenerateInjectableConstructor {
+            analysis: AnalyzedFields { item, specs },
+            mode: ConstructorMode::Automatic,
+        }
+        .render(&zyn::Input::default());
+        assert!(
+            rendered
+                .tokens()
+                .to_string()
+                .contains("if false { Business :: __nestrs_constructor_activate (()) } else { 3 }")
+        );
     }
 
     #[test]

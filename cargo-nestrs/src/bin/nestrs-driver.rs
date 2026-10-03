@@ -17,6 +17,9 @@ extern crate rustc_parse;
 extern crate rustc_session;
 extern crate rustc_span;
 
+#[path = "../protocol.rs"]
+mod protocol;
+
 #[path = "../compiler/autobind_codegen.rs"]
 mod autobind_codegen;
 #[path = "../compiler/autobind_semantic.rs"]

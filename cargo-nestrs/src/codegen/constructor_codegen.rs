@@ -4,6 +4,7 @@
 //! injectable 的唯一注册上，并按名称解析后的字段来源改写结构体。参数、函数体以及最终
 //! 字段赋值仍交给 Rust 的类型、借用和可见性检查。
 
+use crate::protocol::constructor;
 use zyn::{Render, quote::quote, syn};
 
 use super::{
@@ -24,11 +25,14 @@ pub(super) fn expand(
     let analysis = analyze_constructor(syn::parse2(input)?)?;
     let item = &analysis.item;
     let method = &item.sig.ident;
-    let mapping = serde_json::json!({
-        "method": method.to_string(),
-        "result": analysis.result_kind == ConstructorResultKind::Result
+    let mapping = serde_json::to_string(&constructor::Metadata {
+        method: method.to_string(),
+        result: analysis.result_kind == ConstructorResultKind::Result,
     })
-    .to_string();
+    .expect("constructor metadata contains only a string and boolean");
+    let metadata = super::reflection::ident(constructor::METADATA);
+    let dependencies_helper = super::reflection::ident(constructor::DEPENDENCIES);
+    let activate = super::reflection::ident(constructor::ACTIVATE);
     let mut dependencies = Vec::new();
     let mut arguments = Vec::new();
     for parameter in &analysis.parameters {
@@ -73,18 +77,18 @@ pub(super) fn expand(
 
         #[doc(hidden)]
         #[allow(dead_code)]
-        const __NESTRS_CONSTRUCTOR: &'static str = #mapping;
+        const #metadata: &'static str = #mapping;
 
         #[doc(hidden)]
         #[allow(dead_code)]
-        pub(crate) fn __nestrs_constructor_dependencies() -> ::std::vec::Vec<::nestrs_core::activation::adapter::InputAdapter> {
+        pub(crate) fn #dependencies_helper() -> ::std::vec::Vec<::nestrs_core::activation::adapter::InputAdapter> {
             #reflection
             ::std::vec![#(#dependencies),*]
         }
 
         #[doc(hidden)]
         #[allow(dead_code)]
-        pub(crate) fn __nestrs_constructor_activate(
+        pub(crate) fn #activate(
             #mutable __nestrs_inputs: ::nestrs_core::activation::ConstructionInputs,
         ) -> ::core::result::Result<::nestrs_core::activation::ErasedService, ::nestrs_core::activation::ConstructionError> {
             let __nestrs_instance = #construct;

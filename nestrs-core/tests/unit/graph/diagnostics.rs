@@ -10,11 +10,7 @@ use crate::{
         InputSlot, prepare_required,
     },
     graph::{
-        AbsentInput, CompiledDependency, CompiledNode, DependencyInput, GraphCompiler, ProviderId,
-    },
-    registration::{
-        dependency::{Delivery, DependencyRequest, ProviderSource},
-        provider::{ClassProvider, Provider, ProviderCommon},
+        AbsentInput, CompiledDependency, CompiledNode, DependencyInput, NodePolicy, ProviderId,
     },
     service::{ServiceIdentifier, ServiceSource, ServiceType},
 };
@@ -31,10 +27,9 @@ fn must_not_construct_async(_: FactoryInputs<'_>) -> FactoryFuture<'_> {
     panic!("rendering HTML must not invoke an async factory")
 }
 
-fn common(lifetime: ServiceLifetime) -> ProviderCommon {
-    ProviderCommon {
+fn common(lifetime: ServiceLifetime) -> NodePolicy {
+    NodePolicy {
         lifetime,
-        primary: false,
         lazy: None,
         source: ServiceSource::new("src/services.rs", 17, 9),
         cleanup: None,
@@ -77,7 +72,7 @@ fn dependency(
 fn node(name: &'static str, dependencies: Vec<CompiledDependency>) -> CompiledNode {
     CompiledNode {
         identifier: identifier(name),
-        common: common(ServiceLifetime::Singleton).into(),
+        common: common(ServiceLifetime::Singleton),
         dependencies,
         constructor: Constructor::Class(must_not_construct),
         requires_scope: false,
@@ -271,52 +266,6 @@ fn metadata_round_trips_without_data_loss() {
     assert_eq!(service["dependencies"][0]["label"], UNTRUSTED);
     assert_eq!(service["dependencies"][0]["requested"], UNTRUSTED);
     assert_eq!(service["dependencies"][0]["key"]["value"], UNTRUSTED);
-}
-
-#[test]
-fn compiler_enumeration_order_does_not_change_snapshot() {
-    struct Database;
-    struct Application;
-    let database = ServiceIdentifier::from(ServiceType::create::<Database>());
-    let providers = vec![
-        Provider::Class(ClassProvider {
-            provide: database.clone(),
-            common: common(ServiceLifetime::Singleton),
-            dependencies: vec![],
-            constructor: must_not_construct,
-        }),
-        Provider::Class(ClassProvider {
-            provide: ServiceIdentifier::from(ServiceType::create::<Application>()),
-            common: common(ServiceLifetime::Singleton),
-            dependencies: vec![DependencyRequest {
-                declaration_position: 0,
-                input_slot: InputSlot::new(0),
-                token: database,
-                optional: false,
-                lazy: None,
-                project: None,
-                label: Some("database"),
-                delivery: Delivery::Direct(prepare_required::<Database>),
-                provider_source: ProviderSource::Registered,
-            }],
-            constructor: must_not_construct,
-        }),
-    ];
-    let forward = GraphCompiler::compile_snapshot(crate::registration::catalog::RegistrySnapshot {
-        providers: providers.clone(),
-        bindings: vec![],
-        roots: vec![],
-        ..Default::default()
-    })
-    .unwrap();
-    let reverse = GraphCompiler::compile_snapshot(crate::registration::catalog::RegistrySnapshot {
-        providers: providers.into_iter().rev().collect(),
-        bindings: vec![],
-        roots: vec![],
-        ..Default::default()
-    })
-    .unwrap();
-    assert_eq!(render_json(&forward), render_json(&reverse));
 }
 
 #[test]

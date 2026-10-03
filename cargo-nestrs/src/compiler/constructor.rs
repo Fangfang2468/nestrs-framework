@@ -11,6 +11,9 @@
 //! 原有 AST 和解析，因此不同 impl 泛型名称不会串用类型参数身份。
 
 use crate::internal_access;
+use crate::protocol::constructor::{
+    ACTIVATE, DEPENDENCIES, METADATA as CONSTRUCTOR_METADATA, Metadata,
+};
 use rustc_ast::{
     ast,
     mut_visit::{self, MutVisitor},
@@ -26,7 +29,6 @@ use rustc_middle::{
     util::Providers,
 };
 use rustc_span::Span;
-use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     sync::{
@@ -37,10 +39,6 @@ use std::{
 
 #[path = "constructor_body.rs"]
 mod body;
-
-const CONSTRUCTOR_METADATA: &str = "__NESTRS_CONSTRUCTOR";
-const ACTIVATE: &str = "__nestrs_constructor_activate";
-const DEPENDENCIES: &str = "__nestrs_constructor_dependencies";
 
 type LoweringQuery = for<'tcx> fn(
     TyCtxt<'tcx>,
@@ -63,11 +61,6 @@ pub fn provide(providers: &mut Providers) {
     providers.queries.resolver_for_lowering_raw = lower_constructors;
 }
 
-#[derive(Deserialize)]
-struct Metadata {
-    method: String,
-    result: bool,
-}
 struct Constructor {
     span: Span,
     fields: BTreeMap<String, (usize, Box<ast::Ty>)>,

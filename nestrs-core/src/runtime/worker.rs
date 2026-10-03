@@ -5,7 +5,10 @@
 
 use super::{Resolution, owner::Published};
 use crate::{
-    activation::{ActivationPreparation, DependencyLease, ReleaseDomain, adapter::FactoryInvoker},
+    activation::{
+        ActivationPreparation, DependencyLease, ReleaseDomain, adapter::FactoryInvoker,
+        deferred::LazyResolver,
+    },
     error::ResolveError,
     graph::{AbsentInput, Constructor, DependencyInput, ValidatedGraph},
 };
@@ -13,7 +16,7 @@ use std::{
     any::Any,
     future::poll_fn,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::Arc,
+    sync::{Arc, Weak},
     task::Poll,
 };
 
@@ -21,7 +24,7 @@ pub(super) async fn activate(
     graph: Arc<ValidatedGraph>,
     provider: usize,
     inputs: Vec<Option<DependencyLease>>,
-    lazy_inputs: Vec<Option<crate::activation::LazyDependency>>,
+    resolver: Weak<dyn LazyResolver>,
     domain: Arc<ReleaseDomain>,
 ) -> Resolution {
     let node = &graph.nodes[provider];
@@ -31,7 +34,7 @@ pub(super) async fn activate(
     // 每个 worker 只准备当前节点的输入，依赖实例已由调度器构造并以强 lease 传入。
     // Preparation 对写入失败负责回滚，factory frame 则持有跨 await 的真实借用对象。
     let mut preparation = ActivationPreparation::new(node.dependencies.len());
-    for ((dependency, input), lazy_input) in node.dependencies.iter().zip(inputs).zip(lazy_inputs) {
+    for (dependency, input) in node.dependencies.iter().zip(inputs) {
         // 计划已经决定完整交付形态。缺席分支使用准确类型的 None；只有立即输入
         // 消费已就绪实例，只有实际延迟目标才接收关联 owner 的请求句柄。
         match &dependency.input {
@@ -44,12 +47,17 @@ pub(super) async fn activate(
             DependencyInput::Immediate { prepare, .. } => {
                 preparation.prepare(dependency.slot, *prepare, input)
             }
-            DependencyInput::Lazy { prepare, .. } => {
-                preparation.prepare_lazy(dependency.slot, *prepare, lazy_input)
+            DependencyInput::Lazy { plan, prepare } => {
+                // 固定描述与实际 owner 只在交付此槽位时组合，不再维护另一条并行输入数组。
+                // 包装弱能力不提交目标请求；每个字段仍独占后续的接收端与类型化结果。
+                let lazy_input = super::lazy::dependency(&resolver, plan.clone());
+                preparation.prepare_lazy(dependency.slot, *prepare, Some(lazy_input))
             }
         }
         .map_err(convert)?;
     }
+    // 字段已各自保存弱能力，worker 不需要在用户构造 future 中继续持有它。
+    drop(resolver);
     let (service, dependencies) = match node.constructor {
         Constructor::Class(constructor) => {
             let (inputs, dependencies) = preparation.finish_class().map_err(convert)?;

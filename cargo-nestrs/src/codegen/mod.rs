@@ -21,6 +21,7 @@ mod lazy_tests;
 #[cfg(test)]
 mod tests;
 
+use constructor::ConstructorMode;
 use zyn::{
     meta::Args,
     syn::{self, spanned::Spanned},
@@ -35,8 +36,8 @@ use crate::codegen::injection::{
         },
         injectable::{
             CollectInjectableProvider, DefineGenericInjectableProvider, EmitInjectableRegistration,
-            GenerateInjectableConstructor, RewriteInjectionField, analyze_fields,
-            config::InjectableConfig,
+            GenerateInjectableConstructor, analyze_fields, config::InjectableConfig,
+            rewrite_injection_field,
         },
     },
     macros_attrs::lazy::{ServiceLazyConfig, defer_to_provider, take_lazy_for_provider},
@@ -119,7 +120,15 @@ fn injectable(item: syn::ItemStruct, args: Args) -> zyn::Output {
         Ok(selection) => selection,
         Err(error) => return error.into_compile_error().into(),
     };
-    let ide_service = analyzed_fields.item.ident.clone();
+    let constructor_mode = match &ide_selection {
+        None => ConstructorMode::Deferred,
+        Some(selection) if selection.constructor => ConstructorMode::Explicit,
+        Some(_) => ConstructorMode::Automatic,
+    };
+    let declaration = match rewrite_injection_field(&analyzed_fields, ide_selection.as_ref()) {
+        Ok(declaration) => declaration,
+        Err(error) => return error.into_compile_error().into(),
+    };
 
     // 模块作用域检查所需的标识符必须在 zyn element 消费 AST 前保存。
     let scope_ident = Some(analyzed_fields.item.ident.clone());
@@ -128,11 +137,9 @@ fn injectable(item: syn::ItemStruct, args: Args) -> zyn::Output {
     // 字段定义、构造 adapter 与 Provider 注册是三个独立的输出职责。注册 scope 只
     // 接收后两者作为 children，明确它们必须共享匿名词法作用域，避免把 helper
     // 暴露为用户可调用的 inherent method。
-    let output = zyn! {
+    zyn! {
         @RequireModuleScope(ident = scope_ident) {
-            @RewriteInjectionField(
-                analysis = analyzed_fields.clone(),
-            )
+            {{ declaration }}
             @if (is_open_generic_provider) {
                 {{ primary_attribute_use }}
                 {{ lazy_attribute_use }}
@@ -141,6 +148,7 @@ fn injectable(item: syn::ItemStruct, args: Args) -> zyn::Output {
                     config = config,
                     primary = primary.is_primary(),
                     lazy = lazy.value(),
+                    mode = constructor_mode,
                 )
             } @else {
                 @EmitInjectableRegistration {
@@ -148,24 +156,18 @@ fn injectable(item: syn::ItemStruct, args: Args) -> zyn::Output {
                     {{ lazy_attribute_use }}
                     @GenerateInjectableConstructor(
                         analysis = analyzed_fields.clone(),
+                        mode = constructor_mode,
                     )
                     @CollectInjectableProvider(
                         analysis = analyzed_fields,
                         config = config,
                         primary = primary.is_primary(),
                         lazy = lazy.value(),
+                        mode = constructor_mode,
                     )
                 }
             }
         }
-    };
-    if let Some(selection) = ide_selection {
-        match constructor_ide::apply(output.tokens().clone(), &ide_service, &selection) {
-            Ok(tokens) => tokens.into(),
-            Err(error) => error.into_compile_error().into(),
-        }
-    } else {
-        output
     }
 }
 

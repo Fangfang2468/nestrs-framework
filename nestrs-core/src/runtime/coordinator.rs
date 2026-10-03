@@ -427,22 +427,13 @@ impl Coordinator {
             let provider = activation.provider;
             let graph = self.graph.clone();
             let domain = self.domain.clone();
-            // 此处已使用 activation 的真实 owner：Singleton 的句柄永远绑定 root。
-            // 延迟输入不创建目标任务，只共享计划中的描述并关联真实 owner。
-            // 描述没有运行期状态；接收端与结果缓存在生成的每个字段中独立创建。
-            let lazy_inputs = graph.nodes[provider]
-                .dependencies
-                .iter()
-                .map(|dependency| {
-                    dependency.input.lazy_plan().map(|plan| {
-                        super::lazy::dependency(&self.owners[&activation.owner].data, plan.clone())
-                    })
-                })
-                .collect();
+            // 只传实际 owner 的弱请求能力，Singleton 始终绑定 root。worker 按计划的
+            // Lazy 分支现场包装字段句柄；调度器无需另建逐槽位的延迟输入数组。
+            let resolver = Arc::downgrade(&self.owners[&activation.owner].data);
             let handle = self.jobs.spawn(async move {
                 JobCompletion::Activation(
                     super::lazy::IN_ACTIVATION
-                        .scope((), activate(graph, provider, inputs, lazy_inputs, domain))
+                        .scope((), activate(graph, provider, inputs, resolver, domain))
                         .await,
                 )
             });

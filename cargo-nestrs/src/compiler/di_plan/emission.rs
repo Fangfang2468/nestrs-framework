@@ -5,6 +5,7 @@
 //! 编译得到。入口只在最终binary/test存在，rlib不导出相互竞争的全局符号。
 
 use super::*;
+use crate::protocol::{self, Initialization, KeyKind, PlanSink};
 use rustc_abi::ExternAbi;
 use rustc_ast::{self as ast, token};
 use rustc_data_structures::steal::Steal;
@@ -22,7 +23,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-const ENTRY: &str = "__nestrs_reflect_v1";
+const ENTRY: &str = protocol::PLAN_ENTRY;
 const SOURCE: &str = "nestrs generated reflection plan";
 static ENABLED: AtomicBool = AtomicBool::new(false);
 type MirBuilt = for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> &'tcx Steal<mir::Body<'tcx>>;
@@ -105,7 +106,17 @@ fn plan_mir(tcx: TyCtxt<'_>, def: LocalDefId) -> &Steal<mir::Body<'_>> {
         return original;
     }
     let plan = compile(tcx).unwrap_or_else(|error| tcx.dcx().fatal(error));
-    let mut body = original.steal();
+    let body = emit(tcx, original.steal(), &plan);
+    tcx.alloc_steal_mir(body)
+}
+
+/// 只消费已检查计划并组装 MIR。mir_built 可在 analysis 的 borrowck 中提前执行；
+/// 此处不发布 sidecar，产物必须等 after_analysis 的来源与两阶段一致性审计通过。
+fn emit<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    mut body: mir::Body<'tcx>,
+    plan: &Compiled<'tcx>,
+) -> mir::Body<'tcx> {
     let info = body.basic_blocks[mir::START_BLOCK].terminator().source_info;
     let helpers = helpers(tcx);
     let mut writer = Writer {
@@ -115,18 +126,9 @@ fn plan_mir(tcx: TyCtxt<'_>, def: LocalDefId) -> &Steal<mir::Body<'_>> {
         info,
         helpers,
     };
-    let config = crate::registration_codegen::startup_options(tcx.sess);
-    writer.sink(
-        "plan_set_options",
-        vec![
-            writer.pointer(),
-            boolean(tcx, config.eager, info.span),
-            number(tcx, config.max_concurrent_activations, info.span),
-        ],
-    );
+    writer.options(&crate::registration_codegen::startup_options(tcx.sess));
     for binding in &plan.bindings {
-        let value = writer.descriptor(binding.instance, "activation::adapter::ProjectionAdapter");
-        writer.sink("plan_push_binding", vec![writer.pointer(), value]);
+        writer.binding(binding.instance);
     }
     for (id, provider) in plan.providers.iter().enumerate() {
         // 泛型蓝图的普通 helper 属于声明所在匿名作用域；调用它保留真实 trait
@@ -140,89 +142,33 @@ fn plan_mir(tcx: TyCtxt<'_>, def: LocalDefId) -> &Steal<mir::Body<'_>> {
         } else {
             provider.instance
         };
-        let value = writer.descriptor(callback, "activation::adapter::ActivationAdapter");
-        let loc = tcx
-            .sess
-            .source_map()
-            .lookup_char_pos(provider.source.source_callsite().lo());
-        let source_file = loc.file.name.prefer_local_unconditionally().to_string();
-        let (key_kind, key_name, key_index) = key_parts(&provider.data.key);
-        let lifetime = match provider.data.lifetime {
-            model::Lifetime::Singleton => 0,
-            model::Lifetime::Scoped => 1,
-            model::Lifetime::Transient => 2,
-        };
-        let initialization = match provider.data.lazy {
-            None => 0,
-            Some(true) => 1,
-            Some(false) => 2,
-        };
-        writer.sink(
-            "plan_push_provider",
-            vec![
-                writer.pointer(),
-                value,
-                number(tcx, lifetime, info.span),
-                number(tcx, key_kind, info.span),
-                text(tcx, key_name, info.span),
-                number(tcx, key_index, info.span),
-                number(tcx, initialization, info.span),
-                text(tcx, &source_file, info.span),
-                number(tcx, loc.line, info.span),
-                number(tcx, loc.col.0 + 1, info.span),
-                boolean(tcx, plan.plan.requires_scope[id], info.span),
-            ],
-        );
+        writer.provider(ProviderEmission {
+            callback,
+            declaration: provider,
+            requires_scope: plan.plan.requires_scope[id],
+        });
     }
     for (id, inputs) in plan.plan.inputs.iter().enumerate() {
         for (slot, input) in inputs.iter().enumerate() {
-            let declaration = &plan.providers[id].data.inputs[slot];
-            let (key_kind, key_name, key_index) = key_parts(&declaration.key);
-            writer.sink(
-                "plan_set_input",
-                vec![
-                    writer.pointer(),
-                    number(tcx, id, info.span),
-                    number(tcx, slot, info.span),
-                    optional_number(tcx, input.target, info.span),
-                    optional_number(tcx, input.binding, info.span),
-                    boolean(tcx, declaration.optional, info.span),
-                    number(tcx, key_kind, info.span),
-                    text(tcx, key_name, info.span),
-                    number(tcx, key_index, info.span),
-                    text(tcx, &declaration.label, info.span),
-                ],
-            );
+            writer.input(InputEmission {
+                provider: id,
+                slot,
+                selected: input,
+                declaration: &plan.providers[id].data.inputs[slot],
+            });
         }
     }
     for route in &plan.plan.routes {
         if let Some(binding) = route.binding {
-            writer.sink(
-                "plan_push_trait_route",
-                vec![
-                    writer.pointer(),
-                    number(tcx, route.provider, info.span),
-                    number(tcx, binding, info.span),
-                ],
-            );
+            writer.trait_route(route.provider, binding);
         }
     }
     for &id in &plan.plan.order {
-        writer.sink(
-            "plan_push_order",
-            vec![writer.pointer(), number(tcx, id, info.span)],
-        );
+        writer.order(id);
     }
     for (dependency, consumers) in plan.plan.dependents.iter().enumerate() {
         for &consumer in consumers {
-            writer.sink(
-                "plan_push_dependent",
-                vec![
-                    writer.pointer(),
-                    number(tcx, dependency, info.span),
-                    number(tcx, consumer, info.span),
-                ],
-            );
+            writer.dependent(dependency, consumer);
         }
     }
     writer.blocks.push(BasicBlockData::new(
@@ -235,9 +181,9 @@ fn plan_mir(tcx: TyCtxt<'_>, def: LocalDefId) -> &Steal<mir::Body<'_>> {
     ));
     let blocks = writer.blocks;
     body.basic_blocks = mir::BasicBlocks::new(blocks);
-    tcx.alloc_steal_mir(body)
+    body
 }
-fn helpers(tcx: TyCtxt<'_>) -> HashMap<String, DefId> {
+fn helpers(tcx: TyCtxt<'_>) -> HashMap<PlanSink, DefId> {
     let mut result = HashMap::new();
     let mut crates = tcx.crates(()).to_vec();
     if tcx.crate_name(LOCAL_CRATE).as_str() == "nestrs_core" {
@@ -261,23 +207,137 @@ fn helpers(tcx: TyCtxt<'_>) -> HashMap<String, DefId> {
         for def in definitions {
             if tcx.def_kind(def) == DefKind::Fn
                 && let Some(name) = tcx.opt_item_name(def)
-                && name.as_str().starts_with("plan_")
-                && definition_path(tcx, def) == format!("graph::plan::{name}")
+                && let Some(sink) = PlanSink::from_name(name.as_str())
+                && definition_path(tcx, def) == format!("graph::plan::{}", sink.name())
             {
-                result.insert(name.to_string(), def);
+                result.insert(sink, def);
             }
         }
     }
     result
 }
+/// 选择结果使用具名字段传入；只有 Writer 负责现有 core ABI 的参数位置。
+struct ProviderEmission<'a, 'tcx> {
+    callback: ty::Instance<'tcx>,
+    declaration: &'a Provider<'tcx>,
+    requires_scope: bool,
+}
+struct InputEmission<'a> {
+    provider: usize,
+    slot: usize,
+    selected: &'a model::InputPlan,
+    declaration: &'a model::Input,
+}
+
 struct Writer<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     body: &'a mut mir::Body<'tcx>,
     blocks: IndexVec<BasicBlock, BasicBlockData<'tcx>>,
     info: mir::SourceInfo,
-    helpers: HashMap<String, DefId>,
+    helpers: HashMap<PlanSink, DefId>,
 }
 impl<'tcx> Writer<'_, 'tcx> {
+    fn options(&mut self, config: &cargo_nestrs::project_config::DiConfig) {
+        self.sink(
+            PlanSink::Options,
+            vec![
+                self.pointer(),
+                boolean(self.tcx, config.eager, self.info.span),
+                number(self.tcx, config.max_concurrent_activations, self.info.span),
+            ],
+        );
+    }
+
+    fn binding(&mut self, instance: ty::Instance<'tcx>) {
+        let value = self.descriptor(instance, protocol::PROJECTION_ADAPTER);
+        self.sink(PlanSink::Binding, vec![self.pointer(), value]);
+    }
+
+    fn provider(&mut self, emission: ProviderEmission<'_, 'tcx>) {
+        let value = self.descriptor(emission.callback, protocol::ACTIVATION_ADAPTER);
+        let provider = emission.declaration;
+        let loc = self
+            .tcx
+            .sess
+            .source_map()
+            .lookup_char_pos(provider.source.source_callsite().lo());
+        let source_file = loc.file.name.prefer_local_unconditionally().to_string();
+        let key = EncodedKey::new(&provider.data.key);
+        let lifetime = match provider.data.lifetime {
+            model::Lifetime::Singleton => Lifetime::Singleton,
+            model::Lifetime::Scoped => Lifetime::Scoped,
+            model::Lifetime::Transient => Lifetime::Transient,
+        };
+        let initialization = Initialization::from_lazy(provider.data.lazy);
+        let (tcx, span) = (self.tcx, self.info.span);
+        self.sink(
+            PlanSink::Provider,
+            vec![
+                self.pointer(),
+                value,
+                number(tcx, lifetime as usize, span),
+                number(tcx, key.kind as usize, span),
+                text(tcx, key.name, span),
+                number(tcx, key.index, span),
+                number(tcx, initialization as usize, span),
+                text(tcx, &source_file, span),
+                number(tcx, loc.line, span),
+                number(tcx, loc.col.0 + 1, span),
+                boolean(tcx, emission.requires_scope, span),
+            ],
+        );
+    }
+
+    fn input(&mut self, emission: InputEmission<'_>) {
+        let declaration = emission.declaration;
+        let key = EncodedKey::new(&declaration.key);
+        let (tcx, span) = (self.tcx, self.info.span);
+        self.sink(
+            PlanSink::Input,
+            vec![
+                self.pointer(),
+                number(tcx, emission.provider, span),
+                number(tcx, emission.slot, span),
+                optional_number(tcx, emission.selected.target, span),
+                optional_number(tcx, emission.selected.binding, span),
+                boolean(tcx, declaration.optional, span),
+                number(tcx, key.kind as usize, span),
+                text(tcx, key.name, span),
+                number(tcx, key.index, span),
+                text(tcx, &declaration.label, span),
+            ],
+        );
+    }
+
+    fn trait_route(&mut self, provider: usize, binding: usize) {
+        self.sink(
+            PlanSink::TraitRoute,
+            vec![
+                self.pointer(),
+                number(self.tcx, provider, self.info.span),
+                number(self.tcx, binding, self.info.span),
+            ],
+        );
+    }
+
+    fn order(&mut self, provider: usize) {
+        self.sink(
+            PlanSink::Order,
+            vec![self.pointer(), number(self.tcx, provider, self.info.span)],
+        );
+    }
+
+    fn dependent(&mut self, dependency: usize, consumer: usize) {
+        self.sink(
+            PlanSink::Dependent,
+            vec![
+                self.pointer(),
+                number(self.tcx, dependency, self.info.span),
+                number(self.tcx, consumer, self.info.span),
+            ],
+        );
+    }
+
     fn pointer(&self) -> Operand<'tcx> {
         Operand::Copy(Local::new(1).into())
     }
@@ -340,8 +400,9 @@ impl<'tcx> Writer<'_, 'tcx> {
         }
         self.call(instance, vec![], sig.output())
     }
-    fn sink(&mut self, name: &str, args: Vec<Operand<'tcx>>) {
-        let def = *self.helpers.get(name).unwrap_or_else(|| {
+    fn sink(&mut self, sink: PlanSink, args: Vec<Operand<'tcx>>) {
+        let name = sink.name();
+        let def = *self.helpers.get(&sink).unwrap_or_else(|| {
             self.tcx
                 .dcx()
                 .fatal(format!("缺少 Nestrs plan ABI {name}；请重建工具链与 core"))
@@ -410,14 +471,29 @@ fn text<'tcx>(tcx: TyCtxt<'tcx>, value: &str, span: Span) -> Operand<'tcx> {
     )
 }
 
-fn key_parts(key: &model::Key) -> (usize, &str, usize) {
-    match key {
-        model::Key::Default => (0, "", 0),
-        model::Key::Named(value) => (1, value, 0),
-        model::Key::Indexed(value) => (
-            2,
-            "",
-            usize::try_from(*value).expect("compiler key fits target usize"),
-        ),
+struct EncodedKey<'a> {
+    kind: KeyKind,
+    name: &'a str,
+    index: usize,
+}
+impl<'a> EncodedKey<'a> {
+    fn new(key: &'a model::Key) -> Self {
+        match key {
+            model::Key::Default => Self {
+                kind: KeyKind::Default,
+                name: "",
+                index: 0,
+            },
+            model::Key::Named(value) => Self {
+                kind: KeyKind::Named,
+                name: value,
+                index: 0,
+            },
+            model::Key::Indexed(value) => Self {
+                kind: KeyKind::Indexed,
+                name: "",
+                index: usize::try_from(*value).expect("compiler key fits target usize"),
+            },
+        }
     }
 }

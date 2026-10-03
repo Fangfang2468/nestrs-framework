@@ -42,6 +42,8 @@ pub struct SourceInsertion {
 /// Capabilities remain separate from explicit registrations until graph
 /// compilation activates an interface demanded by the actual link unit.
 pub fn binding_source(binding: &BindingSpec) -> String {
+    let module = crate::protocol::REFLECTION_MODULE;
+    let marker = crate::protocol::Marker::AutomaticBinding.name();
     let concrete = &binding.concrete;
     let interface = &binding.interface;
     let origin = format!(
@@ -56,9 +58,9 @@ pub fn binding_source(binding: &BindingSpec) -> String {
 #[doc = {origin}]
 const _: () = {{
     #[allow(dead_code)]
-    mod __nestrs_reflect {{
+    mod {module} {{
         #[inline(never)]
-        pub const fn compiler_automatic_binding<C: ?Sized, I: ?Sized>() {{
+        pub const fn {marker}<C: ?Sized, I: ?Sized>() {{
             let _ = (core::marker::PhantomData::<C>, core::marker::PhantomData::<I>);
         }}
     }}
@@ -73,7 +75,7 @@ const _: () = {{
         #[allow(dead_code)]
     #[allow(clippy::needless_borrow)]
     fn __nestrs_reflect_automatic_binding() -> ::nestrs_core::activation::adapter::ProjectionAdapter {{
-        __nestrs_reflect::compiler_automatic_binding::<{concrete}, __NestrsBoundInterface>();
+        {module}::{marker}::<{concrete}, __NestrsBoundInterface>();
         ::nestrs_core::activation::adapter::ProjectionAdapter {{
             trait_type: ::nestrs_core::service::ServiceType::create::<__NestrsBoundInterface>(),
             concrete_type: ::nestrs_core::service::ServiceType::create::<{concrete}>(),

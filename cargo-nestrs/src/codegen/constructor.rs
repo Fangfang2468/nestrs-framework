@@ -16,6 +16,14 @@ use super::injection::{
     },
 };
 
+/// 普通编译保留候选给 driver；编辑器直接渲染已验证的构造选择。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConstructorMode {
+    Deferred,
+    Automatic,
+    Explicit,
+}
+
 /// 一项构造参数对应一个图输入；即使参数只用于校验或计算普通字段，也不能删除此输入。
 #[derive(Clone, Debug)]
 pub(crate) struct ConstructorParameterSpec {

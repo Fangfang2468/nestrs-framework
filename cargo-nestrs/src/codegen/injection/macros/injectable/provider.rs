@@ -1,11 +1,16 @@
 //! `#[injectable]` 的 `Provider` 生成。
 //!
 //! 此模块只消费字段分析结果，不参与字段改写或构造代码生成。这样 provider 身份、
-//! 字段 key、可选性和 DI 输入位置都来自与 `RewriteInjectionField` 相同的
+//! 字段 key、可选性和 DI 输入位置都来自与字段改写相同的
 //! `FieldSpec`，不会重新解析已被清除的 marker。
 
+use crate::codegen::constructor::ConstructorMode;
 use crate::codegen::injection::render::{
     EmitCompilerKey, EmitDependencyRequest, EmitPlanProvider, RenderCleanupHook,
+};
+use crate::{
+    codegen::reflection,
+    protocol::{self, Marker},
 };
 
 use super::{
@@ -28,14 +33,17 @@ pub(crate) fn collect_injectable_provider(
     config: InjectableConfig,
     primary: bool,
     lazy: Option<bool>,
+    mode: ConstructorMode,
 ) -> zyn::TokenStream {
     let service = analysis.item.ident.clone();
     let service_type = quote!(#service);
+    let reflection_module = reflection::ident(protocol::REFLECTION_MODULE);
+    let provider_marker = reflection::ident(Marker::Provider.name());
 
     zyn! {
         #[allow(dead_code)]
         fn __nestrs_reflect_provider() -> ::nestrs_core::activation::adapter::ActivationAdapter {
-            __nestrs_reflect::compiler_provider::<{{ service_type.clone() }}>(
+            {{ reflection_module }}::{{ provider_marker }}::<{{ service_type.clone() }}>(
                 @EmitCompilerKey(key = config.key.clone())
             );
             @EmitPlanProvider(
@@ -50,6 +58,7 @@ pub(crate) fn collect_injectable_provider(
                         analysis = analysis.clone(),
                         config = config.clone(),
                         service_type = service_type.clone(),
+                        mode = *mode,
                     )
                     constructor: ::nestrs_core::activation::adapter::Constructor::Class(__nestrs_construct),
             }
@@ -67,8 +76,33 @@ pub(crate) fn emit_class_provider_fields(
     analysis: AnalyzedFields,
     config: InjectableConfig,
     service_type: zyn::TokenStream,
+    mode: ConstructorMode,
 ) -> zyn::TokenStream {
     let cleanup = config.cleanup.clone();
+    let dependencies = reflection::ident(protocol::constructor::DEPENDENCIES);
+    zyn! {
+        service_type: ::nestrs_core::service::ServiceType::create::<{{ service_type.clone() }}>(),
+        cleanup: @RenderCleanupHook(cleanup = cleanup.clone()),
+        inputs: @match (*mode) {
+            ConstructorMode::Deferred => {
+                if false {
+                    {{ service_type.clone() }}::{{ dependencies.clone() }}()
+                } else {
+                    @RenderFieldInputs(analysis = analysis.clone())
+                }
+            }
+            ConstructorMode::Automatic => {
+                { @RenderFieldInputs(analysis = analysis.clone()) }
+            }
+            ConstructorMode::Explicit => {
+                { {{ service_type.clone() }}::{{ dependencies.clone() }}() }
+            }
+        },
+    }
+}
+
+#[zyn::element]
+fn render_field_inputs(analysis: AnalyzedFields) -> zyn::TokenStream {
     // 两个候选都先交给标准 Rust 名称解析；driver 在 HIR 降低前按真实服务身份
     // 选择一种构造模式。未选中的自动 Default/value 不参与类型检查或求值。
     let field_mode = analysis
@@ -78,11 +112,6 @@ pub(crate) fn emit_class_provider_fields(
     let original_input = analysis.item.to_token_stream().to_string();
 
     zyn! {
-        service_type: ::nestrs_core::service::ServiceType::create::<{{ service_type }}>(),
-        cleanup: @RenderCleanupHook(cleanup = cleanup.clone()),
-        inputs: if false {
-            {{ service_type }}::__nestrs_constructor_dependencies()
-        } else {
             let __nestrs_constructor_field_mode = {{ field_mode }};
             let __nestrs_constructor_input = {{ original_input }};
             ::std::vec![
@@ -92,7 +121,6 @@ pub(crate) fn emit_class_provider_fields(
                 }
             }
             ]
-        },
     }
 }
 
@@ -117,10 +145,59 @@ mod tests {
             config,
             primary,
             lazy,
+            mode: ConstructorMode::Deferred,
         }
         .render(&zyn::Input::default())
         .tokens()
         .to_string()
+    }
+
+    #[test]
+    fn selected_provider_inputs_do_not_render_the_other_constructor_mode() {
+        for mode in [
+            ConstructorMode::Deferred,
+            ConstructorMode::Automatic,
+            ConstructorMode::Explicit,
+        ] {
+            let analysis = super::super::field_analyze::analyze_fields(syn::parse_quote! {
+                struct Service { #[inject] dependency: Dependency }
+            })
+            .unwrap();
+            let rendered = CollectInjectableProvider {
+                analysis,
+                config: InjectableConfig {
+                    lifetime: ServiceLifetime::Singleton,
+                    key: None,
+                    cleanup: None,
+                },
+                primary: false,
+                lazy: None,
+                mode,
+            }
+            .render(&zyn::Input::default());
+            syn::parse2::<syn::ItemFn>(rendered.tokens().clone()).unwrap();
+            let tokens = rendered.tokens().to_string();
+            assert_eq!(
+                tokens.contains("if false"),
+                mode == ConstructorMode::Deferred,
+                "{tokens}"
+            );
+            assert_eq!(
+                tokens.contains("__nestrs_constructor_dependencies"),
+                mode != ConstructorMode::Automatic,
+                "{tokens}"
+            );
+            assert_eq!(
+                tokens.contains("compiler_plan_input"),
+                mode != ConstructorMode::Explicit,
+                "{tokens}"
+            );
+            assert_eq!(
+                tokens.contains("__nestrs_constructor_input"),
+                mode != ConstructorMode::Explicit,
+                "{tokens}"
+            );
+        }
     }
 
     #[test]

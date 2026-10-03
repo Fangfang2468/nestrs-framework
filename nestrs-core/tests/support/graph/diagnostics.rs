@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 
 use super::{Constructor, ValidatedGraph, names::display_names};
-use crate::{ServiceKey, ServiceLifetime, registration::provider::FactoryInvoker};
+use crate::{ServiceKey, ServiceLifetime, activation::adapter::FactoryInvoker};
 
 /// 图以平坦的声明列表和目标编号编码；深依赖链不会形成嵌套 JSON 或递归遍历。
 pub(crate) fn snapshot(graph: &ValidatedGraph) -> Value {

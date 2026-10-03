@@ -422,6 +422,74 @@ fn diamond_dependencies_have_stable_order_and_unique_reverse_edges() {
 }
 
 #[test]
+fn successful_plans_repeat_with_frozen_absence_and_preserve_provider_indices() {
+    let mut consumer = provider(0, &[1, 2]);
+    consumer.inputs[1].optional = true;
+    let target = provider(1, &[]);
+    for providers in [[consumer.clone(), target.clone()], [target, consumer]] {
+        let consumer = providers.iter().position(|node| node.type_id == 0).unwrap();
+        let target = providers.iter().position(|node| node.type_id == 1).unwrap();
+        let plan = compile(&types(3), &providers, &[]).unwrap();
+        assert_eq!(compile(&types(3), &providers, &[]).unwrap(), plan);
+        // 前端排序后的输入编号是 ABI；纯模型不得为了稳定性偷偷重新编号。
+        assert_eq!(route(&plan, 0, Key::Default), (consumer, None));
+        assert_eq!(route(&plan, 1, Key::Default), (target, None));
+        assert_eq!(plan.inputs[consumer][0].target, Some(target));
+        assert_eq!(plan.inputs[consumer][1].target, None);
+        assert_eq!(plan.inputs[consumer][1].binding, None);
+        assert_eq!(plan.dependents[target], [consumer]);
+        assert_eq!(plan.order, [target, consumer]);
+    }
+}
+
+#[test]
+fn lazy_optional_traits_keep_ambiguity_and_scope_errors() {
+    let mut consumer = provider(0, &[2]);
+    consumer.inputs[0].optional = true;
+    consumer.inputs[0].lazy = true;
+    fails(
+        &types(4),
+        &[consumer.clone(), provider(1, &[]), provider(3, &[])],
+        &[binding(1, 2), binding(3, 2)],
+        Kind::AmbiguousTrait,
+    );
+    consumer.lifetime = Lifetime::Singleton;
+    let mut scoped = provider(1, &[]);
+    scoped.lifetime = Lifetime::Scoped;
+    let message = fails(
+        &types(3),
+        &[consumer, scoped],
+        &[binding(1, 2)],
+        Kind::ScopeRequired,
+    );
+    assert!(message.contains("[lazy]"));
+}
+
+#[test]
+fn malformed_lazy_slots_keep_missing_and_topological_diagnostics() {
+    for cyclic in [false, true] {
+        let mut consumer = provider(0, &[1, 2]);
+        consumer.lifetime = Lifetime::Singleton;
+        consumer.inputs[0].lazy = true;
+        consumer.inputs[0].slot = 1;
+        let (target, expected) = if cyclic {
+            (provider(1, &[0]), Kind::Cycle)
+        } else {
+            let mut target = provider(1, &[]);
+            target.lifetime = Lifetime::Scoped;
+            (target, Kind::ScopeRequired)
+        };
+        let errors = compile(&types(3), &[consumer, target], &[]).unwrap_err();
+        for kind in [Kind::InvalidMetadata, Kind::MissingDependency, expected] {
+            assert!(
+                errors.iter().any(|error| error.kind == kind),
+                "缺少 {kind:?}: {errors:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn actual_ids_define_identity_even_for_equal_names_and_sparse_ids() {
     let types = [
         Type {
@@ -491,11 +559,11 @@ fn diagnostics_are_repeatable_and_keep_independent_errors() {
 }
 
 #[test]
-fn twelve_thousand_nodes_plan_and_scope_analysis_fit_a_small_stack() {
+fn twenty_thousand_nodes_plan_and_scope_analysis_fit_a_small_stack() {
     std::thread::Builder::new()
         .stack_size(128 * 1024)
         .spawn(|| {
-            let count = 12_000;
+            let count = 20_000;
             let mut providers: Vec<_> = (0..count)
                 .map(|id| {
                     if id + 1 < count {

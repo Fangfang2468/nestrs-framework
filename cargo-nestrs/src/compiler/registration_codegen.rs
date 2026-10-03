@@ -173,8 +173,8 @@ impl Kind {
 
     pub(crate) fn descriptor(self) -> &'static str {
         match self {
-            Self::Provider => "activation::adapter::ActivationAdapter",
-            Self::Binding | Self::AutomaticBinding => "activation::adapter::ProjectionAdapter",
+            Self::Provider => crate::protocol::ACTIVATION_ADAPTER,
+            Self::Binding | Self::AutomaticBinding => crate::protocol::PROJECTION_ADAPTER,
         }
     }
 }
@@ -280,7 +280,7 @@ pub(crate) fn descriptor_calls<'tcx>(
                 .skip_normalization();
             if tcx
                 .opt_item_name(definition)
-                .is_some_and(|name| name.as_str() == "__nestrs_constructor_dependencies")
+                .is_some_and(|name| name.as_str() == crate::protocol::constructor::DEPENDENCIES)
             {
                 validate_constructor_dependencies(tcx, definition, arguments)?;
                 pending.push_back(ty::Instance::new_raw(definition, arguments));

@@ -165,7 +165,7 @@ fn mark_generated(tcx: TyCtxt<'_>, span: Span) -> Span {
             (tcx.is_mir_available(definition)
                 && tcx
                     .opt_item_name(definition)
-                    .is_some_and(|name| name.as_str() == "plan_set_options")
+                    .is_some_and(|name| name.as_str() == crate::protocol::PlanSink::Options.name())
                 && generated_anchor(tcx, definition))
             .then_some(definition)
         })
@@ -199,7 +199,8 @@ fn generated_anchor(tcx: TyCtxt<'_>, definition: DefId) -> bool {
             .data
             .iter()
             .map(|component| component.data.get_opt_name())
-            .eq(["graph", "plan", "plan_set_options"].map(|name| Some(Symbol::intern(name))))
+            .eq(["graph", "plan", crate::protocol::PlanSink::Options.name()]
+                .map(|name| Some(Symbol::intern(name))))
         || tcx.def_kind(definition) != hir::def::DefKind::Fn
         || tcx.is_foreign_item(definition)
         || tcx.generics_of(definition).count() != 0

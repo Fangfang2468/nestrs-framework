@@ -4,7 +4,7 @@
 //! 由 activation 的控制块保存。runtime 只负责检查 owner 是否接受新请求、提交命令，
 //! 不为每个字段再建立一份状态机，也不持有字段的缓存。
 
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::{Arc, Weak, atomic::Ordering};
 
 use tokio::sync::watch;
 
@@ -24,13 +24,15 @@ tokio::task_local! {
 
 /// 为固定依赖交付弱 owner 引用和真实投影，不创建目标实例或新的引用计数分配。
 ///
-/// Weak 的 trait 转换只附加已有 OwnerData 的 vtable；不会分配 Arc<dyn LazyResolver>。
+/// worker 复用实际 owner 的弱请求能力；不会分配 Arc<dyn LazyResolver>。
 /// 保留独立的等待检查函数，使已经接受的请求在 owner 消失后仍可接续其 watch 结果。
-pub(super) fn dependency(owner: &Arc<OwnerData>, plan: Arc<LazyInputPlan>) -> LazyDependency {
-    let resolver = Arc::downgrade(owner);
+pub(super) fn dependency(
+    resolver: &Weak<dyn LazyResolver>,
+    plan: Arc<LazyInputPlan>,
+) -> LazyDependency {
     LazyDependency {
         plan,
-        resolver,
+        resolver: resolver.clone(),
         check_wait_allowed,
     }
 }
@@ -74,3 +76,7 @@ impl LazyResolver for OwnerData {
 #[cfg(test)]
 #[path = "../../tests/unit/runtime/lazy.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/runtime/lazy_delivery.rs"]
+mod delivery_tests;

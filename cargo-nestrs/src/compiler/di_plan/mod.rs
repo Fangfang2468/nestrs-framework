@@ -14,6 +14,7 @@ mod artifact;
 mod emission;
 
 use crate::autobind_semantic::{CompilerKey, external_key, provider_blueprint};
+use crate::protocol::{InputPolicy, Lifetime, Marker, ProviderPolicy};
 use crate::registration_codegen::{
     Kind, collect_callbacks, definition_path, descriptor_calls, reflect_item,
 };
@@ -48,6 +49,9 @@ struct Compiled<'tcx> {
 
 /// check 与 codegen 调用同一语义入口，因此 metadata-only 检查也会拒绝非法图。
 /// library 只发布声明；完整验证发生在 binary/test 的最终组合处。
+/// 此入口在 after_analysis 审计成功后计算并发布产物；MIR query 可更早消费另一份
+/// 计算结果。暂保留两次计算，避免把 sidecar 发布提前到来源/两阶段一致性审计之前，
+/// 也不将持有 Ty<'tcx> 的计划放入跨会话全局缓存。
 pub fn validate(tcx: TyCtxt<'_>) -> Result<(), String> {
     if !entry(tcx) {
         return Ok(());
@@ -163,27 +167,19 @@ fn read_provider<'tcx>(
     for call in descriptor_calls(tcx, instance)? {
         let (def, args, operands, body) =
             (call.definition, call.arguments, call.operands, call.body);
-        if reflect_item(tcx, def, "compiler_plan_provider") {
+        if reflect_item(tcx, def, Marker::PlanProvider.name()) {
             let constants: Vec<_> = args
                 .consts()
                 .map(|c| const_number(tcx, c))
                 .collect::<Result<_, _>>()?;
-            let [lifetime, primary, initialization] = constants.as_slice() else {
-                return Err("DI provider metadata 版本不匹配".into());
-            };
-            let lifetime = match lifetime {
-                0 => model::Lifetime::Singleton,
-                1 => model::Lifetime::Scoped,
-                2 => model::Lifetime::Transient,
-                _ => return Err("无效的服务生命周期".into()),
+            let policy = ProviderPolicy::decode(&constants)?;
+            let lifetime = match policy.lifetime {
+                Lifetime::Singleton => model::Lifetime::Singleton,
+                Lifetime::Scoped => model::Lifetime::Scoped,
+                Lifetime::Transient => model::Lifetime::Transient,
             };
             // 初始化策略属于 Provider 声明；不能与输入槽位的 LAZY 边标记混合。
-            let lazy = match initialization {
-                0 => None,
-                1 => Some(true),
-                2 => Some(false),
-                _ => return Err("无效的服务初始化策略（应为 inherit、lazy 或 eager）".into()),
-            };
+            let lazy = policy.initialization.lazy();
             let service = normalize(tcx, args.type_at(0))?;
             let id = intern(types, indices, service);
             let [value] = operands else {
@@ -194,36 +190,34 @@ fn read_provider<'tcx>(
                     id,
                     key(external_key(tcx, body, &value.node)?),
                     lifetime,
-                    *primary != 0,
+                    policy.primary,
                     lazy,
                 ))
                 .is_some()
             {
                 return Err("同一描述回调有多个 provider 身份".into());
             }
-        } else if reflect_item(tcx, def, "compiler_plan_factory") {
+        } else if reflect_item(tcx, def, Marker::PlanFactory.name()) {
             kind = if const_number(tcx, args.const_at(0))? != 0 {
                 "async factory"
             } else {
                 "sync factory"
             };
-        } else if reflect_item(tcx, def, "compiler_plan_input") {
+        } else if reflect_item(tcx, def, Marker::PlanInput.name()) {
             let constants: Vec<_> = args
                 .consts()
                 .map(|c| const_number(tcx, c))
                 .collect::<Result<_, _>>()?;
-            let [slot, optional, lazy] = constants.as_slice() else {
-                return Err("DI input metadata 版本不匹配".into());
-            };
+            let policy = InputPolicy::decode(&constants)?;
             let [value, label] = operands else {
                 return Err("DI input 字面量 metadata 版本不匹配".into());
             };
             inputs.push(model::Input {
                 type_id: intern(types, indices, normalize(tcx, args.type_at(0))?),
                 key: key(external_key(tcx, body, &value.node)?),
-                slot: *slot as usize,
-                optional: *optional != 0,
-                lazy: *lazy != 0,
+                slot: policy.slot,
+                optional: policy.optional,
+                lazy: policy.lazy,
                 label: text_literal(tcx, &label.node)?,
             });
         }
@@ -257,8 +251,8 @@ fn read_binding<'tcx>(
 ) -> Result<Binding<'tcx>, String> {
     for call in descriptor_calls(tcx, instance)? {
         let (def, args) = (call.definition, call.arguments);
-        if reflect_item(tcx, def, "compiler_binding")
-            || reflect_item(tcx, def, "compiler_automatic_binding")
+        if reflect_item(tcx, def, Marker::Binding.name())
+            || reflect_item(tcx, def, Marker::AutomaticBinding.name())
         {
             return Ok(Binding {
                 instance,

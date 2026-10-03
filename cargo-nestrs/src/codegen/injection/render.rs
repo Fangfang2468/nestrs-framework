@@ -8,6 +8,10 @@ use crate::codegen::injection::{
     macros_attrs::{cleanup::CleanupPath, lifetime::ServiceLifetime, service_key::ServiceKeySpec},
     sub_macros::inject::{DependencyRequest, is_trait_object},
 };
+use crate::{
+    codegen::reflection::ident,
+    protocol::{self, Initialization, Lifetime, Marker},
+};
 use zyn::{syn, zyn};
 
 /// 一条输入仅保留类型化执行能力；key、槽位策略和标签供编译器读 MIR 后消解。
@@ -20,11 +24,14 @@ pub(crate) fn emit_dependency_request(request: DependencyRequest) -> zyn::TokenS
     let lazy = request.lazy;
     let input_slot = request.input_slot;
     let label = request.label.clone();
+    let reflection = ident(protocol::REFLECTION_MODULE);
+    let dependency = ident(Marker::Dependency.name());
+    let plan_input = ident(Marker::PlanInput.name());
     zyn! {
         ::nestrs_core::activation::adapter::InputAdapter {
             service_type: {
-                __nestrs_reflect::compiler_dependency::<{{ service_type.clone() }}, {{ input_slot }}>();
-                __nestrs_reflect::compiler_plan_input::<
+                {{ reflection.clone() }}::{{ dependency }}::<{{ service_type.clone() }}, {{ input_slot }}>();
+                {{ reflection }}::{{ plan_input }}::<
                     {{ service_type.clone() }}, {{ input_slot }}, {{ optional }}, {{ lazy }}
                 >(@EmitCompilerKey(key = key.clone()), {{ label.as_ref().map(ToString::to_string).unwrap_or_default() }});
                 ::nestrs_core::service::ServiceType::create::<{{ service_type.clone() }}>()
@@ -119,19 +126,17 @@ pub(crate) fn emit_plan_provider(
     primary: bool,
     lazy: Option<bool>,
 ) -> zyn::TokenStream {
-    let lifetime_id: u8 = match lifetime {
-        ServiceLifetime::Singleton => 0,
-        ServiceLifetime::Scoped => 1,
-        ServiceLifetime::Transient => 2,
-    };
+    let lifetime_id = match lifetime {
+        ServiceLifetime::Singleton => Lifetime::Singleton,
+        ServiceLifetime::Scoped => Lifetime::Scoped,
+        ServiceLifetime::Transient => Lifetime::Transient,
+    } as u8;
     // 与工具内的初始化策略同源编码，driver 不从源码属性重新猜测策略。
-    let initialization: u8 = match lazy {
-        None => 0,
-        Some(true) => 1,
-        Some(false) => 2,
-    };
+    let initialization = Initialization::from_lazy(*lazy) as u8;
+    let reflection = ident(protocol::REFLECTION_MODULE);
+    let provider = ident(Marker::PlanProvider.name());
     zyn! {
-        __nestrs_reflect::compiler_plan_provider::<
+        {{ reflection }}::{{ provider }}::<
             {{ service_type }}, {{ lifetime_id }}, {{ primary }}, {{ initialization }}
         >(@EmitCompilerKey(key = key.clone()));
     }
@@ -140,16 +145,18 @@ pub(crate) fn emit_plan_provider(
 /// 将同一个静态 key 直接写入编译器 marker，供语义发现按精确身份选择蓝图。
 #[zyn::element]
 pub(crate) fn emit_compiler_key(key: Option<ServiceKeySpec>) -> zyn::TokenStream {
+    let reflection = ident(protocol::REFLECTION_MODULE);
+    let compiler_key = ident(protocol::COMPILER_KEY);
     zyn! {
         @match (key.as_ref()) {
             Some(ServiceKeySpec::Named(name)) => {
-                __nestrs_reflect::CompilerKey::Named({{ name }})
+                {{ reflection.clone() }}::{{ compiler_key.clone() }}::Named({{ name }})
             }
             Some(ServiceKeySpec::Indexed(index)) => {
-                __nestrs_reflect::CompilerKey::Indexed({{ index }})
+                {{ reflection.clone() }}::{{ compiler_key.clone() }}::Indexed({{ index }})
             }
             None => {
-                __nestrs_reflect::CompilerKey::Default
+                {{ reflection }}::{{ compiler_key }}::Default
             }
         }
     }

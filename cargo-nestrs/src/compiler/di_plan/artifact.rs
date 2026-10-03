@@ -202,7 +202,7 @@ fn write_reflection<'tcx>(tcx: TyCtxt<'tcx>, plan: &Compiled<'tcx>) -> Result<()
         })
         .collect();
     let result = json!({"format": "nestrs-reflect", "version": 1,
-        "entry": "__nestrs_reflect_v1", "crate": tcx.crate_name(LOCAL_CRATE).as_str(),
+        "entry": crate::protocol::PLAN_ENTRY, "crate": tcx.crate_name(LOCAL_CRATE).as_str(),
         "target": tcx.sess.opts.target_triple.to_string(),
         "initialization": if options.eager {"eager"} else {"lazy"},
         "maxConcurrentActivations": options.max_concurrent_activations,

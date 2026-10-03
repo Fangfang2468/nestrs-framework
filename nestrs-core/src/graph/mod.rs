@@ -1,21 +1,15 @@
 //! 工具链编译的完整、不可变服务执行计划。
 //!
 //! 生产入口通过 `plan` 装载编译结果，不再物化泛型、选择候选或执行图编译。
-//! `tests/support/graph` 保存原算法与诊断参照，便于验证迁移前后的规则一致性。
+//! `tests/support/graph` 只保存冻结计划的只读快照，不包含第二套图编译器。
 //!
 //! 本文件只定义生产执行计划，`plan` 负责装载目标程序中的 typed adapter 地址。
 //! 这里的节点是已选定的服务执行单元，运行期一次 Transient 消费
 //! 产生的实例/任务不等同于图节点。
 
 #[cfg(test)]
-#[path = "../../tests/support/graph/compiler.rs"]
-mod compiler;
-#[cfg(test)]
 #[path = "../../tests/support/graph/diagnostics.rs"]
 mod diagnostics;
-#[cfg(test)]
-#[path = "../../tests/support/graph/error.rs"]
-mod error;
 #[cfg(test)]
 #[path = "../../tests/support/graph/names.rs"]
 mod names;
@@ -36,11 +30,7 @@ use crate::{
 pub(crate) use crate::activation::adapter::Constructor;
 
 #[cfg(test)]
-pub(crate) use compiler::GraphCompiler;
-#[cfg(test)]
 pub(crate) use diagnostics::snapshot;
-#[cfg(test)]
-pub(crate) use error::{GraphDiagnostic, GraphDiagnosticKind, GraphError};
 
 /// 冻结后节点数组的稳定下标。展开阶段完成排序之前的临时下标不能流入运行期。
 pub(crate) type ProviderId = usize;
@@ -135,6 +125,7 @@ impl DependencyInput {
     }
 
     /// 只有实际存在延迟目标才有关联 owner 的必要；缺席输入不分配延迟状态。
+    #[cfg(test)]
     pub(crate) fn lazy_plan(&self) -> Option<&Arc<LazyInputPlan>> {
         match self {
             Self::Lazy { plan, .. } => Some(plan),
@@ -150,7 +141,3 @@ pub(crate) struct RootRoute {
     /// concrete 根继续使用实例保存的准确类型地址。
     pub(crate) projection: Option<ServiceProjector>,
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/graph/compiler.rs"]
-mod tests;

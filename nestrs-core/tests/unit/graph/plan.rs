@@ -1,7 +1,10 @@
 //! 编译计划装载协议测试。这里手写的是编译器最终写入序列，不是公开的动态注册 API。
 
-use super::{ABSENT, CompiledApplication, PlanAssembly, load};
-use crate::activation::adapter::{ActivationAdapter, InputAdapter, ProjectionAdapter};
+use super::{
+    ABSENT, PlanAssembly, load, plan_push_binding, plan_push_dependent, plan_push_order,
+    plan_push_trait_route, plan_set_input, plan_set_options,
+};
+use crate::activation::adapter::{ActivationAdapter, Constructor, InputAdapter, ProjectionAdapter};
 use crate::{
     InitializationMode, ServiceKey, ServiceLifetime,
     activation::{
@@ -10,12 +13,6 @@ use crate::{
         prepare_optional_absent, prepare_required,
     },
     graph::{AbsentInput, DependencyInput},
-    registration::{
-        binding::TraitBinding,
-        catalog::RegistrySnapshot,
-        dependency::{Delivery, DependencyRequest, ProviderSource},
-        provider::{ClassProvider, Provider, ProviderCommon},
-    },
     service::{ServiceIdentifier, ServiceSource, ServiceType},
 };
 use std::sync::Arc;
@@ -34,37 +31,23 @@ fn no_construction(_: ConstructionInputs) -> Result<ErasedService, ConstructionE
     panic!("装载编译计划不能执行用户构造")
 }
 
-fn no_materialization() -> Provider {
-    panic!("装载编译计划不能选择或物化 Provider 蓝图")
-}
-
 fn identifier<T: ?Sized + Send + Sync + 'static>(key: Option<ServiceKey>) -> ServiceIdentifier {
     ServiceIdentifier::new(key, ServiceType::create::<T>())
 }
 
-fn provider<T: Send + Sync + 'static>(
-    key: Option<ServiceKey>,
-    dependencies: Vec<DependencyRequest>,
-) -> Provider {
-    Provider::Class(ClassProvider {
-        provide: identifier::<T>(key),
-        common: ProviderCommon {
-            lifetime: ServiceLifetime::Transient,
-            primary: false,
-            lazy: None,
-            source: source(),
-            cleanup: None,
-        },
-        dependencies,
-        constructor: no_construction,
-    })
+fn adapter<T: Send + Sync + 'static>(inputs: Vec<InputAdapter>) -> ActivationAdapter {
+    ActivationAdapter {
+        service_type: ServiceType::create::<T>(),
+        constructor: Constructor::Class(no_construction),
+        inputs,
+        cleanup: None,
+    }
 }
 
-fn binding() -> TraitBinding {
-    TraitBinding {
+fn binding() -> ProjectionAdapter {
+    ProjectionAdapter {
         trait_type: ServiceType::create::<dyn Port>(),
         concrete_type: ServiceType::create::<Dependency>(),
-        materialize: Some(no_materialization),
         prepare_required: |slot, value| {
             prepare_bound_required::<Dependency, dyn Port>(slot, value, |value| value)
         },
@@ -76,66 +59,66 @@ fn binding() -> TraitBinding {
                 value
             })
         },
-        source: source(),
     }
 }
 
-fn inputs() -> Vec<DependencyRequest> {
+fn inputs() -> Vec<InputAdapter> {
     vec![
-        DependencyRequest {
-            declaration_position: 0,
-            input_slot: InputSlot::new(0),
-            token: identifier::<Dependency>(Some(ServiceKey::Named("primary".into()))),
-            optional: false,
+        InputAdapter {
+            service_type: ServiceType::create::<Dependency>(),
+            prepare: Some(prepare_required::<Dependency>),
             lazy: None,
             project: None,
-            label: Some("first"),
-            delivery: Delivery::Direct(prepare_required::<Dependency>),
-            provider_source: ProviderSource::Materialize(no_materialization),
         },
-        DependencyRequest {
-            declaration_position: 1,
-            input_slot: InputSlot::new(1),
-            token: identifier::<dyn Port>(Some(ServiceKey::Named("primary".into()))),
-            optional: false,
+        InputAdapter {
+            service_type: ServiceType::create::<dyn Port>(),
+            prepare: None,
             lazy: None,
             project: None,
-            label: Some("second"),
-            delivery: Delivery::RequiresBinding,
-            provider_source: ProviderSource::Registered,
         },
-        DependencyRequest {
-            declaration_position: 2,
-            input_slot: InputSlot::new(2),
-            token: identifier::<dyn Missing>(None),
-            optional: true,
+        InputAdapter {
+            service_type: ServiceType::create::<dyn Missing>(),
+            prepare: Some(prepare_optional_absent::<dyn Missing>),
             lazy: Some(prepare_lazy_optional::<dyn Missing>),
             project: None,
-            label: Some("missing"),
-            delivery: Delivery::RequiresBindingOrAbsent(prepare_optional_absent::<dyn Missing>),
-            provider_source: ProviderSource::Registered,
         },
     ]
 }
 
+/// 固定 fixture 的 Transient 策略；只转交执行能力，不保存或解释服务声明。
+unsafe fn push_transient(output: *mut (), adapter: ActivationAdapter, key: &'static str) {
+    // SAFETY: 调用方提供同步使用的唯一 PlanAssembly 地址，类型能力来自当前测试。
+    unsafe {
+        super::plan_push_provider(
+            output,
+            adapter,
+            2,
+            usize::from(!key.is_empty()),
+            key,
+            0,
+            0,
+            source().file,
+            source().line as usize,
+            source().column as usize,
+            false,
+        );
+    }
+}
+
 #[test]
-fn compiled_indices_load_exact_routes_all_slots_and_typed_adapters_without_callbacks() {
-    let mut assembly = TestAssembly::default();
-    let output = (&mut assembly as *mut TestAssembly).cast();
+fn compiled_indices_load_exact_routes_all_slots_and_typed_adapters_without_construction() {
+    let mut assembly = PlanAssembly::default();
+    let output = (&mut assembly as *mut PlanAssembly).cast();
     // SAFETY: output 唯一指向本测试中的装配器，所有调用同步完成，没有保存或逃逸借用。
     unsafe {
         plan_set_options(output, true, 7);
         plan_push_binding(output, binding());
-        plan_push_provider(output, provider::<Consumer>(None, inputs()), false);
-        plan_push_provider(
-            output,
-            provider::<Dependency>(Some(ServiceKey::Named("primary".into())), vec![]),
-            false,
-        );
+        push_transient(output, adapter::<Consumer>(inputs()), "");
+        push_transient(output, adapter::<Dependency>(vec![]), "primary");
         // 不依赖写入顺序；每个槽位保存独立 occurrence 的选择，反向拓扑边才去重。
-        plan_set_input(output, 0, 2, ABSENT, ABSENT);
-        plan_set_input(output, 0, 1, 1, 0);
-        plan_set_input(output, 0, 0, 1, ABSENT);
+        plan_set_input(output, 0, 2, ABSENT, ABSENT, true, 0, "", 0, "missing");
+        plan_set_input(output, 0, 1, 1, 0, false, 1, "primary", 0, "second");
+        plan_set_input(output, 0, 0, 1, ABSENT, false, 1, "primary", 0, "first");
         plan_push_trait_route(output, 1, 0);
         plan_push_order(output, 1);
         plan_push_order(output, 0);
@@ -185,18 +168,14 @@ fn compiled_indices_load_exact_routes_all_slots_and_typed_adapters_without_callb
 #[test]
 fn absent_immediate_and_lazy_slots_deliver_distinct_optional_token_types() {
     let mut requests = vec![inputs().remove(2); 2];
-    requests[0].input_slot = InputSlot::new(0);
-    requests[0].declaration_position = 0;
     requests[0].lazy = None;
-    requests[1].input_slot = InputSlot::new(1);
-    requests[1].declaration_position = 1;
-    let mut assembly = TestAssembly::default();
-    let output = (&mut assembly as *mut TestAssembly).cast();
+    let mut assembly = PlanAssembly::default();
+    let output = (&mut assembly as *mut PlanAssembly).cast();
     // SAFETY: 一个 provider 的两个连续槽位均由编译器决定缺席，没有外部地址或回调执行。
     unsafe {
-        plan_push_provider(output, provider::<Consumer>(None, requests), false);
-        plan_set_input(output, 0, 0, ABSENT, ABSENT);
-        plan_set_input(output, 0, 1, ABSENT, ABSENT);
+        push_transient(output, adapter::<Consumer>(requests), "");
+        plan_set_input(output, 0, 0, ABSENT, ABSENT, true, 0, "", 0, "immediate");
+        plan_set_input(output, 0, 1, ABSENT, ABSENT, true, 0, "", 0, "lazy");
         plan_push_order(output, 0);
     }
     let application = assembly.finish();
@@ -228,46 +207,6 @@ fn absent_immediate_and_lazy_slots_deliver_distinct_optional_token_types() {
 }
 
 #[test]
-fn compiled_plan_matches_graph_oracle_without_repeating_graph_compilation() {
-    // 参考图只在隔离测试里运行；生产 loader 消费的编号来自编译器。
-    let mut dependencies = inputs();
-    dependencies[0].provider_source = ProviderSource::Registered;
-    let mut binding = binding();
-    binding.materialize = None;
-    let providers = vec![
-        provider::<Consumer>(None, dependencies),
-        provider::<Dependency>(Some(ServiceKey::Named("primary".into())), vec![]),
-    ];
-    let expected = super::super::GraphCompiler::compile_snapshot(RegistrySnapshot {
-        providers: providers.clone(),
-        bindings: vec![binding],
-        ..Default::default()
-    })
-    .unwrap();
-    let mut assembly = TestAssembly::default();
-    let output = (&mut assembly as *mut TestAssembly).cast();
-    // SAFETY: 同上，测试按编译器完整协议提供有效编号和真实 descriptor。
-    unsafe {
-        plan_push_binding(output, binding);
-        for provider in providers {
-            plan_push_provider(output, provider, false);
-        }
-        plan_set_input(output, 0, 0, 1, ABSENT);
-        plan_set_input(output, 0, 1, 1, 0);
-        plan_set_input(output, 0, 2, ABSENT, ABSENT);
-        plan_push_trait_route(output, 1, 0);
-        plan_push_order(output, 1);
-        plan_push_order(output, 0);
-        plan_push_dependent(output, 1, 0);
-    }
-    let actual = assembly.finish();
-    assert_eq!(
-        super::super::snapshot(&actual.graph),
-        super::super::snapshot(&expected)
-    );
-}
-
-#[test]
 fn one_entry_shares_immutable_plan_between_loads() {
     let first = load();
     let second = load();
@@ -278,21 +217,32 @@ fn one_entry_shares_immutable_plan_between_loads() {
 #[test]
 fn provider_initialization_overrides_survive_plan_loading_without_global_folding() {
     for default_eager in [false, true] {
-        let mut assembly = TestAssembly::default();
-        let output = (&mut assembly as *mut TestAssembly).cast();
+        let mut assembly = PlanAssembly::default();
+        let output = (&mut assembly as *mut PlanAssembly).cast();
         // 描述回调只装载三态策略；即使当前入口默认值相同，也不能折叠掉继承状态，
         // 因为未来的 build_with_options 可以让另一个 root 使用不同默认值。
         // SAFETY: output 是当前唯一装配器，每个无输入 provider 有唯一 key 和有效编号。
         unsafe {
             plan_set_options(output, default_eager, 3);
             for (index, lazy) in [None, Some(true), Some(false)].into_iter().enumerate() {
-                let mut declaration =
-                    provider::<Dependency>(Some(ServiceKey::Indexed(index)), vec![]);
-                let Provider::Class(class) = &mut declaration else {
-                    unreachable!()
+                let initialization = match lazy {
+                    None => 0,
+                    Some(true) => 1,
+                    Some(false) => 2,
                 };
-                class.common.lazy = lazy;
-                plan_push_provider(output, declaration, false);
+                super::plan_push_provider(
+                    output,
+                    adapter::<Dependency>(vec![]),
+                    2,
+                    2,
+                    "",
+                    index,
+                    initialization,
+                    source().file,
+                    12,
+                    3,
+                    false,
+                );
                 plan_push_order(output, index);
             }
         }
@@ -325,24 +275,16 @@ fn lazy_edges_freeze_selected_projection_and_absence_once() {
     // trait 输入的直接投影必须来自已经选定的 binding，而不是消费点的 fallback。
     requests[1].project = Some(crate::activation::project_required::<Dependency>);
     let binding = binding();
-    let mut assembly = TestAssembly::default();
-    let output = (&mut assembly as *mut TestAssembly).cast();
+    let mut assembly = PlanAssembly::default();
+    let output = (&mut assembly as *mut PlanAssembly).cast();
     // SAFETY: 当前装配器由本测试独占，节点、binding 和输入编号满足内部协议。
     unsafe {
         plan_push_binding(output, binding);
-        plan_push_provider(
-            output,
-            provider::<Consumer>(Some(ServiceKey::Named("checkout".into())), requests),
-            false,
-        );
-        plan_push_provider(
-            output,
-            provider::<Dependency>(Some(ServiceKey::Named("primary".into())), vec![]),
-            false,
-        );
-        plan_set_input(output, 0, 0, 1, ABSENT);
-        plan_set_input(output, 0, 1, 1, 0);
-        plan_set_input(output, 0, 2, ABSENT, ABSENT);
+        push_transient(output, adapter::<Consumer>(requests), "checkout");
+        push_transient(output, adapter::<Dependency>(vec![]), "primary");
+        plan_set_input(output, 0, 0, 1, ABSENT, false, 1, "primary", 0, "first");
+        plan_set_input(output, 0, 1, 1, 0, false, 1, "primary", 0, "second");
+        plan_set_input(output, 0, 2, ABSENT, ABSENT, true, 0, "", 0, "missing");
         plan_push_order(output, 1);
         plan_push_order(output, 0);
         plan_push_dependent(output, 1, 0);
@@ -372,34 +314,25 @@ async fn lazy_metadata_is_shared_across_occurrences_and_survives_owner_and_graph
     struct LazyConsumer {
         dependency: crate::LazyInjection<Dependency>,
     }
-    let request = DependencyRequest {
-        declaration_position: 0,
-        input_slot: InputSlot::new(0),
-        token: identifier::<Dependency>(None),
-        optional: false,
+    let request = InputAdapter {
+        service_type: ServiceType::create::<Dependency>(),
+        prepare: Some(prepare_required::<Dependency>),
         lazy: Some(crate::activation::prepare_lazy_required::<Dependency>),
         project: Some(crate::activation::project_required::<Dependency>),
-        label: Some("deferred"),
-        delivery: Delivery::Direct(prepare_required::<Dependency>),
-        provider_source: ProviderSource::Registered,
     };
-    let mut consumer =
-        provider::<LazyConsumer>(Some(ServiceKey::Named("lazy_owner".into())), vec![request]);
-    let Provider::Class(definition) = &mut consumer else {
-        unreachable!()
-    };
-    definition.constructor = |mut inputs| {
+    let mut consumer = adapter::<LazyConsumer>(vec![request]);
+    consumer.constructor = Constructor::Class(|mut inputs| {
         let dependency = inputs.take_lazy(InputSlot::new(0))?;
         inputs.ensure_all_consumed()?;
         Ok(ErasedService::new(LazyConsumer { dependency }))
-    };
-    let mut assembly = TestAssembly::default();
-    let output = (&mut assembly as *mut TestAssembly).cast();
+    });
+    let mut assembly = PlanAssembly::default();
+    let output = (&mut assembly as *mut PlanAssembly).cast();
     // SAFETY: 计划只含一条合法延迟边，装配同步且地址未逃逸。
     unsafe {
-        plan_push_provider(output, consumer, false);
-        plan_push_provider(output, provider::<Dependency>(None, vec![]), false);
-        plan_set_input(output, 0, 0, 1, ABSENT);
+        push_transient(output, consumer, "lazy_owner");
+        push_transient(output, adapter::<Dependency>(vec![]), "");
+        plan_set_input(output, 0, 0, 1, ABSENT, false, 0, "", 0, "deferred");
         plan_push_order(output, 1);
         plan_push_order(output, 0);
         plan_push_dependent(output, 1, 0);
@@ -467,17 +400,13 @@ fn incompatible_lazy_plan_rejects_a_missing_direct_projection() {
     requests.truncate(1);
     requests[0].lazy = Some(crate::activation::prepare_lazy_required::<Dependency>);
     requests[0].project = None;
-    let mut assembly = TestAssembly::default();
-    let output = (&mut assembly as *mut TestAssembly).cast();
+    let mut assembly = PlanAssembly::default();
+    let output = (&mut assembly as *mut PlanAssembly).cast();
     // SAFETY: 指针与编号合法；刻意省略直接投影以验证 ABI 损坏不会退回旧装箱路径。
     unsafe {
-        plan_push_provider(output, provider::<Consumer>(None, requests), false);
-        plan_push_provider(
-            output,
-            provider::<Dependency>(Some(ServiceKey::Named("primary".into())), vec![]),
-            false,
-        );
-        plan_set_input(output, 0, 0, 1, ABSENT);
+        push_transient(output, adapter::<Consumer>(requests), "");
+        push_transient(output, adapter::<Dependency>(vec![]), "primary");
+        plan_set_input(output, 0, 0, 1, ABSENT, false, 1, "primary", 0, "first");
     }
 }
 
@@ -489,33 +418,37 @@ async fn sharing_compiled_plan_does_not_share_root_instances_failures_or_closing
     struct FailsOncePerRoot;
     static CREATED: AtomicUsize = AtomicUsize::new(0);
     static FAILED: AtomicUsize = AtomicUsize::new(0);
-    let mut assembly = TestAssembly::default();
-    let output = (&mut assembly as *mut TestAssembly).cast();
-    let mut instance = provider::<RootInstance>(None, vec![]);
-    let Provider::Class(definition) = &mut instance else {
-        unreachable!()
-    };
-    definition.common.lifetime = ServiceLifetime::Singleton;
-    definition.constructor = |_| {
+    let mut assembly = PlanAssembly::default();
+    let output = (&mut assembly as *mut PlanAssembly).cast();
+    let mut instance = adapter::<RootInstance>(vec![]);
+    instance.constructor = Constructor::Class(|_| {
         Ok(ErasedService::new(RootInstance(
             CREATED.fetch_add(1, Ordering::SeqCst),
         )))
-    };
-    let mut failure = provider::<FailsOncePerRoot>(None, vec![]);
-    let Provider::Class(definition) = &mut failure else {
-        unreachable!()
-    };
-    definition.common.lifetime = ServiceLifetime::Singleton;
-    definition.constructor = |_| {
+    });
+    let mut failure = adapter::<FailsOncePerRoot>(vec![]);
+    failure.constructor = Constructor::Class(|_| {
         FAILED.fetch_add(1, Ordering::SeqCst);
         Err(ConstructionError::RequiredDependencyAbsent {
             slot: InputSlot::new(0),
         })
-    };
+    });
     // SAFETY: 当前装配器地址唯一、同步使用；两个没有输入的节点使用有效计划编号。
     unsafe {
-        plan_push_provider(output, instance, false);
-        plan_push_provider(output, failure, false);
+        super::plan_push_provider(
+            output,
+            instance,
+            0,
+            0,
+            "",
+            0,
+            0,
+            source().file,
+            12,
+            3,
+            false,
+        );
+        super::plan_push_provider(output, failure, 0, 0, "", 0, 0, source().file, 12, 3, false);
         plan_push_order(output, 0);
         plan_push_order(output, 1);
     }
@@ -559,208 +492,19 @@ async fn sharing_compiled_plan_does_not_share_root_instances_failures_or_closing
 #[test]
 #[should_panic(expected = "Nestrs 编译计划缺少输入选择")]
 fn incompatible_plan_cannot_publish_unassigned_input() {
-    let mut assembly = TestAssembly::default();
-    let output = (&mut assembly as *mut TestAssembly).cast();
+    let mut assembly = PlanAssembly::default();
+    let output = (&mut assembly as *mut PlanAssembly).cast();
     // SAFETY: 指针协议有效；刻意省略输入赋值，验证版本/生成器错误不会被静默接受。
     unsafe {
-        plan_push_provider(output, provider::<Consumer>(None, inputs()), false);
+        push_transient(output, adapter::<Consumer>(inputs()), "");
         plan_push_order(output, 0);
     }
     assembly.finish();
 }
 
-/// 旧参考输入与最终协议的测试桥接。只在测试中保存声明副本；生产装配器没有这张表。
-/// 每次写入都转换为新协议的执行能力和标量，确保原有选择/生命周期测试继续覆盖装配。
-#[derive(Default)]
-struct TestAssembly {
-    plan: PlanAssembly,
-    inputs: Vec<Vec<DependencyRequest>>,
-}
-
-impl TestAssembly {
-    fn finish(self) -> CompiledApplication {
-        self.plan.finish()
-    }
-}
-
-unsafe fn test_assembly<'a>(output: *mut ()) -> &'a mut TestAssembly {
-    // SAFETY: 测试调用点均传入各自栈上 TestAssembly 的唯一地址，同步使用且不逃逸。
-    unsafe { &mut *output.cast::<TestAssembly>() }
-}
-
-fn key_parts(key: Option<&ServiceKey>) -> (usize, &'static str, usize) {
-    match key {
-        None => (0, "", 0),
-        // fixture key 只在装配调用中需要静态字符串。沿用明确的有限测试值，不泄漏堆字符串。
-        Some(ServiceKey::Named(name)) => (
-            1,
-            match name.as_str() {
-                "primary" => "primary",
-                "checkout" => "checkout",
-                "lazy_owner" => "lazy_owner",
-                _ => panic!("unknown fixture key"),
-            },
-            0,
-        ),
-        Some(ServiceKey::Indexed(index)) => (2, "", *index),
-    }
-}
-
-unsafe fn plan_push_provider(output: *mut (), provider: Provider, requires_scope: bool) {
-    let (identifier, common, inputs, constructor) = match provider {
-        Provider::Class(provider) => (
-            provider.provide,
-            provider.common,
-            provider.dependencies,
-            crate::activation::adapter::Constructor::Class(provider.constructor),
-        ),
-        Provider::Factory(provider) => (
-            provider.provide,
-            provider.common,
-            provider.dependencies,
-            crate::activation::adapter::Constructor::Factory(provider.invoker),
-        ),
-    };
-    let adapter = ActivationAdapter {
-        service_type: identifier.service_type,
-        constructor,
-        inputs: inputs
-            .iter()
-            .map(|request| InputAdapter {
-                service_type: request.token.service_type,
-                prepare: match request.delivery {
-                    Delivery::Direct(prepare)
-                    | Delivery::Selected(prepare)
-                    | Delivery::RequiresBindingOrAbsent(prepare) => Some(prepare),
-                    Delivery::RequiresBinding => None,
-                },
-                lazy: request.lazy,
-                project: request.project,
-            })
-            .collect(),
-        cleanup: common.cleanup,
-    };
-    // SAFETY: fixture 在本次同步写入期间独占装配器。
-    let assembly = unsafe { test_assembly(output) };
-    assembly.inputs.push(inputs);
-    let (key_kind, key_name, key_index) = key_parts(identifier.service_key.as_ref());
-    let lifetime = match common.lifetime {
-        ServiceLifetime::Singleton => 0,
-        ServiceLifetime::Scoped => 1,
-        ServiceLifetime::Transient => 2,
-    };
-    let initialization = match common.lazy {
-        None => 0,
-        Some(true) => 1,
-        Some(false) => 2,
-    };
-    // SAFETY: 所有执行入口/标量来自当前 fixture，原始声明和物化回调不交给生产装配器。
-    unsafe {
-        super::plan_push_provider(
-            (&mut assembly.plan as *mut PlanAssembly).cast(),
-            adapter,
-            lifetime,
-            key_kind,
-            key_name,
-            key_index,
-            initialization,
-            common.source.file,
-            common.source.line as usize,
-            common.source.column as usize,
-            requires_scope,
-        )
-    };
-}
-
-unsafe fn plan_set_input(
-    output: *mut (),
-    provider: usize,
-    slot: usize,
-    target: usize,
-    projection: usize,
-) {
-    // SAFETY: 测试的唯一同步装配器。
-    let assembly = unsafe { test_assembly(output) };
-    let request = &assembly.inputs[provider][slot];
-    let (key_kind, key_name, key_index) = key_parts(request.token.service_key.as_ref());
-    // SAFETY: 计划中的目标和投影编号由各个测试明确提供；这里仅携带原输入的诊断标量。
-    unsafe {
-        super::plan_set_input(
-            (&mut assembly.plan as *mut PlanAssembly).cast(),
-            provider,
-            slot,
-            target,
-            projection,
-            request.optional,
-            key_kind,
-            key_name,
-            key_index,
-            request.label.unwrap_or(""),
-        )
-    };
-}
-
-unsafe fn plan_push_binding(output: *mut (), binding: TraitBinding) {
-    // SAFETY: 同一测试装配器的短期唯一访问。
-    let assembly = unsafe { test_assembly(output) };
-    let projection = ProjectionAdapter {
-        trait_type: binding.trait_type,
-        concrete_type: binding.concrete_type,
-        prepare_required: binding.prepare_required,
-        prepare_optional: binding.prepare_optional,
-        project: binding.project,
-    };
-    // SAFETY: binding 的物化规则与源码声明不进入执行协议，只保留真实转换能力。
-    unsafe {
-        super::plan_push_binding((&mut assembly.plan as *mut PlanAssembly).cast(), projection)
-    };
-}
-
-unsafe fn plan_set_options(output: *mut (), eager: bool, concurrency: usize) {
-    // SAFETY: 同步传入当前测试装配器的唯一地址。
-    let assembly = unsafe { test_assembly(output) };
-    unsafe {
-        super::plan_set_options(
-            (&mut assembly.plan as *mut PlanAssembly).cast(),
-            eager,
-            concurrency,
-        )
-    };
-}
-
-unsafe fn plan_push_order(output: *mut (), provider: usize) {
-    // SAFETY: 同步传入当前测试装配器的唯一地址。
-    let assembly = unsafe { test_assembly(output) };
-    unsafe { super::plan_push_order((&mut assembly.plan as *mut PlanAssembly).cast(), provider) };
-}
-
-unsafe fn plan_push_dependent(output: *mut (), dependency: usize, consumer: usize) {
-    // SAFETY: 同步传入当前测试装配器的唯一地址。
-    let assembly = unsafe { test_assembly(output) };
-    unsafe {
-        super::plan_push_dependent(
-            (&mut assembly.plan as *mut PlanAssembly).cast(),
-            dependency,
-            consumer,
-        )
-    };
-}
-
-unsafe fn plan_push_trait_route(output: *mut (), provider: usize, projection: usize) {
-    // SAFETY: 同步传入当前测试装配器的唯一地址。
-    let assembly = unsafe { test_assembly(output) };
-    unsafe {
-        super::plan_push_trait_route(
-            (&mut assembly.plan as *mut PlanAssembly).cast(),
-            provider,
-            projection,
-        )
-    };
-}
-
 #[test]
 fn reflect_execution_contract_loads_keys_policy_and_sources_without_declarations() {
-    // 直接模拟工具链最终入口，不通过上面的旧声明 oracle 桥接。三个节点复用同一
+    // 直接模拟工具链最终入口。三个节点复用同一
     // 类型化构造能力，key 与执行策略全部来自最终计划的确定标量。
     let mut assembly = PlanAssembly::default();
     let output = (&mut assembly as *mut PlanAssembly).cast();

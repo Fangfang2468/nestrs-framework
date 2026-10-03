@@ -38,10 +38,10 @@ pub fn validate_type_complexity(tcx: TyCtxt<'_>, value: Ty<'_>) -> Result<(), St
     Ok(())
 }
 
-pub const SUMMARY_NAME: &str = "__nestrs_query_summary_v1";
+pub const SUMMARY_NAME: &str = crate::protocol::Marker::QuerySummary.name();
 
-const ROOT_MARKER: &str = "compiler_query_root";
-const CALL_MARKER: &str = "compiler_query_call";
+const ROOT_MARKER: &str = crate::protocol::Marker::QueryRoot.name();
+const CALL_MARKER: &str = crate::protocol::Marker::QueryCall.name();
 
 #[derive(Clone, Copy)]
 struct Record<'tcx> {

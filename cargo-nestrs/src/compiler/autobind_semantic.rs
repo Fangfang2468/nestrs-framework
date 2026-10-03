@@ -10,6 +10,7 @@ extern crate rustc_span;
 extern crate rustc_trait_selection;
 
 use crate::autobind_codegen::{BindingSpec, SourceInsertion};
+use crate::protocol::{self, Marker as ReflectionMarker};
 use crate::registration_codegen::reflect_item;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, DefIndex, LocalDefId, LocalModDefId};
@@ -135,7 +136,11 @@ impl MarkerVisitor<'_, '_> {
             }
             _ => return Err("unsupported CompilerKey marker expression".into()),
         };
-        if !reflect_item(self.tcx, self.tcx.parent(definition), "CompilerKey") {
+        if !reflect_item(
+            self.tcx,
+            self.tcx.parent(definition),
+            protocol::COMPILER_KEY,
+        ) {
             return Err(
                 "CompilerKey marker variant belongs to an unauthenticated declaration".into(),
             );
@@ -189,7 +194,7 @@ pub(crate) fn provider_definition<'tcx>(
         .build(ty::TypingMode::non_body_analysis());
     let mut selected = None;
     for &trait_id in tcx.traits(service_definition.did().krate) {
-        if !reflect_item(tcx, trait_id, "ProviderDefinition")
+        if !reflect_item(tcx, trait_id, protocol::PROVIDER_DEFINITION)
             || !infcx
                 .type_implements_trait(trait_id, [service], ty::ParamEnv::empty())
                 .must_apply_modulo_regions()
@@ -244,13 +249,13 @@ pub(crate) fn provider_callback<'tcx>(
             .map(LocalDefId::to_def_id)
             .find(|&definition| {
                 tcx.parent(definition) == module
-                    && reflect_item(tcx, definition, "provider_definition")
+                    && reflect_item(tcx, definition, protocol::PROVIDER_HELPER)
             })
     } else {
         tcx.module_children(module)
             .iter()
             .filter_map(|child| child.res.opt_def_id())
-            .find(|&definition| reflect_item(tcx, definition, "provider_definition"))
+            .find(|&definition| reflect_item(tcx, definition, protocol::PROVIDER_HELPER))
     }
     .ok_or_else(|| format!("服务 {service} 缺少同声明的 typed 构造 helper"))?;
     Ok(ty::Instance::new_raw(
@@ -261,10 +266,13 @@ pub(crate) fn provider_callback<'tcx>(
 
 fn marker_kind(tcx: TyCtxt<'_>, definition: DefId) -> Option<MarkerKind> {
     [
-        ("compiler_provider", MarkerKind::Provider),
-        ("compiler_dependency", MarkerKind::Request),
-        ("compiler_binding", MarkerKind::Binding),
-        ("compiler_automatic_binding", MarkerKind::AutomaticBinding),
+        (ReflectionMarker::Provider.name(), MarkerKind::Provider),
+        (ReflectionMarker::Dependency.name(), MarkerKind::Request),
+        (ReflectionMarker::Binding.name(), MarkerKind::Binding),
+        (
+            ReflectionMarker::AutomaticBinding.name(),
+            MarkerKind::AutomaticBinding,
+        ),
     ]
     .into_iter()
     .find_map(|(name, kind)| reflect_item(tcx, definition, name).then_some(kind))
@@ -817,7 +825,7 @@ fn external_key_parts<'tcx>(
     variant: DefId,
     fields: &[(mir::ConstValue, Ty<'tcx>)],
 ) -> Result<CompilerKey, String> {
-    if !reflect_item(tcx, tcx.parent(variant), "CompilerKey") {
+    if !reflect_item(tcx, tcx.parent(variant), protocol::COMPILER_KEY) {
         return Err("external CompilerKey variant comes from an unexpected crate".into());
     }
     match (tcx.item_name(variant).as_str(), fields) {

@@ -12,6 +12,10 @@ use crate::codegen::injection::render::{
 use super::{
     FactoryAnalysis, FactoryConfig, FactoryInvocation, FactoryParameterSpec, FactoryResultKind,
 };
+use crate::{
+    codegen::reflection::ident,
+    protocol::{self, Marker},
+};
 use zyn::{quote::quote, syn, zyn};
 
 /// 渲染已移除参数 marker 且已经改写参数类型的用户 factory 函数。
@@ -45,6 +49,9 @@ pub(crate) fn emit_factory_provider(
     let service_type = quote!(#success_type);
     let async_factory = matches!(analysis.output.invocation, FactoryInvocation::Async);
     let reflection = crate::codegen::reflection::support(false);
+    let reflection_module = ident(protocol::REFLECTION_MODULE);
+    let factory_marker = ident(Marker::PlanFactory.name());
+    let provider_marker = ident(Marker::Provider.name());
     let provider_const = zyn::format_ident!("__nestrs_factory_provider_for_{factory}");
 
     zyn! {
@@ -57,8 +64,8 @@ pub(crate) fn emit_factory_provider(
             )
         #[allow(dead_code)]
             fn __nestrs_reflected_factory() -> ::nestrs_core::activation::adapter::ActivationAdapter {
-                __nestrs_reflect::compiler_plan_factory::<{{ async_factory }}>();
-                __nestrs_reflect::compiler_provider::<{{ analysis.output.success_type.clone() }}>(
+                {{ reflection_module.clone() }}::{{ factory_marker }}::<{{ async_factory }}>();
+                {{ reflection_module }}::{{ provider_marker }}::<{{ analysis.output.success_type.clone() }}>(
                     @EmitCompilerKey(key = config.key.clone())
                 );
                 @EmitPlanProvider(

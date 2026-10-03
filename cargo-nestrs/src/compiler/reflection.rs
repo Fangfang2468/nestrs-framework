@@ -7,6 +7,7 @@
 
 extern crate rustc_abi;
 
+use crate::protocol::{self, Inputs, Marker, Parameter};
 use rustc_abi::ExternAbi;
 use rustc_ast::{self as ast, token};
 use rustc_hir::def::DefKind;
@@ -16,7 +17,7 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::FileName;
 
 pub(crate) const SOURCE: &str = "nestrs reflection metadata";
-const MODULE: &str = "__nestrs_reflect";
+const MODULE: &str = protocol::REFLECTION_MODULE;
 
 /// 在标准展开前只追加普通 Rust 定义。下游通过编码 MIR 读取其真实 DefId 与类型实参。
 /// 用户源码与宏展开都不引用这里的查询标记，故 stock rust-analyzer 无需模拟此注入。
@@ -31,13 +32,15 @@ pub(crate) fn prepare(compiler: &interface::Compiler, krate: &mut ast::Crate) {
         // 两阶段读取必须一致；manifest 在发现阶段就加入 SourceMap 快照及 dep-info。
         crate::registration_codegen::startup_options(&compiler.sess);
     }
+    let root = Marker::QueryRoot.name();
+    let call = Marker::QueryCall.name();
     let source = format!(
         r#"
         #[allow(dead_code)]
         const _: () = {{
             mod {MODULE} {{
-                #[inline(never)] pub const fn compiler_query_root<T: ?Sized>() {{}}
-                #[inline(never)] pub const fn compiler_query_call<F: ?Sized>() {{}}
+                #[inline(never)] pub const fn {root}<T: ?Sized>() {{}}
+                #[inline(never)] pub const fn {call}<F: ?Sized>() {{}}
                 #[inline(never)] pub const fn {}() {{}}
             }}
         }};
@@ -109,64 +112,14 @@ pub(crate) fn reflect_item(tcx: TyCtxt<'_>, definition: DefId, name: &str) -> bo
         return false;
     }
     match name {
-        "CompilerKey" => compiler_key(tcx, definition),
-        "ProviderDefinition" => tcx.def_kind(definition) == DefKind::Trait,
-        "provider_definition" => provider_helper(tcx, definition),
-        "compiler_provider" => marker(tcx, definition, &[Parameter::Type], Inputs::Key),
-        "compiler_dependency" => marker(
-            tcx,
-            definition,
-            &[Parameter::Type, Parameter::Usize],
-            Inputs::None,
-        ),
-        "compiler_binding" | "compiler_automatic_binding" => marker(
-            tcx,
-            definition,
-            &[Parameter::Type, Parameter::Type],
-            Inputs::None,
-        ),
-        "compiler_plan_provider" => marker(
-            tcx,
-            definition,
-            &[
-                Parameter::Type,
-                Parameter::U8,
-                Parameter::Bool,
-                Parameter::U8,
-            ],
-            Inputs::Key,
-        ),
-        "compiler_plan_input" => marker(
-            tcx,
-            definition,
-            &[
-                Parameter::Type,
-                Parameter::Usize,
-                Parameter::Bool,
-                Parameter::Bool,
-            ],
-            Inputs::KeyLabel,
-        ),
-        "compiler_plan_factory" => marker(tcx, definition, &[Parameter::Bool], Inputs::None),
-        "compiler_query_root" | "compiler_query_call" => {
-            marker(tcx, definition, &[Parameter::Type], Inputs::None)
-        }
-        crate::query_roots::SUMMARY_NAME => marker(tcx, definition, &[], Inputs::None),
-        _ => false,
+        protocol::COMPILER_KEY => compiler_key(tcx, definition),
+        protocol::PROVIDER_DEFINITION => tcx.def_kind(definition) == DefKind::Trait,
+        protocol::PROVIDER_HELPER => provider_helper(tcx, definition),
+        _ => Marker::from_name(name).is_some_and(|kind| {
+            let (parameters, inputs) = kind.signature();
+            marker(tcx, definition, parameters, inputs)
+        }),
     }
-}
-
-enum Parameter {
-    Type,
-    Usize,
-    U8,
-    Bool,
-}
-
-enum Inputs {
-    None,
-    Key,
-    KeyLabel,
 }
 
 fn marker(tcx: TyCtxt<'_>, definition: DefId, parameters: &[Parameter], inputs: Inputs) -> bool {
@@ -222,7 +175,7 @@ fn marker(tcx: TyCtxt<'_>, definition: DefId, parameters: &[Parameter], inputs: 
 
 fn key_type(tcx: TyCtxt<'_>, key: Ty<'_>, module: DefId) -> bool {
     matches!(key.kind(), ty::Adt(definition, _) if
-        tcx.parent(definition.did()) == module && reflect_item(tcx, definition.did(), "CompilerKey"))
+        tcx.parent(definition.did()) == module && reflect_item(tcx, definition.did(), protocol::COMPILER_KEY))
 }
 
 fn static_str(value: Ty<'_>) -> bool {
@@ -290,7 +243,7 @@ fn provider_helper(tcx: TyCtxt<'_>, definition: DefId) -> bool {
         || !matches!(signature.output().kind(), ty::Adt(adapter, _)
             if tcx.crate_name(adapter.did().krate).as_str() == "nestrs_core"
                 && crate::registration_codegen::definition_path(tcx, adapter.did())
-                    == "activation::adapter::ActivationAdapter")
+                    == protocol::ACTIVATION_ADAPTER)
     {
         return false;
     }
@@ -300,6 +253,6 @@ fn provider_helper(tcx: TyCtxt<'_>, definition: DefId) -> bool {
         .any(|(clause, _)| {
             matches!(clause.kind().skip_binder(), ty::ClauseKind::Trait(predicate)
             if tcx.parent(predicate.trait_ref.def_id) == tcx.parent(definition)
-                && reflect_item(tcx, predicate.trait_ref.def_id, "ProviderDefinition"))
+                && reflect_item(tcx, predicate.trait_ref.def_id, protocol::PROVIDER_DEFINITION))
         })
 }

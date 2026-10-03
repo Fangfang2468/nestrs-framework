@@ -22,11 +22,6 @@ mod facade;
 mod graph;
 mod lifetime;
 mod options;
-// 旧声明结构仅保留为隔离图算法的测试输入；生产构建与工具生成代码均不使用此模块。
-#[cfg(test)]
-#[allow(dead_code)]
-#[path = "../tests/support/registration/mod.rs"]
-mod registration;
 mod runtime;
 #[allow(dead_code)]
 mod service;

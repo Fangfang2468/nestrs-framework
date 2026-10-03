@@ -1,10 +1,8 @@
 //! `#[injectable]` 字段的 AST 改写。
 
 use super::field_analyze::{AnalyzedFields, FieldSpec, FieldStrategy};
-use zyn::{
-    syn::{self, Fields},
-    zyn,
-};
+use crate::{codegen::constructor_ide, ide::constructor::Selection};
+use zyn::syn::{self, Fields};
 
 /// 将已分析的 `#[inject]` 字段改写为稳定的 `Injection<T>` 宏 ABI。
 ///
@@ -49,17 +47,17 @@ pub(crate) fn rewrite_injection_fields(specs: &[FieldSpec], fields: &mut Fields)
 /// marker 已由 [`super::field_analyze::analyze_fields`] 统一移除；这个阶段只依据
 /// `FieldSpec` 改写类型，绝不重新读取字段属性。
 ///
-/// 这是一个输出结构体定义的 element。`AnalyzedFields` 是 typed IR，不能自然地
-/// 经由 zyn template pipe 传递；用 element 直接表达“把分析结果渲染为改写后的
-/// struct”，调用点也不需要额外的中间变量。
-#[zyn::element]
-pub(crate) fn rewrite_injection_field(analysis: AnalyzedFields) -> zyn::TokenStream {
+/// IDE 的字段模型在渲染前应用；失败直接返回原有诊断，不生成引用缺失结构体的 adapter。
+pub(crate) fn rewrite_injection_field(
+    analysis: &AnalyzedFields,
+    selection: Option<&Selection>,
+) -> syn::Result<syn::ItemStruct> {
     let mut item = analysis.item.clone();
     rewrite_injection_fields(&analysis.specs, &mut item.fields);
-
-    zyn! {
-        {{ item }}
+    if let Some(selection) = selection {
+        constructor_ide::apply_fields(&mut item, selection)?;
     }
+    Ok(item)
 }
 
 #[cfg(test)]
@@ -68,7 +66,7 @@ mod tests {
     use crate::codegen::injection::macros::injectable::field_analyze::{
         analyze_fields, collect_field_specs,
     };
-    use zyn::{Render, quote::ToTokens};
+    use zyn::quote::ToTokens;
 
     #[test]
     fn rewrites_required_and_optional_inject_fields_only() {
@@ -104,7 +102,7 @@ mod tests {
     }
 
     #[test]
-    fn element_renders_the_rewritten_struct_from_analysis() {
+    fn declaration_rewrite_preserves_the_analyzed_struct() {
         let item: syn::ItemStruct = syn::parse_str(
             r#"
             struct Consumer {
@@ -118,10 +116,7 @@ mod tests {
         .expect("test input should parse");
         let analysis = analyze_fields(item).expect("fields should be valid");
 
-        let input = zyn::Input::default();
-        let rendered = RewriteInjectionField { analysis }.render(&input);
-        let item: syn::ItemStruct =
-            syn::parse2(rendered.tokens().clone()).expect("rewrite element should emit a struct");
+        let item = rewrite_injection_field(&analysis, None).expect("field rewrite should succeed");
         let fields: Vec<_> = item.fields.iter().collect();
 
         assert_eq!(

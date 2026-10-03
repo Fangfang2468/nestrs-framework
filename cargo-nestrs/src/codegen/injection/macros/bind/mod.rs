@@ -5,6 +5,10 @@
 //! 局部反射 marker 交给编译器选择，目标端回调只返回执行投影；它不寻找 provider、
 //! 不物化泛型，也不会创建另一份实例或覆盖 provider 自身的 key。
 
+use crate::{
+    codegen::reflection::ident,
+    protocol::{self, Marker},
+};
 use zyn::{syn, zyn};
 
 /// 输出一条 trait 到 concrete 的 typed binding 注册。
@@ -15,6 +19,8 @@ use zyn::{syn, zyn};
 #[zyn::element]
 pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> zyn::TokenStream {
     let reflection = crate::codegen::reflection::support(false);
+    let reflection_module = ident(protocol::REFLECTION_MODULE);
+    let binding_marker = ident(Marker::Binding.name());
     zyn! {
         #[allow(clippy::unused_unit)]
         const _: () = {
@@ -30,7 +36,7 @@ pub(crate) fn emit_bound_provider(service: syn::Type, interface: syn::Path) -> z
             fn __nestrs_reflect_trait_binding()
                 -> ::nestrs_core::activation::adapter::ProjectionAdapter
             {
-                __nestrs_reflect::compiler_binding::<{{ service }}, dyn {{ interface }}>();
+                {{ reflection_module }}::{{ binding_marker }}::<{{ service }}, dyn {{ interface }}>();
                 ::nestrs_core::activation::adapter::ProjectionAdapter {
                     trait_type: ::nestrs_core::service::ServiceType::create::<
                         dyn {{ interface }}

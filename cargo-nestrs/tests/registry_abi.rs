@@ -49,6 +49,154 @@ fn run(directory: &Path, arguments: &[&str], log_name: &str) -> Output {
 }
 
 #[test]
+fn explicit_binding_satisfies_automatic_demand_without_a_duplicate_pair() {
+    let directory = artifacts("explicit-binding-demand");
+    fs::create_dir_all(directory.join("src")).unwrap();
+    fs::write(
+        directory.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"explicit-binding-demand\"\nversion = \"0.0.0\"\n\
+             edition = \"2024\"\n[workspace]\n[dependencies]\n\
+             nestrs-core = {{ path = {} }}\n\
+             tokio = {{ version = \"1.53.1\", features = [\"rt\", \"macros\"] }}\n",
+            quoted(&workspace().join("nestrs-core")),
+        ),
+    )
+    .unwrap();
+    fs::write(
+        directory.join("src/main.rs"),
+        r#"use nestrs::{bind, injectable};
+use nestrs_core::ServiceProvider;
+trait Port: Send + Sync { fn value(&self) -> u32; }
+#[injectable]
+struct Service { value: u32 }
+#[bind]
+impl Port for Service { fn value(&self) -> u32 { self.value } }
+#[injectable]
+struct Consumer { #[inject] port: dyn Port }
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let provider = ServiceProvider::build().await.unwrap();
+    let concrete = provider.get_required_service::<Service>().await.unwrap();
+    let projected = provider.get_required_service::<dyn Port>().await.unwrap();
+    let consumer = provider.get_required_service::<Consumer>().await.unwrap();
+    assert!(std::ptr::addr_eq(concrete, projected));
+    assert!(std::ptr::addr_eq(projected, &*consumer.port));
+    assert_eq!(projected.value(), concrete.value);
+    provider.dispose_async().await.unwrap();
+    println!("explicit pair satisfies field and root automatic demand");
+}
+"#,
+    )
+    .unwrap();
+    let output = run(&directory, &["run", "--offline"], "explicit-demand");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("explicit pair satisfies field and root automatic demand")
+    );
+}
+
+#[test]
+fn duplicate_explicit_bindings_are_rejected_before_a_final_program_can_run() {
+    let directory = artifacts("duplicate-explicit-bindings");
+    fs::create_dir_all(directory.join("src")).unwrap();
+    fs::write(
+        directory.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"duplicate-explicit-bindings\"\nversion = \"0.0.0\"\n\
+             edition = \"2024\"\n[workspace]\n[dependencies]\n\
+             nestrs-core = {{ path = {} }}\n",
+            quoted(&workspace().join("nestrs-core")),
+        ),
+    )
+    .unwrap();
+    fs::write(
+        directory.join("src/main.rs"),
+        r#"use nestrs::{bind, injectable};
+trait Port: Send + Sync {}
+#[injectable]
+struct Service;
+#[bind]
+#[bind]
+impl Port for Service {}
+fn main() { panic!("duplicate binding validation must not execute main"); }
+"#,
+    )
+    .unwrap();
+    for operation in ["check", "build"] {
+        let output = run(&directory, &[operation, "--offline"], operation);
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "{operation} accepted duplicate bindings"
+        );
+        for expected in ["DuplicateBinding", "Service", "Port"] {
+            assert!(diagnostic.contains(expected), "{operation}: {diagnostic}");
+        }
+        assert!(
+            !diagnostic.contains("internal compiler error"),
+            "{diagnostic}"
+        );
+    }
+}
+
+#[test]
+fn closed_generic_blueprints_keep_demand_and_exact_factory_priority() {
+    let directory = artifacts("closed-blueprint-priority");
+    fs::create_dir_all(&directory).unwrap();
+    let manifest = workspace().join("tools/compiler-probe/fixtures/auto-binding/Cargo.toml");
+    // 逐一执行有效正例，不调用仍把非法图当作运行期错误的历史 --bins probe。
+    // 这些 fixture 同时检查实际服务行为和编译器生成的需求/显式投影清单。
+    for (binary, expected) in [
+        (
+            "factory_override",
+            "default/named/indexed blueprints remain unused",
+        ),
+        (
+            "factory_other_key",
+            "generic default blueprint remains active",
+        ),
+        (
+            "unreferenced_generic",
+            "unused generic: no unmaterialized trait request",
+        ),
+        (
+            "explicit_generic_root",
+            "unqueried blueprint dependency bound",
+        ),
+    ] {
+        let output = run(
+            &directory,
+            &[
+                "run",
+                "--offline",
+                "--locked",
+                "--manifest-path",
+                manifest.to_str().unwrap(),
+                "--bin",
+                binary,
+            ],
+            binary,
+        );
+        assert!(
+            output.status.success(),
+            "{binary}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(expected),
+            "{binary}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+}
+
+#[test]
 fn source_cannot_call_reflection_entry_or_forge_declaration_callbacks() {
     let directory = artifacts("source-audit");
     fs::create_dir_all(directory.join("src")).unwrap();

@@ -4,13 +4,7 @@
 //! rustc hook，因此通过逐编译单元的语义模型选同一个候选。这里仅应用结果，不自行
 //! 搜索 impl、不猜泛型或服务名称，不抑制类型检查。
 
-use zyn::{
-    quote::ToTokens,
-    syn::{
-        self,
-        fold::{self, Fold},
-    },
-};
+use zyn::{quote::ToTokens, syn};
 
 use crate::ide::constructor::{ConstructorModel, MODEL_ENV, Selection, SourceAnchor};
 
@@ -74,24 +68,14 @@ fn normalize_model(mut model: ConstructorModel) -> syn::Result<ConstructorModel>
     Ok(model)
 }
 
-/// 包装字段与裁剪候选之后，整个输出继续接受 rust-analyzer 的正常 Rust 检查。
-pub(super) fn apply(
-    output: zyn::TokenStream,
-    service: &syn::Ident,
+/// 在字段定义生成前应用已验证的存储映射，保留业务 AST 及其 span。
+/// 构造候选由同一套 renderer 直接选择，不再重新解析和遍历生成后的 Rust 输出。
+pub(super) fn apply_fields(
+    structure: &mut syn::ItemStruct,
     selection: &Selection,
-) -> syn::Result<zyn::TokenStream> {
-    let mut file: syn::File = syn::parse2(output)?;
+) -> syn::Result<()> {
     if selection.constructor {
-        let structure = file
-            .items
-            .iter_mut()
-            .find_map(|item| match item {
-                syn::Item::Struct(structure) if structure.ident == *service => Some(structure),
-                _ => None,
-            })
-            .ok_or_else(|| {
-                syn::Error::new_spanned(service, "constructor IDE 展开缺少对应服务结构体")
-            })?;
+        let service = &structure.ident;
         for plan in &selection.fields {
             let field = structure
                 .fields
@@ -135,45 +119,7 @@ pub(super) fn apply(
             };
         }
     }
-    Ok(PruneCandidates {
-        explicit: selection.constructor,
-    }
-    .fold_file(file)
-    .into_token_stream())
-}
-
-struct PruneCandidates {
-    explicit: bool,
-}
-
-impl Fold for PruneCandidates {
-    fn fold_expr(&mut self, expression: syn::Expr) -> syn::Expr {
-        if let syn::Expr::If(candidate) = &expression
-            && matches!(candidate.cond.as_ref(), syn::Expr::Lit(literal) if matches!(literal.lit, syn::Lit::Bool(ref value) if !value.value))
-            && let [syn::Stmt::Expr(syn::Expr::Call(call), None)] =
-                candidate.then_branch.stmts.as_slice()
-            && let syn::Expr::Path(path) = call.func.as_ref()
-            && path.path.segments.last().is_some_and(|segment| {
-                matches!(
-                    segment.ident.to_string().as_str(),
-                    "__nestrs_constructor_dependencies" | "__nestrs_constructor_activate"
-                )
-            })
-            && let Some((_, alternative)) = &candidate.else_branch
-        {
-            let selected = if self.explicit {
-                syn::Expr::Block(syn::ExprBlock {
-                    attrs: candidate.attrs.clone(),
-                    label: None,
-                    block: candidate.then_branch.clone(),
-                })
-            } else {
-                *alternative.clone()
-            };
-            return fold::fold_expr(self, selected);
-        }
-        fold::fold_expr(self, expression)
-    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -222,14 +168,15 @@ mod tests {
     }
 
     #[test]
-    fn editor_uses_the_selected_constructor_and_owned_field_wrappers() {
-        let output = quote! {
-            struct Service { database: Database, audit: Option<dyn Audit>, label: String }
-            const _: () = {
-                fn construct(inputs: Inputs) { if false { Service::__nestrs_constructor_activate(inputs) } else { let _: ImpossibleDefault = Default::default(); } }
-                fn dependencies() { if false { Service::__nestrs_constructor_dependencies() } else { let auto_inputs = (); } }
-            };
+    fn editor_wraps_selected_fields_before_rendering_the_declaration() {
+        let mut structure: syn::ItemStruct = syn::parse_quote! {
+            struct Service<T: Clone> where T: Send {
+                database: Database<T>,
+                audit: Option<dyn Audit>,
+                label: String,
+            }
         };
+        let generics = structure.generics.clone();
         let selection = Selection {
             constructor: true,
             fields: vec![
@@ -247,38 +194,29 @@ mod tests {
                 },
             ],
         };
-        let tokens = apply(output, &syn::parse_quote!(Service), &selection)
-            .unwrap()
-            .to_string();
-        assert!(tokens.contains("Injection < Database >"));
+        apply_fields(&mut structure, &selection).unwrap();
+        let tokens = structure.to_token_stream().to_string();
+        assert_eq!(structure.generics, generics);
+        assert!(tokens.contains("Injection < Database < T > >"));
         assert!(tokens.contains("Option < :: nestrs_core :: LazyInjection < dyn Audit > >"));
         assert!(tokens.contains("label : String"));
-        assert!(!tokens.contains("ImpossibleDefault"));
-        assert!(!tokens.contains("auto_inputs"));
-        assert!(tokens.contains("__nestrs_constructor_activate"));
     }
 
     #[test]
-    fn automatic_editor_mode_removes_only_framework_constructor_candidates() {
-        let output = quote! {
-            struct Service;
-            fn construct() { if false { Service::__nestrs_constructor_dependencies() } else { let actual = (); } }
-            fn user_logic() { if false { user_call() } else { something_else() } }
+    fn automatic_editor_mode_leaves_the_original_field_ast_unchanged() {
+        let mut structure: syn::ItemStruct = syn::parse_quote! {
+            struct Service { value: BusinessType }
         };
-        let tokens = apply(
-            output,
-            &syn::parse_quote!(Service),
+        let original = structure.clone();
+        apply_fields(
+            &mut structure,
             &Selection {
                 constructor: false,
                 fields: Vec::new(),
             },
         )
-        .unwrap()
-        .to_string();
-        assert!(!tokens.contains("__nestrs_constructor_dependencies"));
-        assert!(tokens.contains("actual"));
-        assert!(tokens.contains("if false"));
-        assert!(tokens.contains("user_call"));
+        .unwrap();
+        assert_eq!(structure, original);
     }
 
     #[test]
@@ -299,10 +237,35 @@ mod tests {
                     optional: false,
                 }],
             };
-            let tokens = apply(output.clone(), &syn::parse_quote!(Service), &selection)
-                .unwrap()
-                .to_string();
+            let mut structure = syn::parse2(output.clone()).unwrap();
+            apply_fields(&mut structure, &selection).unwrap();
+            let tokens = structure.to_token_stream().to_string();
             assert!(tokens.contains("r#type : :: nestrs_core :: Injection < Database >"));
+        }
+    }
+
+    #[test]
+    fn changed_field_mapping_keeps_the_existing_editor_diagnostics() {
+        for (name, optional, message) in [
+            ("missing", false, "模型中的字段 missing 已变化"),
+            ("database", true, "模型的可选性与字段不一致"),
+        ] {
+            let mut structure = syn::parse_quote!(
+                struct Service {
+                    database: Database,
+                }
+            );
+            let selection = Selection {
+                constructor: true,
+                fields: vec![FieldPlan {
+                    name: name.into(),
+                    slot: 0,
+                    lazy: false,
+                    optional,
+                }],
+            };
+            let error = apply_fields(&mut structure, &selection).unwrap_err();
+            assert!(error.to_string().contains(message), "{error}");
         }
     }
 }
