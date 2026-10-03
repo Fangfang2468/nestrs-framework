@@ -1,0 +1,19 @@
+[package]
+name = "nestrs-query-implicit"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+members = ["library"]
+
+[dependencies]
+nestrs-core = { path = "../../../../nestrs-core" }
+implicit-library = { path = "library" }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
+
+[features]
+extra-root = ["implicit-library/extra-root"]
+invalid-deref = []
+invalid-drop = []
+invalid-associated = []

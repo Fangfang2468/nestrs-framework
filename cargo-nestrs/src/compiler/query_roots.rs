@@ -11,15 +11,18 @@ extern crate rustc_index;
 extern crate rustc_infer;
 extern crate rustc_trait_selection;
 
+use rustc_hir::LangItem;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{DefId, DefIndex, LocalDefId, LocalModDefId};
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_index::Idx;
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::mir::{self, BasicBlock, BasicBlockData, Operand, TerminatorKind};
+use rustc_middle::ty::adjustment::{Adjust, DerefAdjustKind};
 use rustc_middle::ty::{self, Ty, TyCtxt, TypeVisitableExt};
 use rustc_span::{Span, Spanned};
 use rustc_trait_selection::traits::{Obligation, ObligationCause, ObligationCtxt};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::registration_codegen::definition_path;
@@ -266,6 +269,19 @@ impl<'tcx> Summary<'_, 'tcx> {
 }
 impl<'tcx> Visitor<'tcx> for Summary<'_, 'tcx> {
     fn visit_expr(&mut self, expression: &'tcx rustc_hir::Expr<'tcx>) {
+        // 自动解引用不占用 type_dependent_def_id。沿原生 adjustment 顺序恢复
+        // 每一步的真实接收类型，使用与 THIR 相同的 Deref/DerefMut 方法身份与实参。
+        let mut receiver = self.typeck.expr_ty(expression);
+        for adjustment in self.typeck.expr_adjustments(expression) {
+            if let Adjust::Deref(DerefAdjustKind::Overloaded(deref)) = adjustment.kind {
+                self.function(
+                    deref.method_call(self.tcx),
+                    self.tcx.mk_args(&[receiver.into()]),
+                    deref.span,
+                );
+            }
+            receiver = adjustment.target;
+        }
         // 运算符、索引等重载表达式也有经过类型检查的关联方法身份。它们与普通
         // MethodCall 使用同一闭合实例求解；只匹配 MethodCall 会漏掉 `a + b`。
         // 同一表还保存 Self::CONST 等关联常量，只有关联函数可以编码成 FnDef。
@@ -442,6 +458,20 @@ pub fn preserve_summary<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, body: &mut m
     } else {
         local_summary(tcx, owner)
     };
+    preserve_records(tcx, body, summary);
+}
+
+/// 仅在原生 drop elaboration 完成后保存析构边；move、forget 和 ManuallyDrop
+/// 遵守 rustc 自己的析构规则。此阶段尚未优化 if false 的运行路径。
+pub fn preserve_drop_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mut mir::Body<'tcx>) {
+    preserve_records(tcx, body, drop_summary(tcx, body));
+}
+
+fn preserve_records<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &mut mir::Body<'tcx>,
+    summary: Vec<Record<'tcx>>,
+) {
     let records: Vec<_> = summary
         .into_iter()
         .filter(|record| !matches!(record.value, QueryValue::Constant(..)))
@@ -456,6 +486,12 @@ pub fn preserve_summary<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, body: &mut m
         return;
     };
     let source_info = body.basic_blocks[mir::START_BLOCK].terminator().source_info;
+    // 运行期 MIR 已完成 unwind lowering；工具生成的空 marker 不会 unwind。
+    let unwind = if matches!(body.phase, mir::MirPhase::Runtime(_)) {
+        mir::UnwindAction::Unreachable
+    } else {
+        mir::UnwindAction::Continue
+    };
     let unit = body
         .local_decls
         .push(mir::LocalDecl::new(tcx.types.unit, source_info.span));
@@ -497,6 +533,7 @@ pub fn preserve_summary<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, body: &mut m
             argument,
             unit.into(),
             next,
+            unwind,
             mir::SourceInfo {
                 span: record.span,
                 ..source_info
@@ -511,6 +548,7 @@ fn call_block<'tcx>(
     argument: Ty<'tcx>,
     destination: mir::Place<'tcx>,
     target: BasicBlock,
+    unwind: mir::UnwindAction,
     source_info: mir::SourceInfo,
 ) -> BasicBlockData<'tcx> {
     BasicBlockData::new(
@@ -525,7 +563,7 @@ fn call_block<'tcx>(
                 args: Vec::<Spanned<Operand<'tcx>>>::new().into(),
                 destination,
                 target: Some(target),
-                unwind: mir::UnwindAction::Continue,
+                unwind,
                 call_source: mir::CallSource::Misc,
                 fn_span: source_info.span,
             },
@@ -598,10 +636,47 @@ fn external_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
 /// 标准库没有 Nestrs marker，但其泛型 MIR 保留了真实函数项与 trait 调用。
 /// 只在闭合调用的实参携带已知查询实现/闭包时读取，不扫描整套标准库；函数指针
 /// 转换前的 FnDef 同样保留，不能只看 Call terminator 丢掉传递给回调的函数项。
-fn standard_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
-    if !tcx.is_mir_available(id) {
-        return Vec::new();
+fn drop_callable<'tcx>(tcx: TyCtxt<'tcx>, value: Ty<'tcx>, span: Span) -> Record<'tcx> {
+    let method = tcx.require_lang_item(LangItem::DropGlue, span);
+    Record {
+        value: QueryValue::Callable(tcx.erase_and_anonymize_regions(Ty::new_fn_def(
+            tcx,
+            method,
+            [value],
+        ))),
+        span,
     }
+}
+
+fn drop_type<'tcx>(tcx: TyCtxt<'tcx>, value: QueryValue<'tcx>) -> Option<Ty<'tcx>> {
+    if let QueryValue::Callable(value) = value
+        && let ty::FnDef(id, args) = *value.kind()
+        && Some(id) == tcx.lang_items().drop_glue_fn()
+    {
+        Some(args.type_at(0))
+    } else {
+        None
+    }
+}
+
+fn drop_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> Vec<Record<'tcx>> {
+    body.basic_blocks
+        .iter()
+        .filter_map(|block| {
+            let terminator = block.terminator();
+            let TerminatorKind::Drop { place, .. } = terminator.kind else {
+                return None;
+            };
+            Some(drop_callable(
+                tcx,
+                place.ty(&body.local_decls, tcx).ty,
+                terminator.source_info.span,
+            ))
+        })
+        .collect()
+}
+
+fn mir_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> Vec<Record<'tcx>> {
     struct Calls<'a, 'tcx> {
         tcx: TyCtxt<'tcx>,
         body: &'a mir::Body<'tcx>,
@@ -622,16 +697,23 @@ fn standard_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
             self.super_operand(operand, location);
         }
     }
-    let body = tcx.optimized_mir(id);
     let mut calls = Calls {
         tcx,
         body,
-        records: Vec::new(),
+        records: drop_summary(tcx, body),
     };
     mir::visit::Visitor::visit_body(&mut calls, body);
     let mut seen = HashSet::new();
     calls.records.retain(|record| seen.insert(record.value));
     calls.records
+}
+
+fn standard_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
+    if tcx.is_mir_available(id) {
+        mir_summary(tcx, tcx.optimized_mir(id))
+    } else {
+        Vec::new()
+    }
 }
 
 /// 只使用已有查询摘要的真实身份作为转发入口：方法所属的名义类型，以及已知
@@ -673,45 +755,118 @@ impl QueryCarriers {
         added
     }
 
-    fn identities(value: QueryValue<'_>) -> HashSet<DefId> {
+    fn contains<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        identities: &NominalIdentities<'tcx>,
+        value: QueryValue<'tcx>,
+    ) -> bool {
+        identities
+            .identities(tcx, value)
+            .iter()
+            .any(|id| self.types.contains(id) || self.callables.contains(id))
+    }
+}
+
+// 有限的名义字段/关联类型图，按定义缓存相邻类型，避免每个调用重复扫描 impl。
+// 不物化不断变化的递归泛型实参；此图只用于相关性粗筛。
+#[derive(Default)]
+struct NominalIdentities<'tcx> {
+    edges: RefCell<HashMap<DefId, Vec<Ty<'tcx>>>>,
+}
+impl<'tcx> NominalIdentities<'tcx> {
+    fn identities(&self, tcx: TyCtxt<'tcx>, value: QueryValue<'tcx>) -> HashSet<DefId> {
         let types = match value {
             QueryValue::Service(value) | QueryValue::Callable(value) => vec![value],
             QueryValue::Constant(_, args) => args.types().collect(),
         };
-        types
-            .into_iter()
-            .flat_map(|value| value.walk())
-            .filter_map(|argument| {
-                argument.as_type().and_then(|value| match *value.kind() {
-                    ty::Adt(definition, _) => Some(definition.did()),
+        let mut pending = types;
+        let mut identities = HashSet::new();
+        let mut fields_seen = HashSet::new();
+        let mut aliases_seen = HashSet::new();
+        while let Some(value) = pending.pop() {
+            for argument in value.walk() {
+                let Some(value) = argument.as_type() else {
+                    continue;
+                };
+                match *value.kind() {
+                    ty::Adt(definition, _) => {
+                        identities.insert(definition.did());
+                        // 这里只求有限的名义类型关系。实际实参已由 walk 保留，字段
+                        // 使用定义自身的泛型参数，避免 Recursive<Vec<T>> 在粗筛中
+                        // 无限扩张。普通函数调用也需要这条关系，例如 drop(Opaque)。
+                        if business_definition(tcx, definition.did())
+                            && fields_seen.insert(definition.did())
+                        {
+                            let mut edges = self.edges.borrow_mut();
+                            let fields = edges.entry(definition.did()).or_insert_with(|| {
+                                let args =
+                                    ty::GenericArgs::identity_for_item(tcx, definition.did());
+                                definition
+                                    .all_fields()
+                                    .map(|field| field.ty(tcx, args).skip_normalization())
+                                    .collect()
+                            });
+                            pending.extend(fields.iter().copied());
+                        }
+                    }
+                    ty::Alias(_, alias) => {
+                        let id = match alias.kind {
+                            ty::Projection { def_id }
+                            | ty::Inherent { def_id }
+                            | ty::Opaque { def_id }
+                            | ty::Free { def_id } => def_id,
+                        };
+                        if !aliases_seen.insert(id) {
+                            continue;
+                        }
+                        let mut edges = self.edges.borrow_mut();
+                        let types = edges.entry(id).or_insert_with(|| {
+                            let mut types = Vec::new();
+                            // 关联类型的已有 impl/default 只贡献相关性身份。闭合后的
+                            // 原生 drop glue 决定实际实现，不能把候选直接变成查询根。
+                            if let ty::Projection { def_id } = alias.kind {
+                                if tcx.defaultness(def_id).has_value() {
+                                    types.push(
+                                        tcx.type_of(def_id)
+                                            .instantiate_identity()
+                                            .skip_normalization(),
+                                    );
+                                }
+                                if let Some(trait_id) = tcx.trait_of_assoc(def_id) {
+                                    for implementation in tcx.all_impls(trait_id) {
+                                        if let Some(&item) = tcx
+                                            .impl_item_implementor_ids(implementation)
+                                            .get(&def_id)
+                                        {
+                                            types.push(
+                                                tcx.type_of(item)
+                                                    .instantiate_identity()
+                                                    .skip_normalization(),
+                                            );
+                                        }
+                                    }
+                                }
+                            } else {
+                                types.push(
+                                    tcx.type_of(id).instantiate_identity().skip_normalization(),
+                                );
+                            }
+                            types
+                        });
+                        pending.extend(types.iter().copied());
+                    }
                     ty::FnDef(id, _)
                     | ty::Closure(id, _)
                     | ty::Coroutine(id, _)
-                    | ty::CoroutineClosure(id, _) => Some(id),
-                    _ => None,
-                })
-            })
-            .collect()
-    }
-
-    fn contains_type(&self, value: Ty<'_>) -> bool {
-        value.walk().any(|argument| {
-            argument.as_type().is_some_and(|value| match *value.kind() {
-                ty::Adt(definition, _) => self.types.contains(&definition.did()),
-                ty::FnDef(id, _)
-                | ty::Closure(id, _)
-                | ty::Coroutine(id, _)
-                | ty::CoroutineClosure(id, _) => self.callables.contains(&id),
-                _ => false,
-            })
-        })
-    }
-
-    fn contains(&self, value: QueryValue<'_>) -> bool {
-        match value {
-            QueryValue::Service(value) | QueryValue::Callable(value) => self.contains_type(value),
-            QueryValue::Constant(_, args) => args.types().any(|value| self.contains_type(value)),
+                    | ty::CoroutineClosure(id, _) => {
+                        identities.insert(id);
+                    }
+                    _ => {}
+                }
+            }
         }
+        identities
     }
 }
 
@@ -737,7 +892,22 @@ pub fn collect_with_providers<'tcx>(
     let mut summaries = HashMap::new();
     let mut processed_crates = HashSet::new();
     for owner in tcx.hir_body_owners() {
-        let records = local_summary(tcx, owner);
+        let mut records = local_summary(tcx, owner);
+        // 原生 drop elaboration 后已把隐式析构保存在入口 marker 中。只读取函数类 owner，
+        // 并跳过正在据本查询生成的计划入口，避免 MIR 查询递归。
+        if !crate::di_plan::is_entry(tcx, owner)
+            && business_definition(tcx, owner.to_def_id())
+            && matches!(
+                tcx.def_kind(owner),
+                DefKind::Fn | DefKind::AssocFn | DefKind::Closure | DefKind::SyntheticCoroutineBody
+            )
+        {
+            records.extend(
+                external_summary(tcx, owner.to_def_id())
+                    .into_iter()
+                    .filter(|record| drop_type(tcx, record.value).is_some()),
+            );
+        }
         if !records.is_empty() {
             summaries.insert(owner.to_def_id(), records);
         }
@@ -824,6 +994,7 @@ pub fn collect_with_providers<'tcx>(
     let mut incoming: HashMap<DefId, Vec<DefId>> = HashMap::new();
     let mut carrier_users: HashMap<DefId, Vec<DefId>> = HashMap::new();
     let mut carriers = QueryCarriers::default();
+    let identities = NominalIdentities::default();
     let mut relevant = HashSet::new();
     let mut propagation = VecDeque::new();
     for (&id, records) in &summaries {
@@ -837,7 +1008,7 @@ pub fn collect_with_providers<'tcx>(
             if let Some(target) = record.value.definition() {
                 incoming.entry(target).or_default().push(id);
             }
-            for identity in QueryCarriers::identities(record.value) {
+            for identity in identities.identities(tcx, record.value) {
                 carrier_users.entry(identity).or_default().push(id);
             }
         }
@@ -863,7 +1034,7 @@ pub fn collect_with_providers<'tcx>(
     }
     let relevant_record = |record: &Record<'tcx>| {
         matches!(record.value, QueryValue::Service(_))
-            || carriers.contains(record.value)
+            || carriers.contains(tcx, &identities, record.value)
             || record
                 .value
                 .definition()
@@ -942,6 +1113,7 @@ pub fn collect_with_providers<'tcx>(
             QueryValue::Constant(id, args) => (id, args),
             QueryValue::Service(_) => unreachable!(),
         };
+        let mut drop_instance = None;
         let (id, args) = if matches!(
             tcx.def_kind(id),
             DefKind::Closure | DefKind::SyntheticCoroutineBody
@@ -954,6 +1126,12 @@ pub fn collect_with_providers<'tcx>(
                 // dyn 调用的 Self 是 trait object，不是实际实现。默认方法也
                 // 不能以 dyn Self 物化；实际 concrete 由已知 provider seed 决定。
                 Some(instance) if !matches!(instance.def, ty::InstanceKind::Virtual(..)) => {
+                    if matches!(
+                        instance.def,
+                        ty::InstanceKind::Shim(ty::ShimKind::DropGlue(..))
+                    ) {
+                        drop_instance = Some(instance);
+                    }
                     (instance.def_id(), instance.args)
                 }
                 Some(_) => continue,
@@ -961,6 +1139,16 @@ pub fn collect_with_providers<'tcx>(
             }
         };
         if !seen.insert((id, args)) {
+            continue;
+        }
+        if let Some(instance) = drop_instance {
+            // rustc 的真实胶水覆盖用户 Drop、聚合字段、Box/Vec/数组等结构。
+            // 胶水按 Instance（含实际 T）生成，不能按公共 drop 函数 DefId 缓存。
+            for nested in mir_summary(tcx, tcx.instance_mir(instance.def)) {
+                if relevant_record(&nested) {
+                    pending.push_back((nested, owner, depth + 1, origin));
+                }
+            }
             continue;
         }
         if standard_definition(tcx, id) {

@@ -21,11 +21,14 @@ use std::sync::OnceLock;
 
 type MirBuilt = for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> &'tcx Steal<mir::Body<'tcx>>;
 static ORIGINAL_MIR_BUILT: OnceLock<MirBuilt> = OnceLock::new();
+static ORIGINAL_MIR_DROPS: OnceLock<MirBuilt> = OnceLock::new();
 
 /// 与普通 rustc MIR 构建组合，只追加编译期摘要，绝不改写业务方法的返回或借用。
 pub fn provide(providers: &mut rustc_middle::util::Providers) {
     ORIGINAL_MIR_BUILT.get_or_init(|| providers.queries.mir_built);
     providers.queries.mir_built = reflection_mir;
+    ORIGINAL_MIR_DROPS.get_or_init(|| providers.queries.mir_drops_elaborated_and_const_checked);
+    providers.queries.mir_drops_elaborated_and_const_checked = reflection_drop_mir;
 }
 
 fn reflection_mir(tcx: TyCtxt<'_>, definition: LocalDefId) -> &Steal<mir::Body<'_>> {
@@ -37,6 +40,21 @@ fn reflection_mir(tcx: TyCtxt<'_>, definition: LocalDefId) -> &Steal<mir::Body<'
     }
     let mut body = original.steal();
     crate::query_roots::preserve_summary(tcx, definition, &mut body);
+    tcx.alloc_steal_mir(body)
+}
+
+// 原生 move 分析与 drop elaboration 决定哪些值真正需要析构；在此之前记录 Drop
+// 会把已移入 forget/ManuallyDrop 的临时值也加入图。此查询仍先于优化和常量分支消除。
+fn reflection_drop_mir(tcx: TyCtxt<'_>, definition: LocalDefId) -> &Steal<mir::Body<'_>> {
+    let original =
+        ORIGINAL_MIR_DROPS
+            .get()
+            .expect("Nestrs drop summary MIR provider was installed")(tcx, definition);
+    if tcx.crate_name(LOCAL_CRATE).as_str() == "nestrs_core" && !tcx.sess.opts.test {
+        return original;
+    }
+    let mut body = original.steal();
+    crate::query_roots::preserve_drop_summary(tcx, &mut body);
     tcx.alloc_steal_mir(body)
 }
 

@@ -18,6 +18,7 @@ const CASES: &[&str] = &[
     "open_generic_provider",
     "bound_provider",
     "registered_roots",
+    "implicit_drop_roots",
     "runtime_bound_generic",
     "runtime_field_cfg",
     "runtime_graph_display",
