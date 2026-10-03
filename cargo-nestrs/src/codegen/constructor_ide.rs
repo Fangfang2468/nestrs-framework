@@ -12,10 +12,14 @@ use super::injection::sub_macros::inject::{GrammarMessages, split_optional};
 
 /// 无环境模型表示正常编译；有模型时必须精确匹配，不能在编辑内容变化后退回猜测。
 pub(super) struct EditorSelection {
+    /// driver 已确认的构造模式和字段存储映射。
     pub selection: Selection,
+
+    /// 当前编译单元分配的辅助项名称；显式构造时必须存在。
     pub helpers: Option<HelperNames>,
 }
 
+/// 读取并校验当前编译单元的 IDE 模型；未设置环境变量时保持普通编译路径。
 fn model(span: zyn::proc_macro2::Span) -> syn::Result<Option<ConstructorModel>> {
     let Some(environment) = std::env::var_os(MODEL_ENV) else {
         return Ok(None);
@@ -32,6 +36,7 @@ fn model(span: zyn::proc_macro2::Span) -> syn::Result<Option<ConstructorModel>> 
     normalize_model(model).map(Some)
 }
 
+/// 用源码锚点及完整声明匹配服务模型，拒绝过期或缺少 helper 身份的结果。
 pub(super) fn selection(item: &syn::ItemStruct) -> syn::Result<Option<EditorSelection>> {
     let span = item.ident.span();
     let Some(model) = model(span)? else {
@@ -55,6 +60,7 @@ pub(super) fn selection(item: &syn::ItemStruct) -> syn::Result<Option<EditorSele
     }))
 }
 
+/// 取得当前关联构造方法在模型中分配的辅助名称，不自行扫描 impl。
 pub(super) fn method_helpers(item: &syn::ImplItemFn) -> syn::Result<Option<HelperNames>> {
     let span = item.sig.ident.span();
     let Some(model) = model(span)? else {
@@ -66,6 +72,7 @@ pub(super) fn method_helpers(item: &syn::ImplItemFn) -> syn::Result<Option<Helpe
         .map_err(|message| syn::Error::new(span, message))
 }
 
+/// 从宏宿主提供的真实文件与 span 构造位置锚点；缺少位置时返回 None。
 fn anchor(span: zyn::proc_macro2::Span) -> Option<SourceAnchor> {
     // 原版 RA 的部分 proc-macro 协议不给 local_file；可用的真实 file 路径优先，
     // 完全无位置时让模型执行严格的整声明匹配，不伪造一个源码 anchor。

@@ -1,4 +1,4 @@
-//! Compiler-owned discovery for the automatic binding experiment.
+//! 编译器拥有的自动绑定语义发现与闭合类型分析。
 //!
 //! Hidden marker functions describe DI intent. Types and candidate
 //! applicability come from rustc; source text is only retained for the final
@@ -25,56 +25,113 @@ use rustc_trait_selection::{
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 
+/// 第一轮语义分析的插入计划与统计；名称字符串仅用于报告。
 pub struct Analysis {
+    /// 第二轮需要加入源码覆盖层的自动投影。
     pub insertions: Vec<SourceInsertion>,
+
+    /// 本轮已收集的不同 provider 类型数量。
     pub providers: usize,
+
+    /// 本轮去重后的依赖或查询类型数量。
     pub requests: usize,
+
+    /// 本轮新生成的 concrete/interface 投影数量。
     pub generated_bindings: usize,
+
+    /// 去重后的显式 concrete/interface 绑定数量。
     pub explicit_bindings: usize,
+
+    /// 去重后的已有自动投影能力数量。
     pub automatic_bindings: usize,
+
+    /// 本轮实际需要的闭合泛型 provider 数量。
     pub blueprints: usize,
+
+    /// 保留的生成统计字段；当前蓝图由计划直接实例化，此值为零。
     pub generated_blueprints: usize,
+
     /// Diagnostic records only. Selection and deduplication use rustc Ty identity.
     pub automatic_projections: Vec<(String, String)>,
+
+    /// 显式投影的可读类型对，仅用于诊断与工件展示。
     pub explicit_projections: Vec<(String, String)>,
 }
 
+/// 声明标记的用途；自动投影能力不等同于当前查询需求。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MarkerKind {
+    /// 服务或工厂的 provider 声明。
     Provider,
+
+    /// 输入或查询对某个类型的需求。
     Request,
+
+    /// 显式声明的 concrete/interface 绑定。
     Binding,
+
+    /// 尚待实际需求选择的自动投影能力。
     AutomaticBinding,
 }
 
+/// 经已认证声明解码的 key；使用字面量身份参与精确匹配。
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CompilerKey {
+    /// 未指定 key 的默认路由。
     Default,
+
+    /// 字符串字面量 key。
     Named(String),
+
+    /// 整数字面量 key，保留声明端的完整值。
     Indexed(u128),
 }
 
+/// 携带真实类型、词法位置和选择策略的单条声明记录。
 #[derive(Clone)]
 struct Marker<'tcx> {
+    /// 决定记录作为声明、需求还是投影能力参与分析。
     kind: MarkerKind,
+
+    /// 从标记真实泛型实参恢复的类型。
     types: Vec<Ty<'tcx>>,
+
+    /// 本地插入与名称可见性检查使用的 HIR 所有者。
     owner: LocalDefId,
+
+    /// 记录的词法位置，用于定位合法投影插入点。
     span: Span,
+
     /// 仅供诊断；不改变自动投影插入所用的词法位置。
     diagnostic_span: Span,
+
+    /// provider 声明的精确 key；非 provider 标记可为空。
     key: Option<CompilerKey>,
+
+    /// 仅登记能力而不主动引入查询需求。
     passive: bool,
 }
 
+/// 从类型检查后的 HIR 收集已认证标记，累计协议解析错误。
 struct MarkerVisitor<'a, 'tcx> {
+    /// 当前编译会话的类型与定义查询入口。
     tcx: TyCtxt<'tcx>,
+
+    /// 正在遍历的本地函数或闭包所有者。
     owner: LocalDefId,
+
+    /// 当前 body 的真实类型检查结果。
     typeck: &'tcx ty::TypeckResults<'tcx>,
+
+    /// 收集到的声明记录。
     output: &'a mut Vec<Marker<'tcx>>,
+
+    /// 需交给调用者统一报告的协议错误。
     errors: &'a mut Vec<String>,
 }
 
 impl<'tcx> Visitor<'tcx> for MarkerVisitor<'_, 'tcx> {
+    /// 只解码通过身份认证的标记调用，其余表达式继续按标准 HIR 遍历。
     fn visit_expr(&mut self, expr: &'tcx rustc_hir::Expr<'tcx>) {
         if let rustc_hir::ExprKind::Call(function, arguments) = expr.kind
             && let ty::FnDef(def_id, args) = *self.typeck.expr_ty(function).kind()
@@ -125,6 +182,7 @@ fn marker_type_span(function: &rustc_hir::Expr<'_>) -> Option<Span> {
 }
 
 impl MarkerVisitor<'_, '_> {
+    /// 从已认证 CompilerKey 变体与字面量恢复 key，拒绝不兼容的参数形态。
     fn provider_key(&self, arguments: &[rustc_hir::Expr<'_>]) -> Result<CompilerKey, String> {
         let [argument] = arguments else {
             return Err(
@@ -178,10 +236,12 @@ impl MarkerVisitor<'_, '_> {
     }
 }
 
+/// 判断类型是否已不含开放参数、推断变量或逃逸的绑定变量。
 fn closed(ty: Ty<'_>) -> bool {
     !ty.has_non_region_param() && !ty.has_infer() && !ty.has_escaping_bound_vars()
 }
 
+/// 在声明所有者的类型环境中归一化 DI 类型，先检查类型复杂度并返回求解错误。
 fn normalized<'tcx>(
     tcx: TyCtxt<'tcx>,
     owner: LocalDefId,
@@ -285,6 +345,7 @@ pub(crate) fn provider_callback<'tcx>(
     ))
 }
 
+/// 将已认证的反射标记定义归类；同名普通函数不会获得声明身份。
 fn marker_kind(tcx: TyCtxt<'_>, definition: DefId) -> Option<MarkerKind> {
     [
         (ReflectionMarker::Provider.name(), MarkerKind::Provider),
@@ -299,6 +360,7 @@ fn marker_kind(tcx: TyCtxt<'_>, definition: DefId) -> Option<MarkerKind> {
     .find_map(|(name, kind)| reflect_item(tcx, definition, name).then_some(kind))
 }
 
+/// 读取闭合 provider 的描述调用，将真实 marker 与用户来源加入分析队列。
 fn closed_provider_markers<'tcx>(
     tcx: TyCtxt<'tcx>,
     method: DefId,
@@ -864,6 +926,7 @@ pub(crate) fn external_key<'tcx>(
     }
 }
 
+/// 解码上游 CompilerKey 变体的常量载荷，并拒绝错误变体或无效 UTF-8。
 fn external_key_parts<'tcx>(
     tcx: TyCtxt<'tcx>,
     variant: DefId,
@@ -921,6 +984,7 @@ fn capability_impls(tcx: TyCtxt<'_>) -> Vec<DefId> {
     implementations
 }
 
+/// 以闭合 concrete 求解真实业务 impl 和父接口，收集可证明的 dyn 投影能力。
 fn declared_interfaces<'tcx>(
     tcx: TyCtxt<'tcx>,
     concrete: Ty<'tcx>,
@@ -987,6 +1051,7 @@ fn declared_interfaces<'tcx>(
     interfaces
 }
 
+/// 保留关联类型约束，生成 rustc 可证明的接口及 Send/Sync 形状；不猜测开放参数。
 fn interface_variants<'tcx>(
     tcx: TyCtxt<'tcx>,
     concrete: Ty<'tcx>,
@@ -1100,6 +1165,7 @@ fn interface_variants<'tcx>(
     variants
 }
 
+/// 为已选投影找到合法源码位置，并把该能力加入对应插入记录。
 fn insertion_for<'tcx>(
     tcx: TyCtxt<'tcx>,
     concrete: Ty<'tcx>,
@@ -1112,6 +1178,7 @@ fn insertion_for<'tcx>(
     Ok(insertion)
 }
 
+/// 选择能同时命名投影两端的真实模块；无法保持可见性或宏来源时返回明确错误。
 fn source_insertion<'tcx>(
     tcx: TyCtxt<'tcx>,
     concrete: Ty<'tcx>,
@@ -1194,6 +1261,7 @@ fn source_insertion<'tcx>(
     })
 }
 
+/// 沿真实定义的父链寻找模块；拒绝只能在函数块内命名的类型。
 fn module_for(
     tcx: TyCtxt<'_>,
     mut owner: LocalDefId,

@@ -20,11 +20,15 @@ use std::rc::Rc;
 /// One analysis owns this mapping; artifact paths are canonicalized once, not
 /// for every comparison or projection emitted from its candidate set.
 pub struct SourceTypes<'tcx> {
+    /// 当前会话的类型和可见路径查询入口。
     tcx: TyCtxt<'tcx>,
+
+    /// 实际加载 crate 身份到 Cargo extern 名称的共享映射。
     crate_names: Rc<HashMap<CrateNum, String>>,
 }
 
 impl<'tcx> SourceTypes<'tcx> {
+    /// 按本轮加载工件建立 extern 别名目录，供所有类型打印复用。
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
         Self {
             tcx,
@@ -32,6 +36,7 @@ impl<'tcx> SourceTypes<'tcx> {
         }
     }
 
+    /// 返回完整类型文本；生成源码需要另用 render_if_nameable 校验可命名性。
     pub fn render(&self, ty: Ty<'tcx>) -> String {
         self.render_source(ty).0
     }
@@ -47,6 +52,7 @@ impl<'tcx> SourceTypes<'tcx> {
         nameable.then_some(source)
     }
 
+    /// 仅为打印副本重命名绑定生命周期，返回源码文本及全部路径是否可命名。
     fn render_source(&self, ty: Ty<'tcx>) -> (String, bool) {
         // Diagnostic printing restarts its region-name allocator for each
         // binder. Give every bound region a unique source name first, including
@@ -71,21 +77,30 @@ impl<'tcx> SourceTypes<'tcx> {
     }
 }
 
+/// 为打印副本分配无歧义的绑定生命周期名称，不改变候选类型身份。
 struct SourceRegions<'tcx> {
+    /// 创建重命名生命周期时使用的类型上下文。
     tcx: TyCtxt<'tcx>,
+
+    /// 当前嵌套 binder 的唯一编号栈。
     binders: Vec<usize>,
+
+    /// 下一个可分配 binder 编号。
     next_binder: usize,
 }
 
+/// 由 binder 与变量编号生成互不冲突的打印用生命周期名称。
 fn region_name(binder: usize, variable: usize) -> Symbol {
     Symbol::intern(&format!("'__nestrs_{binder}_{variable}"))
 }
 
 impl<'tcx> TypeFolder<TyCtxt<'tcx>> for SourceRegions<'tcx> {
+    /// 提供类型折叠使用的同一编译上下文。
     fn cx(&self) -> TyCtxt<'tcx> {
         self.tcx
     }
 
+    /// 为当前 binder 的生命周期分配唯一打印名称，并维护嵌套 binder 栈。
     fn fold_binder<T: TypeFoldable<TyCtxt<'tcx>>>(
         &mut self,
         binder: ty::Binder<'tcx, T>,
@@ -111,6 +126,7 @@ impl<'tcx> TypeFolder<TyCtxt<'tcx>> for SourceRegions<'tcx> {
         ty::Binder::bind_with_vars(value, variables)
     }
 
+    /// 按实际绑定层级恢复对应打印名称，保留非绑定生命周期原义。
     fn fold_region(&mut self, region: ty::Region<'tcx>) -> ty::Region<'tcx> {
         let ty::ReBound(ty::BoundVarIndexKind::Bound(depth), bound) = region.kind() else {
             return region;
@@ -132,6 +148,7 @@ impl<'tcx> TypeFolder<TyCtxt<'tcx>> for SourceRegions<'tcx> {
     }
 }
 
+/// 比较已加载工件与 extern prelude，恢复可以写入源码的实际依赖别名。
 fn extern_names(tcx: TyCtxt<'_>) -> HashMap<CrateNum, String> {
     let mut names = HashMap::new();
     for &krate in tcx.crates(()) {
@@ -154,16 +171,29 @@ fn extern_names(tcx: TyCtxt<'_>) -> HashMap<CrateNum, String> {
     names
 }
 
+/// 沿 rustc 可见重导出打印可编译的类型路径并追踪可命名性。
 struct SourcePrinter<'tcx> {
+    /// 当前会话的类型与路径查询入口。
     tcx: TyCtxt<'tcx>,
+
+    /// 累计生成的类型源码。
     output: String,
+
+    /// 当前路径是否尚未打印首段。
     empty_path: bool,
+
+    /// 是否处于需要表达式路径语法的值上下文。
     in_value: bool,
+
+    /// 真实 extern 别名映射，区分同名依赖版本。
     crate_names: Rc<HashMap<CrateNum, String>>,
+
+    /// 已打印的所有 crate 根是否均可从当前源码命名。
     nameable: bool,
 }
 
 impl fmt::Write for SourcePrinter<'_> {
+    /// 将打印结果累积到内存字符串。
     fn write_str(&mut self, value: &str) -> fmt::Result {
         self.output.push_str(value);
         Ok(())
@@ -171,10 +201,12 @@ impl fmt::Write for SourcePrinter<'_> {
 }
 
 impl<'tcx> Printer<'tcx> for SourcePrinter<'tcx> {
+    /// 向 rustc 打印器提供当前会话。
     fn tcx<'a>(&'a self) -> TyCtxt<'tcx> {
         self.tcx
     }
 
+    /// 优先使用真实可见重导出路径，携带泛型实参时沿用原生路径规则。
     fn print_def_path(
         &mut self,
         definition: DefId,
@@ -186,6 +218,7 @@ impl<'tcx> Printer<'tcx> for SourcePrinter<'tcx> {
         self.default_print_def_path(definition, args)
     }
 
+    /// 沿用 rustc 对生命周期的语法打印。
     fn print_region(&mut self, region: ty::Region<'tcx>) -> Result<(), PrintError> {
         self.write_str(&FmtPrinter::print_string(
             self.tcx,
@@ -194,10 +227,12 @@ impl<'tcx> Printer<'tcx> for SourcePrinter<'tcx> {
         )?)
     }
 
+    /// 复用原生类型结构打印，并保留本打印器的路径策略。
     fn print_type(&mut self, ty: Ty<'tcx>) -> Result<(), PrintError> {
         self.pretty_print_type(ty)
     }
 
+    /// 为关键字形式的关联类型名称保留 raw 标识符，其余 dyn 语法沿用 rustc。
     fn print_dyn_existential(
         &mut self,
         predicates: &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>,
@@ -284,10 +319,12 @@ impl<'tcx> Printer<'tcx> for SourcePrinter<'tcx> {
         Ok(())
     }
 
+    /// 复用原生 const 打印并保留当前路径与值上下文。
     fn print_const(&mut self, value: ty::Const<'tcx>) -> Result<(), PrintError> {
         self.pretty_print_const(value, false)
     }
 
+    /// 使用当前 extern 别名打印 crate 根，同时记录无法命名的传递依赖。
     fn print_crate_name(&mut self, krate: CrateNum) -> Result<(), PrintError> {
         self.empty_path = false;
         if krate == LOCAL_CRATE {
@@ -309,6 +346,7 @@ impl<'tcx> Printer<'tcx> for SourcePrinter<'tcx> {
         write!(self, "::{}{name}", if raw { "r#" } else { "" })
     }
 
+    /// 打印普通路径段，并为当前 edition 的关键字补 raw 标识符语法。
     fn print_path_with_simple(
         &mut self,
         prefix: impl FnOnce(&mut Self) -> Result<(), PrintError>,
@@ -331,6 +369,7 @@ impl<'tcx> Printer<'tcx> for SourcePrinter<'tcx> {
         Ok(())
     }
 
+    /// 打印 impl 关联项路径，保留真实 Self 与 trait 关系。
     fn print_path_with_impl(
         &mut self,
         prefix: impl FnOnce(&mut Self) -> Result<(), PrintError>,
@@ -352,6 +391,7 @@ impl<'tcx> Printer<'tcx> for SourcePrinter<'tcx> {
         Ok(())
     }
 
+    /// 按当前值/类型上下文输出泛型实参及分隔符。
     fn print_path_with_generic_args(
         &mut self,
         prefix: impl FnOnce(&mut Self) -> Result<(), PrintError>,
@@ -367,6 +407,7 @@ impl<'tcx> Printer<'tcx> for SourcePrinter<'tcx> {
         self.generic_delimiters(|printer| printer.comma_sep(args.iter().copied()))
     }
 
+    /// 打印带 Self 和 trait 限定的关联路径。
     fn print_path_with_qualified(
         &mut self,
         self_ty: Ty<'tcx>,
@@ -377,6 +418,7 @@ impl<'tcx> Printer<'tcx> for SourcePrinter<'tcx> {
         Ok(())
     }
 
+    /// 开始独立路径时重置路径前缀状态。
     fn reset_path(&mut self) -> Result<(), PrintError> {
         self.empty_path = true;
         Ok(())
@@ -384,12 +426,14 @@ impl<'tcx> Printer<'tcx> for SourcePrinter<'tcx> {
 }
 
 impl<'tcx> SourcePrinter<'tcx> {
+    /// 按当前 edition 判断路径名称是否需要 raw 标识符。
     fn identifier_needs_raw(&self, name: Symbol) -> bool {
         // Generated overlays are parsed in the consuming crate's edition,
         // even when a name originated in metadata from an older edition.
         name.can_be_raw() && name.is_reserved(|| self.tcx.sess.edition())
     }
 
+    /// 以合法源码标识符输出关联类型约束及其值。
     fn print_source_projection(
         &mut self,
         projection: ty::ExistentialProjection<'tcx>,
@@ -409,6 +453,7 @@ impl<'tcx> SourcePrinter<'tcx> {
 }
 
 impl<'tcx> PrettyPrinter<'tcx> for SourcePrinter<'tcx> {
+    /// 输出泛型尖括号，临时切换到类型上下文打印内部实参。
     fn generic_delimiters(
         &mut self,
         emit: impl FnOnce(&mut Self) -> Result<(), PrintError>,
@@ -420,10 +465,12 @@ impl<'tcx> PrettyPrinter<'tcx> for SourcePrinter<'tcx> {
         self.write_str(">")
     }
 
+    /// 保留会影响可编译类型表达式的生命周期信息。
     fn should_print_optional_region(&self, region: ty::Region<'tcx>) -> bool {
         FmtPrinter::new(self.tcx, Namespace::TypeNS).should_print_optional_region(region)
     }
 
+    /// 在值路径上下文中打印函数等项目，再恢复原打印状态。
     fn pretty_print_value_path(
         &mut self,
         definition: DefId,
@@ -435,6 +482,7 @@ impl<'tcx> PrettyPrinter<'tcx> for SourcePrinter<'tcx> {
         Ok(())
     }
 
+    /// 通过统一 binder 包装规则打印受绑定的类型结构。
     fn pretty_print_in_binder<T>(&mut self, value: &ty::Binder<'tcx, T>) -> Result<(), PrintError>
     where
         T: Print<Self> + TypeFoldable<TyCtxt<'tcx>>,
@@ -444,6 +492,7 @@ impl<'tcx> PrettyPrinter<'tcx> for SourcePrinter<'tcx> {
         })
     }
 
+    /// 借用 rustc 的捕获规避命名，再用本打印器输出实际类型及 extern 路径。
     fn wrap_binder<T, F>(
         &mut self,
         value: &ty::Binder<'tcx, T>,
@@ -463,6 +512,7 @@ impl<'tcx> PrettyPrinter<'tcx> for SourcePrinter<'tcx> {
     }
 }
 
+/// 按真实可见性与重导出父链检查类型能否在指定模块合法命名。
 pub fn accessible(tcx: TyCtxt<'_>, ty: Ty<'_>, module: LocalDefId) -> bool {
     let visible = |mut definition: DefId| {
         loop {

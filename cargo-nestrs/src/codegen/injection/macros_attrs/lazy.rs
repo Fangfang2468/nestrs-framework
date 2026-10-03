@@ -13,15 +13,21 @@ use zyn::{
 
 use super::primary::has_attribute_named;
 
+/// 在 lazy 先展开时交给 provider 消费的私有策略 marker。
 const DEFERRED_ATTRIBUTE: &str = "__nestrs_service_lazy";
 
+/// 服务级 lazy 的继承、延迟与主动预热三态配置。
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ServiceLazyConfig {
+    /// None 继承容器策略，true/false 分别退出或加入自主预热。
     value: Option<bool>,
+
+    /// 提前消费的原属性路径，用于维持用户导入的已使用状态。
     consumed_attribute_path: Option<syn::Path>,
 }
 
 impl ServiceLazyConfig {
+    /// 解析裸标记、空括号或单个布尔字面量，拒绝表达式和多个参数。
     pub(crate) fn from_tokens(tokens: TokenStream) -> syn::Result<Self> {
         let value = if tokens.is_empty() {
             // 标准过程宏对 #[lazy] 和 #[lazy()] 给出相同的空输入，二者必须一致。
@@ -37,6 +43,7 @@ impl ServiceLazyConfig {
         })
     }
 
+    /// 返回将交给执行计划的声明级覆盖策略。
     pub(crate) fn value(&self) -> Option<bool> {
         self.value
     }
@@ -47,6 +54,7 @@ impl ServiceLazyConfig {
         Some(syn::parse_quote!(use #path as _;))
     }
 
+    /// 解析尚未展开的属性或内部交接 marker，并记录需要保留使用状态的路径。
     fn from_attribute(attribute: &Attribute) -> syn::Result<Self> {
         let mut config = match &attribute.meta {
             Meta::Path(_) => Self::from_tokens(TokenStream::new())?,
@@ -127,8 +135,10 @@ pub(crate) fn take_lazy_for_provider(
     Ok(lazy.unwrap_or_default())
 }
 
+/// 原属性与交接 marker 共用的重复声明诊断。
 const DUPLICATE_ERROR: &str = "同一个服务声明不能重复标注 #[lazy]";
 
+/// 把非法 lazy 参数定位到实际值，列出服务级支持的语法形态。
 fn arguments_error(span: zyn::proc_macro2::Span) -> syn::Error {
     syn::Error::new(
         span,

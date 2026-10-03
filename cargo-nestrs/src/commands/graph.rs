@@ -1,3 +1,5 @@
+//! 按入口运行编译检查并汇总图 sidecar；导出过程不链接或执行业务程序。
+
 use std::{
     ffi::OsString,
     fs,
@@ -11,28 +13,49 @@ use super::{
 };
 use crate::toolchain::{Toolchain, cargo_program};
 
+/// Cargo metadata 中一个可独立编译和验证的 binary 入口。
 #[derive(Clone, Debug)]
 struct GraphTarget {
+    /// Cargo 提供的完整 package 身份，用于区分同名包。
     package_id: String,
+
+    /// 面向报告展示的 package 名称。
     package: String,
+
+    /// 该 package 中目标 binary 的名称。
     binary: String,
+
+    /// Cargo metadata 指定的 binary 根源码。
     source: PathBuf,
+
+    /// 入口所属 package 的 manifest 目录。
     manifest_dir: PathBuf,
+
+    /// Cargo 声明的入口 feature 门槛，未启用时可报告为跳过。
     required_features: Vec<String>,
 }
 
+/// 本次选择的 package 清单及其中可导出的 binary 入口。
 struct Selection {
+    /// 项目报告列出的 package，包含没有 binary 的库包。
     packages: Vec<serde_json::Value>,
+
+    /// 实际可逐一执行 cargo check 的 binary 列表。
     targets: Vec<GraphTarget>,
 }
 
+/// 单入口的诊断及跳过状态；项目导出仍继续处理其他入口。
 #[derive(Debug)]
 struct EntryFailure {
+    /// 写入报告的编译或选择错误文本。
     diagnostic: String,
+
+    /// 是否仅因 required-features 未满足而跳过；跳过不计入错误数。
     skipped: bool,
 }
 
 impl From<String> for EntryFailure {
+    /// 普通错误默认为失败；仅识别到缺失 required-features 时单独标记跳过。
     fn from(diagnostic: String) -> Self {
         Self {
             diagnostic,
@@ -41,6 +64,7 @@ impl From<String> for EntryFailure {
     }
 }
 
+/// 按单入口或项目模式检查并导出；项目报告保留失败与跳过，单入口失败保留旧文件。
 pub(super) fn run(options: super::cli::GraphOptions) -> Result<u8, String> {
     let super::cli::GraphOptions {
         output,
@@ -126,6 +150,7 @@ pub(super) fn run(options: super::cli::GraphOptions) -> Result<u8, String> {
     Ok(u8::from(errors != 0))
 }
 
+/// 根据 Cargo metadata 选择真实 binary，并检查 package/feature 组合的支持边界。
 fn select_targets(metadata: &serde_json::Value, args: &[OsString]) -> Result<Selection, String> {
     let package = super::option_value(args, "--package")?.or(super::option_value(args, "-p")?);
     let binary = super::option_value(args, "--bin")?;
@@ -260,6 +285,7 @@ fn per_entry_arguments(args: &[OsString]) -> Result<Vec<OsString>, String> {
     Ok(retained)
 }
 
+/// 在入口与构建配置独立的缓存中 cargo check，再核对 sidecar 与 Cargo 工件身份。
 fn inspect_target(
     toolchain: &Toolchain,
     target: &std::path::Path,
@@ -443,6 +469,7 @@ fn read_json(path: &std::path::Path, label: &str) -> Result<serde_json::Value, E
     serde_json::from_slice(&bytes).map_err(|error| format!("{label}不是有效 JSON：{error}").into())
 }
 
+/// 核对图 sidecar 的入口、源码和 metadata 路径，拒绝复用其他构建单元的数据。
 fn verify_identity(
     value: &serde_json::Value,
     entry: &GraphTarget,
@@ -473,6 +500,7 @@ fn verify_identity(
     Ok(())
 }
 
+/// 仅以两端成功规范化后的文件系统路径判断身份。
 fn same_path(left: &std::path::Path, right: &std::path::Path) -> bool {
     match (left.canonicalize(), right.canonicalize()) {
         (Ok(left), Ok(right)) => left == right,
@@ -516,6 +544,7 @@ fn plain_diagnostic(text: &str) -> String {
     plain
 }
 
+/// 先写同目录临时文件再替换输出，写入失败时清理临时文件。
 fn export_html(output: PathBuf, html: String) -> Result<PathBuf, String> {
     let output = if output.is_absolute() {
         output
@@ -536,8 +565,10 @@ fn export_html(output: PathBuf, html: String) -> Result<PathBuf, String> {
     Ok(output)
 }
 
+/// 多 package 独立编译时拒绝含糊 feature 选择的统一诊断。
 const FEATURE_SELECTION_ERROR: &str = "workspace graph entries are compiled independently; select -p PACKAGE --features FEATURES for package-specific features, or use --workspace --all-features";
 
+/// 识别 Cargo 的长短 feature 选项及附着值形式。
 fn has_feature_selection(args: &[OsString]) -> bool {
     args.iter().any(|arg| {
         arg == "--features"
@@ -548,6 +579,7 @@ fn has_feature_selection(args: &[OsString]) -> bool {
     })
 }
 
+/// 限制图导出为支持的 binary 选择形式，并拒绝接管输出或混入其他目标的选项。
 fn validate_selectors(args: &[OsString]) -> Result<(), String> {
     if args.iter().any(|arg| arg == "--all") {
         return Err(

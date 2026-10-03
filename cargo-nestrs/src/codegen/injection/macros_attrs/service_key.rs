@@ -13,11 +13,15 @@ use zyn::{
 /// key 的身份与它在用户源码中的位置分别保存。位置只用于诊断，不参与匹配。
 #[derive(Debug, Clone)]
 pub(crate) struct ServiceKeySpec {
+    /// 参与服务选择的字面量身份。
     pub(crate) kind: ServiceKeyKind,
+
+    /// 原始 key 字面量的诊断位置；相等比较忽略此字段。
     pub(crate) span: Span,
 }
 
 impl PartialEq for ServiceKeySpec {
+    /// 只比较 key 的语义值，避免同值但不同来源的请求被错误区分。
     fn eq(&self, other: &Self) -> bool {
         self.kind == other.kind
     }
@@ -25,6 +29,7 @@ impl PartialEq for ServiceKeySpec {
 
 impl Eq for ServiceKeySpec {}
 
+/// 受支持的两类静态 key；默认 key 由外层 Option::None 表示。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ServiceKeyKind {
     /// 属性字面量中声明的服务名称。
@@ -78,6 +83,7 @@ pub(crate) fn from_literal(literal: &Lit) -> syn::Result<ServiceKeySpec> {
 }
 
 impl FromArg for ServiceKeySpec {
+    /// 解析 provider 的命名 key 配置，并复用依赖 helper 的字面量校验。
     fn from_arg(arg: &zyn::Arg) -> zyn::Result<Self> {
         // provider 配置使用 `key = <字面量>`；注入字面量由 request 前端调用
         // `from_literal`，共用相同值校验，不接受 provider 的命名配置语法。

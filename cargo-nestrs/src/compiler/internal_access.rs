@@ -31,17 +31,40 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+/// 外部定义原始可见性查询的函数签名。
 type VisibilityQuery = for<'tcx> fn(TyCtxt<'tcx>, DefId) -> ty::Visibility<DefId>;
+
+/// 外部模块子项查询的函数签名。
 type ChildrenQuery = for<'tcx> fn(TyCtxt<'tcx>, DefId) -> &'tcx [ModChild];
+
+/// 整个 crate 名称解析结果查询的函数签名。
 type ResolutionsQuery = for<'tcx> fn(TyCtxt<'tcx>, ()) -> &'tcx ty::ResolverGlobalCtxt;
+
+/// 本地定义范围查询的函数签名。
 type SpanQuery = for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> Span;
+
+/// 本地定义标识符范围查询的函数签名。
 type IdentSpanQuery = for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> Option<Span>;
+
+/// 未包装的外部可见性查询，供审计恢复真实边界。
 static VISIBILITY: OnceLock<VisibilityQuery> = OnceLock::new();
+
+/// 未包装的模块子项查询，供恢复原始公共导出。
 static CHILDREN: OnceLock<ChildrenQuery> = OnceLock::new();
+
+/// 未包装的名称解析结果查询。
 static RESOLUTIONS: OnceLock<ResolutionsQuery> = OnceLock::new();
+
+/// 未包装的定义范围查询，供附加生成来源。
 static DEF_SPAN: OnceLock<SpanQuery> = OnceLock::new();
+
+/// 未包装的标识符范围查询。
 static DEF_IDENT_SPAN: OnceLock<IdentSpanQuery> = OnceLock::new();
+
+/// 当前编译的精确生成区间；每次调用都替换，不跨编译继承。
 static TRUSTED_RANGES: Mutex<Vec<TrustedRange>> = Mutex::new(Vec::new());
+
+/// CLI 选定的真实 bridge 工件路径，不以同名 crate 代替认证。
 static BRIDGE_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// The CLI-selected bridge artifact, including for transitive-only consumers.
@@ -50,6 +73,7 @@ pub fn set_bridge_path(path: PathBuf) {
     *BRIDGE_PATH.lock().expect("bridge identity lock poisoned") = Some(path);
 }
 
+/// 按实际加载工件核对 extern 身份，不能只相信相同 crate 名称。
 fn matches_extern(tcx: TyCtxt<'_>, krate: CrateNum, name: &str) -> bool {
     tcx.sess.opts.externs.get(name).is_some_and(|entry| {
         entry.files().is_some_and(|files| {
@@ -68,6 +92,7 @@ fn matches_extern(tcx: TyCtxt<'_>, krate: CrateNum, name: &str) -> bool {
 // This predicate is also called during name resolution. Inspect the supplied
 // crate only: enumerating tcx.crates() here would freeze the dependency store
 // before rustc has finished loading the remaining externs.
+/// 识别当前加载的 core 身份；名称解析期间只检查传入 crate，不冻结其他 extern。
 fn runtime_crate(tcx: TyCtxt<'_>, krate: CrateNum) -> bool {
     if tcx.crate_name(krate).as_str() != "nestrs_core" {
         return false;
@@ -83,6 +108,7 @@ fn runtime_crate(tcx: TyCtxt<'_>, krate: CrateNum) -> bool {
     true
 }
 
+/// 核对 CLI 选定的 bridge 工件，独立回归环境则要求显式 extern 匹配。
 fn tool_bridge(tcx: TyCtxt<'_>, krate: CrateNum) -> bool {
     if tcx.crate_name(krate).as_str() != "nestrs_tool_bridge" {
         return false;
@@ -105,8 +131,13 @@ fn tool_bridge(tcx: TyCtxt<'_>, krate: CrateNum) -> bool {
 /// calculate these while applying insertions, never from user-written markers.
 #[derive(Clone, Debug)]
 pub struct TrustedRange {
+    /// 当前覆盖层对应的真实源文件路径。
     pub path: PathBuf,
+
+    /// 生成片段的起始 UTF-8 字节偏移，包含该位置。
     pub start: usize,
+
+    /// 生成片段结束的 UTF-8 字节偏移，不包含该位置。
     pub end: usize,
 }
 
@@ -118,6 +149,7 @@ pub fn set_trusted_ranges(ranges: Vec<TrustedRange>) {
         .expect("internal source range lock poisoned") = ranges;
 }
 
+/// 安装临时名称解析与生成来源钩子；必须与类型检查后的访问审计配套使用。
 pub fn install_queries(providers: &mut Providers) {
     let _ = VISIBILITY.set(providers.extern_queries.visibility);
     let _ = CHILDREN.set(providers.extern_queries.module_children);
@@ -131,11 +163,13 @@ pub fn install_queries(providers: &mut Providers) {
     providers.queries.def_ident_span = definition_ident_span;
 }
 
+/// 在原定义范围上附加已认证生成来源，保留原始位置。
 fn definition_span(tcx: TyCtxt<'_>, definition: LocalDefId) -> Span {
     let original = (DEF_SPAN.get().expect("Nestrs span hook not installed"))(tcx, definition);
     mark_generated(tcx, original)
 }
 
+/// 仅对存在标识符位置的定义附加生成来源。
 fn definition_ident_span(tcx: TyCtxt<'_>, definition: LocalDefId) -> Option<Span> {
     let original = (DEF_IDENT_SPAN
         .get()
@@ -188,6 +222,7 @@ fn mark_generated(tcx: TyCtxt<'_>, span: Span) -> Span {
     span.apply_mark(expansion.to_expn_id(), Transparency::Transparent)
 }
 
+/// 以 core 私有计划 ABI 的完整定义路径和签名认证生成卫生锚点。
 fn generated_anchor(tcx: TyCtxt<'_>, definition: DefId) -> bool {
     // 认证锚点复用真实运行期配置接合 ABI。core 不再为编译器保存空 marker，且
     // 不能只信函数拼写：必须来自匹配的 runtime crate，并核对完整普通 Rust 签名。
@@ -222,10 +257,12 @@ fn generated_anchor(tcx: TyCtxt<'_>, definition: DefId) -> bool {
                 && *eager == tcx.types.bool && *concurrency == tcx.types.usize)
 }
 
+/// 按定义所属 crate 检查其是否来自当前 runtime。
 fn is_runtime(tcx: TyCtxt<'_>, definition: DefId) -> bool {
     !definition.is_local() && runtime_crate(tcx, definition.krate)
 }
 
+/// 仅在解析阶段临时开放 runtime 名称，其他定义使用原始可见性。
 fn visibility(tcx: TyCtxt<'_>, definition: DefId) -> ty::Visibility<DefId> {
     if is_runtime(tcx, definition) {
         ty::Visibility::Public
@@ -234,12 +271,14 @@ fn visibility(tcx: TyCtxt<'_>, definition: DefId) -> ty::Visibility<DefId> {
     }
 }
 
+/// 绕过临时包装，读取定义的原始 Rust 可见性。
 fn original_visibility(tcx: TyCtxt<'_>, definition: DefId) -> ty::Visibility<DefId> {
     (VISIBILITY
         .get()
         .expect("Nestrs visibility hook not installed"))(tcx, definition)
 }
 
+/// 向生成代码的名称解析提供 runtime 子项；普通依赖保持原子项表。
 fn module_children(tcx: TyCtxt<'_>, definition: DefId) -> &[ModChild] {
     let children = (CHILDREN.get().expect("Nestrs child hook not installed"))(tcx, definition);
     if !is_runtime(tcx, definition) {
@@ -254,6 +293,7 @@ fn module_children(tcx: TyCtxt<'_>, definition: DefId) -> &[ModChild] {
         }))
 }
 
+/// 复制导出记录及重导出链，供过滤后的解析结果持有。
 fn copy_child(child: &ModChild) -> ModChild {
     ModChild {
         ident: child.ident,
@@ -335,14 +375,23 @@ fn resolutions(tcx: TyCtxt<'_>, (): ()) -> &ty::ResolverGlobalCtxt {
     tcx.arena.alloc(filtered)
 }
 
+/// 核对 HIR 对 core 私有实现的访问是否来自认证生成代码。
 struct Audit<'tcx> {
+    /// 当前会话的定义、类型与源码查询入口。
     tcx: TyCtxt<'tcx>,
+
+    /// 原始 core 公共导出集合，不包含临时暴露的名字。
     public: HashSet<DefId>,
+
+    /// 本轮编译的精确生成区间快照。
     ranges: Vec<TrustedRange>,
+
+    /// 已报告的定义与源码位置，避免重复诊断。
     errors: HashSet<(DefId, Span)>,
 }
 
 impl<'tcx> Audit<'tcx> {
+    /// 缓存原始公共导出与本轮可信区间，随后按真实定义身份审计。
     fn new(tcx: TyCtxt<'tcx>) -> Self {
         let mut public = HashSet::new();
         for &krate in tcx.crates(()) {
@@ -373,10 +422,12 @@ impl<'tcx> Audit<'tcx> {
         }
     }
 
+    /// 使用本次审计的范围快照检查调用位置来源。
     fn trusted(&self, span: Span) -> bool {
         trusted_span_in(self.tcx, span, &self.ranges)
     }
 
+    /// 沿关联项和 impl 所有者判断是否越过 core 公共门面。
     fn internal(&self, definition: DefId) -> bool {
         if definition.is_local() || !is_runtime(self.tcx, definition) {
             return false;
@@ -430,6 +481,7 @@ impl<'tcx> Audit<'tcx> {
         }
     }
 
+    /// 对未认证来源访问的私有定义发出一次业务位置错误。
     fn check(&mut self, definition: DefId, span: Span) {
         if self.internal(definition)
             && !self.trusted(span)
@@ -445,12 +497,14 @@ impl<'tcx> Audit<'tcx> {
         }
     }
 
+    /// 仅对已解析的定义引用执行权限审计。
     fn resolution(&mut self, resolution: Res, span: Span) {
         if let Res::Def(_, definition) = resolution {
             self.check(definition, span);
         }
     }
 
+    /// 检查推断类型中的私有 ADT、函数项和 trait 身份，覆盖未显式写出的访问。
     fn inferred_type(&mut self, value: ty::Ty<'_>, span: Span) {
         if self.trusted(span) {
             return;
@@ -480,6 +534,7 @@ pub fn trusted_definition(tcx: TyCtxt<'_>, definition: DefId) -> bool {
         || trusted_span(tcx, tcx.def_span(definition))
 }
 
+/// 核对 bridge 宏卫生或当前编译器生成区间中的来源身份。
 pub fn trusted_span(tcx: TyCtxt<'_>, span: Span) -> bool {
     trusted_span_in(
         tcx,
@@ -490,6 +545,7 @@ pub fn trusted_span(tcx: TyCtxt<'_>, span: Span) -> bool {
     )
 }
 
+/// 沿真实展开链与精确字节区间验证来源，不以文件名或标记拼写授予权限。
 fn trusted_span_in(tcx: TyCtxt<'_>, span: Span, ranges: &[TrustedRange]) -> bool {
     if span.is_dummy() {
         return false;
@@ -555,16 +611,21 @@ fn trusted_span_in(tcx: TyCtxt<'_>, span: Span, ranges: &[TrustedRange]) -> bool
 }
 
 impl<'tcx> intravisit::Visitor<'tcx> for Audit<'tcx> {
+    /// 审计整个 HIR 的嵌套定义。
     type NestedFilter = rustc_middle::hir::nested_filter::All;
+
+    /// 向完整 HIR 遍历提供当前类型上下文。
     fn maybe_tcx(&mut self) -> TyCtxt<'tcx> {
         self.tcx
     }
 
+    /// 审计路径解析到的定义，并继续遍历泛型参数。
     fn visit_path(&mut self, path: &hir::Path<'tcx>, _: hir::HirId) {
         self.resolution(path.res, path.span);
         intravisit::walk_path(self, path);
     }
 
+    /// 覆盖类型检查后才能确认的关联路径段。
     fn visit_path_segment(&mut self, segment: &hir::PathSegment<'tcx>) {
         self.resolution(segment.res, segment.ident.span);
         if let Some(arguments) = segment.args {
@@ -572,6 +633,7 @@ impl<'tcx> intravisit::Visitor<'tcx> for Audit<'tcx> {
         }
     }
 
+    /// 审计每个 use 解析目标，防止私有实现经重导出流出。
     fn visit_use(&mut self, path: &'tcx hir::UsePath<'tcx>, id: hir::HirId) {
         for resolution in [path.res.type_ns, path.res.value_ns, path.res.macro_ns]
             .into_iter()
@@ -582,6 +644,7 @@ impl<'tcx> intravisit::Visitor<'tcx> for Audit<'tcx> {
         intravisit::walk_use(self, path, id);
     }
 
+    /// 同时检查表达式的显式解析与推断类型，覆盖方法和字段等间接访问。
     fn visit_expr(&mut self, expression: &'tcx hir::Expr<'tcx>) {
         let owner = expression.hir_id.owner.def_id;
         if !self.tcx.has_typeck_results(owner) {

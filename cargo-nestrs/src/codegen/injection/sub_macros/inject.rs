@@ -153,6 +153,7 @@ pub(crate) fn split_optional(
     Ok((unparenthesized_type(service_type).clone(), false))
 }
 
+/// 读取末段为 Option 的单类型参数语法；真实类型身份仍由后续 Rust 检查确定。
 fn option_inner(ty: &Type, messages: GrammarMessages) -> syn::Result<Option<Type>> {
     let Type::Path(type_path) = unparenthesized_type(ty) else {
         return Ok(None);
@@ -246,6 +247,7 @@ pub(crate) fn validate_service_type(ty: &Type, is_top_level: bool) -> syn::Resul
     }
 }
 
+/// 递归检查嵌套类型参数，保留生命周期和常量参数，拒绝开放关联类型约束。
 fn validate_generic_arguments<'a>(
     arguments: impl Iterator<Item = &'a GenericArgument>,
 ) -> syn::Result<()> {
@@ -276,6 +278,7 @@ fn validate_generic_arguments<'a>(
     Ok(())
 }
 
+/// 识别交付协议不接受的最外层 Arc 与再次嵌套的 Option。
 fn is_disallowed_top_level_wrapper(path: &syn::Path) -> bool {
     path.segments
         .last()

@@ -16,7 +16,10 @@ use rustc_interface::interface;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::FileName;
 
+/// driver 注入查询标记所用的专用虚拟源码身份。
 pub(crate) const SOURCE: &str = "nestrs reflection metadata";
+
+/// 反射标记共享的私有模块协议名称。
 const MODULE: &str = protocol::REFLECTION_MODULE;
 
 /// 在标准展开前只追加普通 Rust 定义。下游通过编码 MIR 读取其真实 DefId 与类型实参。
@@ -85,10 +88,12 @@ pub(crate) fn local_marker(tcx: TyCtxt<'_>, name: &str) -> Option<DefId> {
         })
 }
 
+/// 确认定义是已认证的查询摘要入口，而非仅有相同拼写。
 pub(crate) fn summary_definition(tcx: TyCtxt<'_>, definition: DefId) -> bool {
     reflect_item(tcx, definition, crate::query_roots::SUMMARY_NAME)
 }
 
+/// 检查定义是否属于本轮 driver 注入的专用虚拟源码。
 fn virtual_definition(tcx: TyCtxt<'_>, definition: DefId) -> bool {
     let source = tcx
         .sess
@@ -124,6 +129,7 @@ pub(crate) fn reflect_item(tcx: TyCtxt<'_>, definition: DefId, name: &str) -> bo
     }
 }
 
+/// 核对反射标记的泛型参数、参数类型及普通 Rust 函数签名。
 fn marker(tcx: TyCtxt<'_>, definition: DefId, parameters: &[Parameter], inputs: Inputs) -> bool {
     if tcx.def_kind(definition) != DefKind::Fn || tcx.is_foreign_item(definition) {
         return false;
@@ -176,16 +182,19 @@ fn marker(tcx: TyCtxt<'_>, definition: DefId, parameters: &[Parameter], inputs: 
     }
 }
 
+/// 确认 key 参数属于当前已认证标记模块的 CompilerKey。
 fn key_type(tcx: TyCtxt<'_>, key: Ty<'_>, module: DefId) -> bool {
     matches!(key.kind(), ty::Adt(definition, _) if
         tcx.parent(definition.did()) == module && reflect_item(tcx, definition.did(), protocol::COMPILER_KEY))
 }
 
+/// 识别协议要求的静态字符串借用类型。
 fn static_str(value: Ty<'_>) -> bool {
     matches!(value.kind(), ty::Ref(region, element, mutability)
         if region.is_static() && element.is_str() && !mutability.is_mut())
 }
 
+/// 验证工具私有 key 枚举的变体、载荷与类型身份。
 fn compiler_key(tcx: TyCtxt<'_>, definition: DefId) -> bool {
     if tcx.def_kind(definition) != DefKind::Enum || tcx.generics_of(definition).count() != 0 {
         return false;

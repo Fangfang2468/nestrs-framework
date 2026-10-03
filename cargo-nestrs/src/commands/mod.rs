@@ -15,6 +15,7 @@ mod init;
 
 use cli::{Invocation, parse};
 
+/// 执行命令分发并将工具级错误打印到标准错误输出。
 pub fn run() -> ExitCode {
     match execute(env::args_os().skip(1).collect()) {
         Ok(code) => ExitCode::from(code),
@@ -25,6 +26,7 @@ pub fn run() -> ExitCode {
     }
 }
 
+/// 解析 CLI 意图，分别进入工具检查、Cargo 转发、图导出或 IDE 初始化。
 fn execute(args: Vec<OsString>) -> Result<u8, String> {
     let invocation = match parse(args) {
         Ok(invocation) => invocation,
@@ -61,6 +63,7 @@ fn execute(args: Vec<OsString>) -> Result<u8, String> {
     }
 }
 
+/// 在联合工件指纹隔离的 target 中运行 Cargo，并固定匹配的编译工具链。
 fn run_cargo(command: &str, args: Vec<OsString>) -> Result<u8, String> {
     let toolchain = Toolchain::discover()?;
     reject_wrappers(&toolchain)?;
@@ -77,6 +80,7 @@ fn run_cargo(command: &str, args: Vec<OsString>) -> Result<u8, String> {
     spawn(&mut child)
 }
 
+/// 拒绝未知 wrapper 组合，避免编译参数被另一层工具静默改写。
 pub(super) fn reject_wrappers(toolchain: &Toolchain) -> Result<(), String> {
     for variable in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"] {
         if let Some(value) = env::var_os(variable)
@@ -92,6 +96,7 @@ pub(super) fn reject_wrappers(toolchain: &Toolchain) -> Result<(), String> {
     Ok(())
 }
 
+/// 仅返回 -- 之前的 Cargo 参数，应用或测试程序参数不参与解析。
 pub(super) fn before_separator(args: &[OsString]) -> &[OsString] {
     let end = args
         .iter()
@@ -100,6 +105,7 @@ pub(super) fn before_separator(args: &[OsString]) -> &[OsString] {
     &args[..end]
 }
 
+/// 读取分隔或等号形式的选项，保留最后一次配置及原始 OS 字符串。
 pub(super) fn option_value(args: &[OsString], name: &str) -> Result<Option<OsString>, String> {
     let args = before_separator(args);
     let mut found = None;
@@ -123,6 +129,7 @@ pub(super) fn option_value(args: &[OsString], name: &str) -> Result<Option<OsStr
     Ok(found)
 }
 
+/// 提取 --name=value 的值；Unix 上保留非 UTF-8 路径字节。
 fn option_assignment(arg: &OsStr, name: &str) -> Option<OsString> {
     let prefix = format!("{name}=");
     #[cfg(unix)]
@@ -141,6 +148,7 @@ fn option_assignment(arg: &OsStr, name: &str) -> Option<OsString> {
     }
 }
 
+/// 尊重命令行及环境覆盖，否则交由 Cargo metadata 解析工作区目标目录。
 pub(super) fn target_directory(args: &[OsString]) -> Result<PathBuf, String> {
     let configured = option_value(args, "--target-dir")?
         .or_else(|| env::var_os("CARGO_TARGET_DIR").filter(|path| !path.is_empty()));
@@ -178,6 +186,7 @@ pub(super) fn target_directory(args: &[OsString]) -> Result<PathBuf, String> {
     }
 }
 
+/// 只转发影响 metadata 定位和网络约束的参数，保留原顺序。
 pub(super) fn metadata_options(args: &[OsString]) -> Result<Vec<OsString>, String> {
     let mut forwarded = Vec::new();
     let mut args = before_separator(args).iter();
@@ -199,6 +208,7 @@ pub(super) fn metadata_options(args: &[OsString]) -> Result<Vec<OsString>, Strin
     Ok(forwarded)
 }
 
+/// 替换 Cargo 目标目录且保留 -- 后的应用参数，不插入应用参数区。
 pub(super) fn replace_target_directory(
     args: Vec<OsString>,
     isolated: &Path,
@@ -230,6 +240,7 @@ pub(super) fn replace_target_directory(
     Ok(result)
 }
 
+/// 等待子命令完成，将启动错误和真实退出状态交给上层。
 fn spawn(command: &mut Command) -> Result<u8, String> {
     command.status().map(exit_code).map_err(|error| {
         format!(
@@ -239,6 +250,7 @@ fn spawn(command: &mut Command) -> Result<u8, String> {
     })
 }
 
+/// 保留正常退出码；Unix 信号转换为 shell 使用的 128 加信号编号。
 pub(super) fn exit_code(status: ExitStatus) -> u8 {
     if let Some(code) = status.code() {
         return code as u8;

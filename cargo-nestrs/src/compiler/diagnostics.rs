@@ -5,17 +5,32 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::{FileName, Span, SyntaxContext};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
+/// 一次 Nestrs 错误及其 rustc 展示信息；cause 保留内部证据。
 pub(crate) struct Diagnostic {
+    /// 稳定的 Nestrs 诊断编号。
     pub code: &'static str,
+
+    /// 面向用户的主要错误说明。
     pub message: String,
+
+    /// 主诊断位置，允许无法恢复位置时使用 dummy span。
     pub primary: Span,
+
+    /// 附着于业务源码范围的解释。
     pub labels: Vec<(Span, String)>,
+
+    /// 不依赖单一源码位置的补充说明。
     pub notes: Vec<String>,
+
+    /// 可操作的修复建议。
     pub help: Vec<String>,
+
+    /// 完整内部证据，过长时另存诊断工件。
     pub cause: String,
 }
 
 impl Diagnostic {
+    /// 创建主诊断，标签、建议和内部原因由调用者逐项补齐。
     pub fn new(code: &'static str, message: String, primary: Span) -> Self {
         Self {
             code,
@@ -59,6 +74,7 @@ pub(crate) fn source_span(tcx: TyCtxt<'_>, span: Span) -> Span {
     }
 }
 
+/// 按用户源码位置稳定排序并输出全部诊断，最后通过 rustc 的受控错误出口结束编译。
 pub(crate) fn emit(tcx: TyCtxt<'_>, mut diagnostics: Vec<Diagnostic>) -> ! {
     diagnostics.sort_by_key(|d| {
         let span = source_span(tcx, d.primary);
@@ -133,6 +149,7 @@ pub(crate) fn emit(tcx: TyCtxt<'_>, mut diagnostics: Vec<Diagnostic>) -> ! {
     unreachable!("至少一条诊断已发出")
 }
 
+/// 将内部 metadata 或执行协议不一致报告为工具错误，避免误导用户修改私有 ABI。
 pub(crate) fn internal(tcx: TyCtxt<'_>, cause: String) -> ! {
     let mut diagnostic = Diagnostic::new(
         "NESTRS-TOOL001",

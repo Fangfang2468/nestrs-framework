@@ -8,14 +8,23 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// graph 命令选定入口的完整 Cargo 身份，防止同名依赖覆盖产物。
 struct GraphTarget {
+    /// 传给 rustc 的规范 crate 名称。
     crate_name: String,
+
+    /// Cargo 原始 binary 名称，保留连字符等字符。
     binary: OsString,
+
+    /// 入口 package 的规范 manifest 目录。
     manifest: PathBuf,
+
+    /// 所选 binary 主源码的规范路径。
     source: PathBuf,
 }
 
 impl GraphTarget {
+    /// 读取并规范化 CLI 指定的图入口身份；未请求 graph 时返回 None。
     fn from_environment() -> Result<Option<Self>, String> {
         let Some(crate_name) = std::env::var_os("NESTRS_GRAPH_TARGET") else {
             return Ok(None);
@@ -42,6 +51,7 @@ impl GraphTarget {
         }))
     }
 
+    /// 先匹配源码，再核对原始 binary 和 package 身份；矛盾身份返回错误。
     fn matches(
         &self,
         crate_name: &str,
@@ -64,6 +74,7 @@ impl GraphTarget {
         Ok(true)
     }
 
+    /// 以当前 Cargo 单元的环境身份执行完整入口匹配。
     fn matches_environment(&self, crate_name: &str, source: &Path) -> Result<bool, String> {
         self.matches(
             crate_name,

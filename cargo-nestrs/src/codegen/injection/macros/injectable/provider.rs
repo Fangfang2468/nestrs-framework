@@ -61,14 +61,14 @@ pub(crate) fn collect_injectable_provider(
                 lazy = *lazy,
             )
             ::nestrs_core::activation::adapter::ActivationAdapter {
-                    @EmitClassProviderFields(
-                        binding_span = *binding_span,
-                        analysis = analysis.clone(),
-                        config = config.clone(),
-                        service_type = service_type.clone(),
-                        mode = *mode,
-                    )
-                    constructor: ::nestrs_core::activation::adapter::Constructor::Class({{ construct }}),
+                @EmitClassProviderFields(
+                    binding_span = *binding_span,
+                    analysis = analysis.clone(),
+                    config = config.clone(),
+                    service_type = service_type.clone(),
+                    mode = *mode,
+                )
+                constructor: ::nestrs_core::activation::adapter::Constructor::Class({{ construct }}),
             }
         }
     }
@@ -115,6 +115,7 @@ pub(crate) fn emit_class_provider_fields(
     }
 }
 
+/// 输出自动字段模式的候选标记和输入描述，供 driver 按真实构造选择消费。
 #[zyn::element]
 fn render_field_inputs(
     analysis: AnalyzedFields,
@@ -131,15 +132,15 @@ fn render_field_inputs(
     let original_input_ident = reflection::ident("__nestrs_constructor_input", *binding_span);
 
     zyn! {
-            let {{ field_mode_ident }} = {{ field_mode }};
-            let {{ original_input_ident }} = {{ original_input }};
-            ::std::vec![
+        let {{ field_mode_ident }} = {{ field_mode }};
+        let {{ original_input_ident }} = {{ original_input }};
+        ::std::vec![
             @for (spec in analysis.specs.iter()) {
                 @if (spec.is_injected()) {
                     @EmitDependencyRequest(request = spec.dependency_request(), binding_span = *binding_span),
                 }
             }
-            ]
+        ]
     }
 }
 

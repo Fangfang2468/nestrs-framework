@@ -12,11 +12,13 @@ use toml::Table;
 pub struct DiConfig {
     /// 是否在容器构建时预热 Singleton 及其必要依赖。
     pub eager: bool,
+
     /// 同一个 root 及全部 scope 共享的构造任务上限，始终大于零。
     pub max_concurrent_activations: usize,
 }
 
 impl Default for DiConfig {
+    /// 保持库级 Lazy / 32 基线；入口 manifest 可分别覆盖这两个字段。
     fn default() -> Self {
         Self {
             eager: false,

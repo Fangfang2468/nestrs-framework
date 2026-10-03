@@ -42,7 +42,8 @@ pub(crate) fn emit_bound_provider(
                 let {{ projected }}: &(dyn {{ interface }} + 'static) = {{ service_ref }};
                 {{ projected }}
             }
-        #[allow(dead_code)]
+
+            #[allow(dead_code)]
             #[allow(clippy::needless_borrow)]
             fn {{ callback }}()
                 -> ::nestrs_core::activation::adapter::ProjectionAdapter

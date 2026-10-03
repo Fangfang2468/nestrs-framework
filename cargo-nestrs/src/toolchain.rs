@@ -11,18 +11,26 @@ use std::{
 
 use crate::bridge::Bridge;
 
+/// 与 rustc_private ABI 配套的完整编译器身份，三个字段必须同时匹配。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompilerIdentity {
+    /// 固定 Rust release 字符串，不能代替完整 commit 校验。
     pub release: String,
+
+    /// rustc 构建对应的完整提交哈希。
     pub commit: String,
+
+    /// 工具可执行文件及 rustc_private 库所属的宿主三元组。
     pub host: String,
 }
 
 impl CompilerIdentity {
+    /// 读取随工具编译固化的版本信息，并使用工具自身的构建宿主。
     pub fn pinned() -> Result<Self, String> {
         Self::for_build_host(include_str!("../toolchain.json"), env!("NESTRS_BUILD_HOST"))
     }
 
+    /// 校验宿主属于支持列表，再把固定版本绑定到该宿主。
     fn for_build_host(value: &str, build_host: &str) -> Result<Self, String> {
         let json: serde_json::Value = serde_json::from_str(value)
             .map_err(|error| format!("invalid compiler identity JSON: {error}"))?;
@@ -63,6 +71,7 @@ impl CompilerIdentity {
         .to_string()
     }
 
+    /// 解码兄弟 driver 返回的完整身份，不接受缺失字段。
     fn from_json(value: &str) -> Result<Self, String> {
         let json: serde_json::Value = serde_json::from_str(value)
             .map_err(|error| format!("invalid compiler identity JSON: {error}"))?;
@@ -79,6 +88,7 @@ impl CompilerIdentity {
         })
     }
 
+    /// 从 rustc -vV 提取 release、完整 commit 和 host。
     pub fn parse(output: &str) -> Result<Self, String> {
         let field = |name: &str| {
             output
@@ -97,6 +107,7 @@ impl CompilerIdentity {
         })
     }
 
+    /// 拒绝任一身份字段不一致的编译器或 driver。
     pub fn verify(&self, actual: &Self) -> Result<(), String> {
         if actual != self {
             return Err(format!(
@@ -107,18 +118,31 @@ impl CompilerIdentity {
         Ok(())
     }
 
+    /// 组合完整身份，作为不同编译器之间的产物隔离键。
     pub fn cache_key(&self) -> String {
         format!("{}-{}-{}", self.release, self.commit, self.host)
     }
 }
 
+/// 已定位工具工件并核对编译器与 driver 身份的配置。
 #[derive(Debug)]
 pub struct Toolchain {
+    /// CLI、driver 与实际 rustc 已共同验证的完整身份。
     pub identity: CompilerIdentity,
+
+    /// 已解析到实际 sysroot 的编译器路径。
     pub rustc: PathBuf,
+
+    /// 当前编译器的标准库、rustdoc 及 rustc-dev 根目录。
     pub sysroot: PathBuf,
+
+    /// 作为 Cargo 编译包装器运行的本机 driver。
     pub driver: PathBuf,
+
+    /// 已定位并纳入缓存指纹的私有过程宏工件路径。
     pub bridge: PathBuf,
+
+    /// driver 与 bridge 的联合内容指纹，用于共同隔离 Cargo 产物。
     pub fingerprint: String,
 }
 
@@ -146,6 +170,7 @@ impl Toolchain {
         }
     }
 
+    /// 发现并交叉验证本机工具工件；这里只读取安装状态，不安装组件。
     pub fn discover() -> Result<Self, String> {
         let identity = CompilerIdentity::pinned()?;
         let rustc = find_compiler(&identity)?;
@@ -186,6 +211,7 @@ impl Toolchain {
         Ok(toolchain)
     }
 
+    /// 为 Cargo 子进程固定工具路径、隔离缓存相关环境，并移除应用的 bootstrap 授权。
     pub fn configure(&self, command: &mut Command) -> Result<(), String> {
         command
             .env("RUSTC", &self.rustc)
@@ -218,6 +244,7 @@ impl Toolchain {
         Ok(())
     }
 
+    /// 在系统已有搜索目录前加入当前 sysroot 的 driver 动态库目录。
     fn library_path(&self) -> Result<OsString, String> {
         let mut paths = runtime_library_directories(&self.sysroot, &self.identity.host);
         if let Some(current) = env::var_os(library_path_variable()) {
@@ -227,6 +254,7 @@ impl Toolchain {
             .map_err(|error| format!("cannot prepare driver library search path: {error}"))
     }
 
+    /// 启动所选 driver 的身份查询，防止 CLI 和 driver 来自不同固定工具链。
     fn verify_driver(&self) -> Result<(), String> {
         let output = Command::new(&self.driver)
             .arg("--nestrs-driver-info")
@@ -253,6 +281,7 @@ impl Toolchain {
     }
 }
 
+/// 优先使用显式配置，再只读检查已安装工具链与 PATH，拒绝版本不匹配。
 fn find_compiler(identity: &CompilerIdentity) -> Result<PathBuf, String> {
     if let Some(path) = env::var_os("NESTRS_RUSTC") {
         return validate_compiler(&direct_program_path(Path::new(&path))?, identity);
@@ -289,6 +318,7 @@ fn find_compiler(identity: &CompilerIdentity) -> Result<PathBuf, String> {
     }
 }
 
+/// 解析 rustup 已安装列表，保留带空格路径并优先选择固定 release。
 fn installed_compilers(output: &str, identity: &CompilerIdentity) -> Vec<PathBuf> {
     let mut installed = Vec::new();
     for line in output.lines() {
@@ -324,6 +354,7 @@ fn installed_compilers(output: &str, identity: &CompilerIdentity) -> Vec<PathBuf
     installed.into_iter().map(|(_, path)| path).collect()
 }
 
+/// 保留原始程序名，并按宿主规则补充可能的可执行后缀。
 fn executable_candidates(program: &Path, suffix: &str) -> Vec<PathBuf> {
     let mut paths = vec![program.to_owned()];
     if !suffix.is_empty() && program.extension().is_none() {
@@ -334,6 +365,7 @@ fn executable_candidates(program: &Path, suffix: &str) -> Vec<PathBuf> {
     paths
 }
 
+/// 解析实际可执行文件并排除 rustup 代理，避免查询触发隐式安装。
 fn direct_program_path(program: &Path) -> Result<PathBuf, String> {
     let candidates = executable_candidates(program, env::consts::EXE_SUFFIX);
     let resolved = if program.components().count() > 1 || program.is_absolute() {
@@ -358,6 +390,7 @@ fn direct_program_path(program: &Path) -> Result<PathBuf, String> {
     Ok(resolved)
 }
 
+/// 通过名称及相邻 rustup 的内容身份识别符号链接、硬链接或复制代理。
 fn is_rustup_proxy(program: &Path) -> Result<bool, String> {
     if program.file_stem().is_some_and(|name| name == "rustup") {
         return Ok(true);
@@ -373,6 +406,7 @@ fn is_rustup_proxy(program: &Path) -> Result<bool, String> {
     Ok(metadata.len() == rustup_metadata.len() && fingerprint(program)? == fingerprint(&rustup)?)
 }
 
+/// 返回本机 driver 动态库加载器使用的环境变量名称。
 pub(crate) fn library_path_variable() -> &'static str {
     if cfg!(windows) {
         "PATH"
@@ -381,6 +415,7 @@ pub(crate) fn library_path_variable() -> &'static str {
     }
 }
 
+/// 按工具宿主布局列出 driver 启动所需的 sysroot 动态库目录。
 pub(crate) fn runtime_library_directories(sysroot: &Path, host: &str) -> Vec<PathBuf> {
     if host.contains("windows") {
         vec![
@@ -392,6 +427,7 @@ pub(crate) fn runtime_library_directories(sysroot: &Path, host: &str) -> Vec<Pat
     }
 }
 
+/// 校验候选后再次验证 sysroot 中的真实 rustc，固定后续执行路径。
 fn validate_compiler(path: &Path, expected: &CompilerIdentity) -> Result<PathBuf, String> {
     let actual = CompilerIdentity::parse(&capture(path, &["-vV"])?)?;
     expected.verify(&actual)?;
@@ -412,6 +448,7 @@ fn validate_compiler(path: &Path, expected: &CompilerIdentity) -> Result<PathBuf
     Ok(compiler)
 }
 
+/// 检查当前 host 的 rustc-dev 元数据是否存在，缺失时报告安装要求。
 fn check_development_libraries(sysroot: &Path, host: &str) -> Result<(), String> {
     let metadata = sysroot.join("lib").join("rustlib").join(host).join("lib");
     let entries = fs::read_dir(&metadata)
@@ -438,6 +475,7 @@ fn check_development_libraries(sysroot: &Path, host: &str) -> Result<(), String>
     Ok(())
 }
 
+/// 运行只读工具查询并返回 UTF-8 标准输出，同时处理 Windows 编译器 DLL 路径。
 pub(crate) fn capture(program: &Path, args: &[&str]) -> Result<String, String> {
     let mut command = Command::new(program);
     command.args(args);
@@ -473,6 +511,7 @@ pub(crate) fn capture(program: &Path, args: &[&str]) -> Result<String, String> {
         .map_err(|error| format!("{} returned invalid UTF-8: {error}", program.display()))
 }
 
+/// 流式计算 driver 内容身份，仅用于缓存失效，不提供密码学认证。
 fn fingerprint(path: &Path) -> Result<String, String> {
     let mut file = File::open(path)
         .map_err(|error| format!("cannot read compiler driver {}: {error}", path.display()))?;
@@ -493,6 +532,7 @@ fn fingerprint(path: &Path) -> Result<String, String> {
     Ok(format!("{hash:016x}"))
 }
 
+/// 尊重调用环境指定的 Cargo，否则通过 PATH 使用 cargo。
 pub(crate) fn cargo_program() -> OsString {
     env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"))
 }

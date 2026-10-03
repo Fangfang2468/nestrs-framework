@@ -1,9 +1,10 @@
-//! Offline graph presentation; runtime core only produces flat diagnostic data.
+//! 展示编译器 sidecar 中的 DI 图；只校验并渲染工具数据，不读取运行时实例。
 
 use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
+/// 检查图数据版本和基本形状后，安全嵌入可离线查看的 HTML 模板。
 pub fn render_html(data: &Value) -> Result<String, String> {
     match data.get("version").and_then(Value::as_u64) {
         Some(1) if data.get("nodes").is_some_and(Value::is_array) => {
@@ -91,16 +92,19 @@ fn validate_project(data: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// 仅接受真正的 JSON 字符串，不把其他值转换成展示文字。
 fn string_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(Value::as_str)
 }
 
+/// 限制编号和源码坐标为 JavaScript 可精确表示的非负整数。
 fn valid_number(value: Option<&Value>) -> bool {
     value
         .and_then(Value::as_u64)
         .is_some_and(|number| number <= 9_007_199_254_740_991)
 }
 
+/// 接受默认 key 或带字符串表示值的 named/indexed key。
 fn valid_key(value: Option<&Value>) -> bool {
     match value {
         Some(Value::Null) => true,
@@ -117,6 +121,7 @@ fn valid_initialization(value: Option<&Value>) -> bool {
     value.is_none_or(|value| matches!(value.as_str(), Some("inherit" | "lazy" | "eager")))
 }
 
+/// 验证单个入口的节点、槽位与目标引用；编号不得跨入口引用。
 fn validate_entry_graph(graph: &Value) -> Result<(), &'static str> {
     if graph.get("version").and_then(Value::as_u64) != Some(1) {
         return Err("unsupported graph version");

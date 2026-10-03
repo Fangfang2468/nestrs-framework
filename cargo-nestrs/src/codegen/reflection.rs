@@ -7,10 +7,12 @@
 use crate::protocol::{self, Marker};
 use zyn::{TokenStream, quote::quote, syn};
 
+/// 用调用方给出的卫生上下文构造内部协议标识符，不重新解析业务名称。
 pub(crate) fn ident(name: &str, span: zyn::proc_macro2::Span) -> syn::Ident {
     syn::Ident::new(name, span)
 }
 
+/// 生成局部反射 marker 和可选的泛型蓝图 trait，供 driver 读取其类型化 MIR。
 pub(crate) fn support(generic: bool, binding_span: zyn::proc_macro2::Span) -> TokenStream {
     let module = ident(protocol::REFLECTION_MODULE, binding_span);
     let key = ident(protocol::COMPILER_KEY, binding_span);

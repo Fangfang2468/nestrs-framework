@@ -10,16 +10,21 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// 覆盖私有声明桥接工件路径的环境变量；应用无需声明宏依赖。
 pub const BRIDGE_ENV: &str = "NESTRS_MACRO_BRIDGE";
 
+/// 已经定位并计算内容身份的工具私有过程宏工件。
 #[derive(Clone, Debug)]
 pub struct Bridge {
+    /// 桥接动态库的规范路径，供 rustc、rustdoc 和编辑器共同使用。
     pub path: PathBuf,
+
     /// Content identity, rather than mtime, for Cargo's external wrapper cache.
     pub fingerprint: String,
 }
 
 impl Bridge {
+    /// 按照当前宿主动态库命名规则生成桥接文件名。
     pub fn file_name() -> String {
         format!(
             "{}nestrs_tool_bridge{}",
@@ -28,6 +33,7 @@ impl Bridge {
         )
     }
 
+    /// 从显式环境配置或 driver 同目录发现桥接，并计算缓存指纹。
     pub fn discover(driver: &Path) -> Result<Self, String> {
         Self::at(&Self::locate(driver)?)
     }
@@ -41,6 +47,7 @@ impl Bridge {
         canonical_bridge(&path)
     }
 
+    /// 确认指定路径为文件并流式计算内容指纹，不以 mtime 判断内容身份。
     pub fn at(path: &Path) -> Result<Self, String> {
         let path = canonical_bridge(path)?;
         let mut file = File::open(&path)
@@ -67,6 +74,7 @@ impl Bridge {
     }
 }
 
+/// 将桥接路径解析为真实文件；缺失或目录路径均明确拒绝。
 fn canonical_bridge(path: &Path) -> Result<PathBuf, String> {
     let path = path.canonicalize().map_err(|error| format!(
         "cannot find Nestrs declaration bridge {}: {error}; build/install the complete cargo nestrs toolchain or set {BRIDGE_ENV}",
@@ -81,6 +89,7 @@ fn canonical_bridge(path: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// 按 rustc extern 名称及其修饰符检查依赖，避免子串误匹配。
 pub fn has_extern(args: &[String], name: &str) -> bool {
     extern_values(args).any(|value| {
         // rustc supports --extern modifiers such as priv:crate=path.
@@ -89,6 +98,7 @@ pub fn has_extern(args: &[String], name: &str) -> bool {
     })
 }
 
+/// 兼容分隔和等号两种 --extern 参数形式，返回原始参数值。
 fn extern_values(args: &[String]) -> impl Iterator<Item = &str> {
     args.iter().enumerate().filter_map(|(index, argument)| {
         if argument == "--extern" {

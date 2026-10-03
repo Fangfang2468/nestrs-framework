@@ -11,6 +11,7 @@ use zyn::{
     syn::{self, Attribute, ItemStruct, Meta, Token, parse::Parse, punctuated::Punctuated},
 };
 
+/// 检测需要先交给 rustc 筛选的条件字段；普通声明直接使用原展开流程。
 pub(super) fn needs_filtering(item: &ItemStruct) -> bool {
     item.fields.iter().any(|field| {
         field
@@ -20,6 +21,7 @@ pub(super) fn needs_filtering(item: &ItemStruct) -> bool {
     })
 }
 
+/// 把原始字段类型及非 cfg 属性封存在 helper 中，生成供标准 derive 筛选的载体。
 pub(super) fn defer(
     args: TokenStream,
     item: ItemStruct,
@@ -87,12 +89,17 @@ fn defer_attribute(meta: &Meta) -> syn::Result<Meta> {
     Ok(syn::parse_quote!(__nestrs_attribute(#meta)))
 }
 
+/// 载体 helper 中保存的属性参数与空字段原声明。
 struct Declaration {
+    /// 原始 injectable 参数，恢复后仍由共享配置解析器处理。
     args: TokenStream,
+
+    /// 保留名称、泛型与属性的原声明；字段稍后取自已完成 cfg 筛选的载体。
     item: ItemStruct,
 }
 
 impl Parse for Declaration {
+    /// 从括号内参数和后续结构体声明恢复载体中的两段内容。
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let args;
         syn::parenthesized!(args in input);
@@ -103,6 +110,7 @@ impl Parse for Declaration {
     }
 }
 
+/// 消费内部载体标记，恢复经过 cfg 筛选且保留业务 span 的真实声明。
 pub(super) fn restore(input: TokenStream) -> syn::Result<(TokenStream, ItemStruct)> {
     let carrier = syn::parse2::<ItemStruct>(input)?;
     let marker = carrier

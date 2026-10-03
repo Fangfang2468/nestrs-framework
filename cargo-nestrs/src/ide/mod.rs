@@ -4,9 +4,12 @@
 //! of the application. Compiler capture is opt-in and records only build data.
 
 mod capture;
+
 #[doc(hidden)]
 pub mod constructor;
+
 mod project;
+
 mod settings;
 
 pub use capture::capture_rustc;
@@ -15,6 +18,7 @@ pub(crate) use settings::configure;
 
 use std::{fs, path::Path};
 
+/// 内容未变时不写文件；变化时以同目录临时文件替换，避免无效 IDE 重载。
 pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), String> {
     // A project-file write triggers a rust-analyzer reload. Unchanged save-time
     // checks must not restart analysis or create a check/reload feedback loop.

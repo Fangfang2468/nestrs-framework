@@ -6,103 +6,187 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+/// 前端分配的真实类型身份及其诊断展示名称。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Type {
+    /// 由 rustc 前端分配的真实类型 ID；相同类型必须共享同一编号。
     pub id: usize,
+
+    /// 只供诊断展示的类型名称，不参与类型等价判断。
     pub name: String,
 }
 
+/// 参与 provider 和路由精确匹配的服务 key。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Key {
+    /// 未显式指定的默认 key。
     Default,
+
+    /// 按完整字符串精确匹配的 key。
     Named(String),
+
+    /// 按完整整数值精确匹配的 key。
     Indexed(u128),
 }
 
+/// 图验证所需的实例所有权生命周期。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lifetime {
+    /// root 共享；其全部激活依赖不得需要 scope。
     Singleton,
+
+    /// scope 共享；只能在 scope 上下文解析。
     Scoped,
+
+    /// 每个消费槽位独立构造，可沿依赖继承 scope 要求。
     Transient,
 }
 
+/// 已经闭合的服务声明，包含构造输入及完整选择策略。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Provider {
+    /// 前端为该请求或提供类型分配的真实类型 ID。
     pub type_id: usize,
+
+    /// 必须精确匹配的服务 key。
     pub key: Key,
+
+    /// 实例所属 owner 及共享方式。
     pub lifetime: Lifetime,
+
+    /// 仅在同 key 的 trait 多候选中参与唯一选择。
     pub primary: bool,
+
     /// None 继承容器配置，Some(true) 延迟预热，Some(false) 显式提前初始化。
     /// 只决定预热根选择；全部声明与依赖仍接受完整图检查。
     pub lazy: Option<bool>,
+
+    /// 诊断使用的声明来源说明。
     pub source: String,
+
+    /// 按构造签名排列的消费槽位，重复请求仍保留独立位置。
     pub inputs: Vec<Input>,
 }
 
+/// provider 的一个消费槽位，保留原请求类型、key 和交付修饰。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Input {
+    /// 前端为该请求或提供类型分配的真实类型 ID。
     pub type_id: usize,
+
+    /// 必须精确匹配的服务 key。
     pub key: Key,
+
+    /// 该依赖在消费者构造输入中的零起始槽位。
     pub slot: usize,
+
+    /// 缺少 provider 时允许缺席，但歧义和图错误仍须报告。
     pub optional: bool,
+
+    /// 目标仍参与完整图验证，但不作为消费者构造的就绪前提。
     pub lazy: bool,
+
+    /// 用于诊断定位字段或参数的标签。
     pub label: String,
 }
 
 /// 本层的 binding 均为实际启用的 pair。自动能力目录的按需启用与幂等合并属于前端。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
+    /// 投影来源 concrete 的真实类型 ID。
     pub concrete: usize,
+
+    /// 投影目标 trait 对象的真实类型 ID。
     pub interface: usize,
+
+    /// 诊断使用的声明来源说明。
     pub source: String,
 }
 
+/// 完整候选检查后为一个消费槽位确定的目标和投影。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InputPlan {
+    /// 选中的 provider 索引；optional 缺席时为 None。
     pub target: Option<usize>,
+
     /// 选中 trait 投影在输入 binding 数组中的索引；concrete 和缺席输入为 None。
     pub binding: Option<usize>,
 }
 
+/// 冻结的类型/key 查询选择，运行时不再重新枚举候选。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Route {
+    /// 前端为该请求或提供类型分配的真实类型 ID。
     pub type_id: usize,
+
+    /// 必须精确匹配的服务 key。
     pub key: Key,
+
+    /// 该查询路由选中的 provider 索引。
     pub provider: usize,
+
+    /// trait 请求使用的投影索引；直接 concrete 查询为 None。
     pub binding: Option<usize>,
 }
 
+/// 全部声明通过检查后的不可变索引计划。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
     /// 每个 provider 的全部输入槽位；重复 target 不能合并，否则会丢失 Transient 消费。
     pub inputs: Vec<Vec<InputPlan>>,
+
+    /// 每个 provider 的激活闭包是否需要 scope。
     pub requires_scope: Vec<bool>,
+
     /// 依赖优先，稳定地选择当前可处理的最小 provider 索引。
     pub order: Vec<usize>,
+
     /// 去重后的反向边；lazy 边同样保留以供生命周期验证和关闭顺序使用。
     pub dependents: Vec<Vec<usize>>,
+
+    /// 可直接交付给运行时的类型/key 冻结路由。
     pub routes: Vec<Route>,
 }
 
+/// 图语义错误的分类，不携带源码位置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DiagnosticKind {
+    /// 输入模型违反 ID、槽位或形态约束。
     InvalidMetadata,
+
+    /// 同 concrete 类型和 key 出现重复 provider。
     DuplicateProvider,
+
+    /// 同 concrete/trait pair 出现重复显式绑定。
     DuplicateBinding,
+
+    /// 投影来源没有可用的 concrete provider。
     OrphanBinding,
+
+    /// 同类型/key 的 trait 请求无法选出唯一候选。
     AmbiguousTrait,
+
+    /// 必需输入没有匹配 provider。
     MissingDependency,
+
+    /// 完整依赖图中存在闭合环。
     Cycle,
+
+    /// Singleton 的依赖闭包包含 Scoped 服务。
     ScopeRequired,
 }
 
 /// 错误涉及的真实输入边。索引对应本次 `compile` 的输入模型，不是跨阶段身份。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DependencyEdge {
+    /// 依赖边起点的 provider 索引。
     pub consumer: usize,
+
     /// `providers[consumer].inputs` 中的位置。有效模型中等于 `Input::slot`；
     /// 非法元数据仍用数组位置保留可访问的证据，不跟随错误的槽位值。
     pub slot: usize,
+
+    /// 依赖边终点的已选 provider 索引。
     pub target: usize,
 }
 
@@ -111,38 +195,75 @@ pub struct DependencyEdge {
 /// provider/binding 索引均来自本次编译输入；属性及输入修饰直接读取原始声明。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticEvidence {
+    /// 输入模型违反 ID、槽位或形态约束。
     InvalidMetadata,
+
+    /// 同 concrete 类型和 key 出现重复 provider。
     DuplicateProvider {
+        /// 首先出现的 provider 或 binding 在原输入数组中的索引。
         first: usize,
+
+        /// 重复声明在同一输入数组中的索引。
         duplicate: usize,
     },
+
+    /// 同 concrete/trait pair 出现重复显式绑定。
     DuplicateBinding {
+        /// 首先出现的 provider 或 binding 在原输入数组中的索引。
         first: usize,
+
+        /// 重复声明在同一输入数组中的索引。
         duplicate: usize,
     },
+
+    /// 投影来源没有可用的 concrete provider。
     OrphanBinding {
+        /// 缺少 concrete provider 的 binding 索引。
         binding: usize,
     },
+
+    /// 同类型/key 的 trait 请求无法选出唯一候选。
     AmbiguousTrait {
+        /// 前端为该请求或提供类型分配的真实类型 ID。
         type_id: usize,
+
+        /// 必须精确匹配的服务 key。
         key: Key,
+
+        /// 完整候选验证后仍无法消歧的 provider 索引。
         candidates: Vec<usize>,
     },
+
+    /// 必需输入没有匹配 provider。
     MissingDependency {
+        /// 依赖边起点的 provider 索引。
         consumer: usize,
+
+        /// 该依赖在消费者构造输入中的零起始槽位。
         slot: usize,
     },
+
+    /// 完整依赖图中存在闭合环。
     Cycle {
+        /// 按实际路径顺序保存的输入边，不从说明文本恢复。
         edges: Vec<DependencyEdge>,
     },
+
+    /// Singleton 的依赖闭包包含 Scoped 服务。
     ScopeRequired {
+        /// 不允许依赖 Scoped 的起始 Singleton 索引。
         singleton: usize,
+
+        /// 路径末端导致 scope 要求的 Scoped 索引。
         scoped: usize,
+
+        /// 按实际路径顺序保存的输入边，不从说明文本恢复。
         edges: Vec<DependencyEdge>,
     },
 }
 
 impl DiagnosticEvidence {
+    /// 从结构化错误证据确定诊断种类，避免依赖消息文本。
     fn kind(&self) -> DiagnosticKind {
         match self {
             Self::InvalidMetadata => DiagnosticKind::InvalidMetadata,
@@ -157,11 +278,16 @@ impl DiagnosticEvidence {
     }
 }
 
+/// 供前端结合真实源码发出诊断的错误事实与说明。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
+    /// 由 evidence 推导的错误类别。
     pub kind: DiagnosticKind,
+
     /// 内部完整说明，供最终诊断的 cause 使用；用户正文由 evidence 与真实源码组成。
     pub message: String,
+
+    /// 保留实际输入索引与关系的结构化错误事实。
     pub evidence: DiagnosticEvidence,
 }
 
@@ -607,6 +733,7 @@ fn scope_requirements(
     needed
 }
 
+/// 把结构化证据和完整原因作为同一条诊断追加。
 fn diagnostic(output: &mut Vec<Diagnostic>, evidence: DiagnosticEvidence, message: String) {
     output.push(Diagnostic {
         kind: evidence.kind(),
@@ -615,6 +742,7 @@ fn diagnostic(output: &mut Vec<Diagnostic>, evidence: DiagnosticEvidence, messag
     });
 }
 
+/// 生成用于原因说明的 key 文本，保留默认、字符串与整数区别。
 fn key_text(key: &Key) -> String {
     match key {
         Key::Default => "[key=None]".into(),
@@ -623,17 +751,24 @@ fn key_text(key: &Key) -> String {
     }
 }
 
+/// 当前闭合模型的只读查询视图，用于一致地格式化诊断来源。
 struct Context<'a> {
+    /// 真实类型 ID 到诊断展示名称的映射。
     names: BTreeMap<usize, &'a str>,
+
+    /// 本次完整闭合 provider 输入模型。
     providers: &'a [Provider],
 }
 
 impl Context<'_> {
+    /// 按真实类型 ID 获取展示名；非法 ID 仍保留编号作为错误证据。
     fn ty(&self, id: usize) -> String {
         self.names
             .get(&id)
             .map_or_else(|| format!("<未知类型#{id}>"), |name| (*name).to_owned())
     }
+
+    /// 合并 provider 的类型、key 与声明来源，供诊断原因引用。
     fn provider(&self, id: usize) -> String {
         let provider = &self.providers[id];
         format!(
@@ -643,6 +778,8 @@ impl Context<'_> {
             provider.source
         )
     }
+
+    /// 展示具体消费槽位的原请求及 lazy 修饰，不合并重复依赖。
     fn input(&self, provider: usize, slot: usize) -> String {
         let input = &self.providers[provider].inputs[slot];
         format!(
@@ -655,6 +792,8 @@ impl Context<'_> {
             if input.lazy { " [lazy]" } else { "" }
         )
     }
+
+    /// 将未知类型 ID 记录为 metadata 错误，并保留声明来源。
     fn check_type(&self, id: usize, source: &str, output: &mut Vec<Diagnostic>) {
         if !self.names.contains_key(&id) {
             diagnostic(

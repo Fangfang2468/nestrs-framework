@@ -44,6 +44,7 @@ pub(crate) fn rewrite_value_field(field_type: Type, strategy: FieldStrategy) -> 
     }
 }
 
+/// 字符串字面量和路径表达式允许 Into 转换；其余表达式保留字段的原生类型上下文。
 fn should_use_into_conversion(expression: &Expr) -> bool {
     matches!(
         expression,

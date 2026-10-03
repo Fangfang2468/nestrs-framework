@@ -16,6 +16,9 @@ use super::{
     injection::render::EmitDependencyRequest,
 };
 
+/// 生成原关联方法、输入描述与 Class 激活 helper，等待 driver 接入唯一 provider。
+///
+/// 生成绑定统一使用 bridge 的定义处卫生；业务方法和表达式保留原 token 来源。
 pub(super) fn expand(
     args: zyn::TokenStream,
     input: zyn::TokenStream,
@@ -97,11 +100,13 @@ pub(super) fn expand(
     let construct = match analysis.result_kind {
         ConstructorResultKind::Direct => call,
         ConstructorResultKind::Result => {
-            quote!(#call.map_err(|#error| ::nestrs_core::activation::ConstructionError::ConstructorFailed {
-            provider: ::core::any::type_name::<Self>(),
-            provider_source: ::nestrs_core::service::ServiceSource::new(file!(), line!(), column!()),
-            detail: ::std::format!("{:?}", #error),
-        })?)
+            quote!(
+                #call.map_err(|#error| ::nestrs_core::activation::ConstructionError::ConstructorFailed {
+                    provider: ::core::any::type_name::<Self>(),
+                    provider_source: ::nestrs_core::service::ServiceSource::new(file!(), line!(), column!()),
+                    detail: ::std::format!("{:?}", #error),
+                })?
+            )
         }
     };
     let acquire_inputs = if analysis.parameters.is_empty() {

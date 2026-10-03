@@ -29,10 +29,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::registration_codegen::definition_path;
 
 /// 有限编译计划的防护界限。独立的简单类型总数允许一万层以上的普通 DI 图；
-/// 对不断增长的 A<Vec<T>> 类递归，先限制单个类型树大小，再归一化/trait 求解，
+/// 对不断增长的 `A<Vec<T>>` 类递归，先限制单个类型树大小，再归一化/trait 求解，
 /// 避免等到分配无限类型或耗尽编译线程栈时才失败。
 pub const MAX_QUERY_TYPES: usize = 100_000;
 
+/// 按类型树节点数保护有限展开；超过界限时发出 DI008 并终止当前编译。
 pub(crate) fn validate_type_complexity_at(
     tcx: TyCtxt<'_>,
     value: Ty<'_>,
@@ -55,6 +56,7 @@ pub(crate) fn validate_type_complexity_at(
     Ok(())
 }
 
+/// 输出带当前来源和闭合起点的预算诊断，不把普通依赖链深度误报为泛型增长。
 pub(crate) fn expansion_error(
     tcx: TyCtxt<'_>,
     span: Span,
@@ -83,26 +85,42 @@ pub(crate) fn expansion_error(
     crate::diagnostics::emit(tcx, vec![diagnostic]);
 }
 
+/// 汇集不能直接附着到普通函数的查询摘要的私有入口名称。
 pub const SUMMARY_NAME: &str = crate::protocol::Marker::QuerySummary.name();
 
+/// 携带服务请求类型的已认证 marker 名称。
 const ROOT_MARKER: &str = crate::protocol::Marker::QueryRoot.name();
+
+/// 携带待闭合函数项类型的已认证 marker 名称。
 const CALL_MARKER: &str = crate::protocol::Marker::QueryCall.name();
+
+/// 携带真实类型擦除两端的已认证 marker 名称。
 const UNSIZE_MARKER: &str = crate::protocol::Marker::QueryUnsize.name();
 
+/// 一条查询摘要及其原始调用位置，供跨函数展开时保持诊断来源。
 #[derive(Clone, Copy)]
 struct Record<'tcx> {
+    /// 服务、调用、常量或类型擦除的真实语义身份。
     value: QueryValue<'tcx>,
+
+    /// 引入该记录的 HIR/MIR 位置。
     span: Span,
 }
 
 /// 粗筛展开链使用 arena 索引，避免深链的递归遍历和析构。不同闭合调用的初始
 /// 大类型互不影响；只有同一条发现链反复扩大同一定义的实参才施加增长防护。
 struct DiscoveryStep<'tcx> {
+    /// 父发现步骤的 arena 索引；零表示起点。
     parent: usize,
+
+    /// 已解析实例的种类，避免把不同 impl 误当成同一递归。
     definition: Option<ty::InstanceKind<'tcx>>,
+
+    /// 此步骤的泛型类型树大小，用于沿父链检测增长。
     size: usize,
 }
 
+/// 仅在同一真实实例种类沿发现父链扩大实参时拒绝超限载体。
 fn validate_discovery_growth<'tcx>(
     tcx: TyCtxt<'tcx>,
     discovery: &[DiscoveryStep<'tcx>],
@@ -138,13 +156,21 @@ fn validate_discovery_growth<'tcx>(
 /// 不把常量伪装成 FnDef，也不求值用户常量来寻找函数地址。
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum QueryValue<'tcx> {
+    /// 已经确认的服务查询类型，接受 DI 类型复杂度检查。
     Service(Ty<'tcx>),
+
+    /// 待闭合并解析实际实例的函数项或闭包类型。
     Callable(Ty<'tcx>),
+
+    /// 真实常量定义与其泛型实参，不读取已求值函数地址。
     Constant(DefId, ty::GenericArgsRef<'tcx>),
+
+    /// 真实 coercion 的来源和目标类型，为虚调用提供有限候选。
     Unsize(Ty<'tcx>, Ty<'tcx>),
 }
 
 impl<'tcx> QueryValue<'tcx> {
+    /// 返回可继续读取摘要的真实定义，普通服务或类型擦除本身没有调用定义。
     fn definition(self) -> Option<DefId> {
         match self {
             Self::Service(_) | Self::Unsize(..) => None,
@@ -159,6 +185,7 @@ impl<'tcx> QueryValue<'tcx> {
         }
     }
 
+    /// 检查类型或实参是否不再包含开放参数、推断变量和逃逸绑定变量。
     fn closed(self) -> bool {
         match self {
             Self::Service(value) | Self::Callable(value) => closed(value),
@@ -169,6 +196,7 @@ impl<'tcx> QueryValue<'tcx> {
         }
     }
 
+    /// 统计记录携带的类型树节点数，供发现链增长防护使用。
     fn complexity(self) -> usize {
         match self {
             Self::Service(value) | Self::Callable(value) => value.walk().count(),
@@ -177,6 +205,7 @@ impl<'tcx> QueryValue<'tcx> {
         }
     }
 
+    /// 代入当前实例实参而暂不归一化，保留各类记录的真实定义身份。
     fn instantiate(self, tcx: TyCtxt<'tcx>, args: ty::GenericArgsRef<'tcx>) -> Self {
         match self {
             Self::Unsize(source, target) => Self::Unsize(
@@ -206,6 +235,7 @@ impl<'tcx> QueryValue<'tcx> {
         }
     }
 
+    /// 归一化闭合记录；复杂度预算施加于实际服务，不把粗筛调用载体当作 DI 输入。
     fn normalize(self, tcx: TyCtxt<'tcx>, span: Span, origin: Span) -> Result<Self, String> {
         match self {
             Self::Unsize(source, target) => {
@@ -262,11 +292,17 @@ impl<'tcx> QueryValue<'tcx> {
 /// span 仅用于诊断；不能用类型的显示字符串去去重或重新推导类型。
 #[derive(Clone, Copy)]
 pub struct QueryRoot<'tcx> {
+    /// 归一化并闭合后的实际服务类型。
     pub service: Ty<'tcx>,
+
+    /// 本地闭合起点的所有者，用于后续模块可见性与插入分析。
     pub owner: LocalDefId,
+
+    /// 引入这条服务需求的摘要位置，供后续诊断使用。
     pub span: Span,
 }
 
+/// 以 core 门面所有者和真实方法定义识别四个查询入口。
 fn query_method(tcx: TyCtxt<'_>, method: DefId) -> bool {
     if tcx.crate_name(method.krate).as_str() != "nestrs_core"
         || !tcx.opt_item_name(method).is_some_and(|name| {
@@ -297,6 +333,7 @@ fn query_method(tcx: TyCtxt<'_>, method: DefId) -> bool {
     )
 }
 
+/// 排除标准库和 runtime 实现，core 自身的编译契约测试保留业务语义。
 fn business_definition(tcx: TyCtxt<'_>, id: DefId) -> bool {
     match tcx.crate_name(id.krate).as_str() {
         "core" | "alloc" | "std" => false,
@@ -307,16 +344,25 @@ fn business_definition(tcx: TyCtxt<'_>, id: DefId) -> bool {
     }
 }
 
+/// 识别可能通过泛型参数继续转发业务调用的标准库定义。
 fn standard_definition(tcx: TyCtxt<'_>, id: DefId) -> bool {
     matches!(tcx.crate_name(id.krate).as_str(), "core" | "alloc" | "std")
 }
 
+/// 读取单个 body 的类型检查结果，记录优化前的查询与调用边。
 struct Summary<'a, 'tcx> {
+    /// 当前会话的类型、trait 和定义查询入口。
     tcx: TyCtxt<'tcx>,
+
+    /// 该 body 的真实类型检查结果，包含隐式调整。
     typeck: &'tcx ty::TypeckResults<'tcx>,
+
+    /// 保留原始源码位置的摘要输出。
     records: &'a mut Vec<Record<'tcx>>,
 }
+
 impl<'tcx> Summary<'_, 'tcx> {
+    /// 记录真实查询类型或可继续闭合的函数项；trait 调用留待 Instance 选择实际实现。
     fn function(&mut self, id: DefId, args: ty::GenericArgsRef<'tcx>, span: Span) {
         if query_method(self.tcx, id) {
             if let Some(service) = args.types().last() {
@@ -344,7 +390,9 @@ impl<'tcx> Summary<'_, 'tcx> {
         }
     }
 }
+
 impl<'tcx> Visitor<'tcx> for Summary<'_, 'tcx> {
+    /// 保存类型检查确认的函数、常量、隐式调整和重载方法，不依赖优化后的执行路径。
     fn visit_expr(&mut self, expression: &'tcx rustc_hir::Expr<'tcx>) {
         // 自动解引用不占用 type_dependent_def_id。沿原生 adjustment 顺序恢复
         // 每一步的真实接收类型，使用与 THIR 相同的 Deref/DerefMut 方法身份与实参。
@@ -436,6 +484,7 @@ impl<'tcx> Visitor<'tcx> for Summary<'_, 'tcx> {
     }
 }
 
+/// 从本地业务 body 的类型检查结果取得优化前摘要，非业务定义返回空集。
 fn local_summary<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId) -> Vec<Record<'tcx>> {
     if !business_definition(tcx, owner.to_def_id()) || !tcx.has_typeck_results(owner) {
         return Vec::new();
@@ -554,6 +603,7 @@ pub fn preserve_drop_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mut mir::Body<'tcx>
     preserve_records(tcx, body, drop_summary(tcx, body));
 }
 
+/// 把查询、调用和 unsize 摘要追加到 MIR 入口；常量继续使用原生 metadata。
 fn preserve_records<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &mut mir::Body<'tcx>,
@@ -635,6 +685,7 @@ fn preserve_records<'tcx>(
     }
 }
 
+/// 生成零参数摘要 marker 调用块，保留调用来源、后继和 unwind 策略。
 fn call_block<'tcx>(
     tcx: TyCtxt<'tcx>,
     function: DefId,
@@ -666,6 +717,7 @@ fn call_block<'tcx>(
     )
 }
 
+/// 从上游 MIR 解码已认证摘要标记，并保留原生常量引用。
 fn external_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
     // 常量初始化器随 CTFE MIR 发布；is_mir_available/optimized_mir 只覆盖函数侧。
     // 读取 MIR 不等于求值常量，其函数指针、链式常量和开放 trait 实参仍保留身份。
@@ -714,6 +766,7 @@ fn external_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
 
 // rustc 在 promotion 和优化之前记录此列表；if false 中被消除的常量引用也在。
 // 不读取已求值函数地址，不遍历分配，也不把常量签名误当成函数项。
+/// 读取优化前 required_consts 中未求值的业务常量身份与实参。
 fn constant_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> Vec<Record<'tcx>> {
     let mut records = Vec::new();
     for constant in body.required_consts.iter().flatten() {
@@ -734,6 +787,7 @@ fn constant_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> Vec<Reco
     records
 }
 
+/// 使用 DropGlue 语言项表达真实析构调用，而非猜测容器名称。
 fn drop_callable<'tcx>(tcx: TyCtxt<'tcx>, value: Ty<'tcx>, span: Span) -> Record<'tcx> {
     let method = tcx.require_lang_item(LangItem::DropGlue, span);
     Record {
@@ -746,6 +800,7 @@ fn drop_callable<'tcx>(tcx: TyCtxt<'tcx>, value: Ty<'tcx>, span: Span) -> Record
     }
 }
 
+/// 识别真实 DropGlue 函数项并返回待析构类型。
 fn drop_type<'tcx>(tcx: TyCtxt<'tcx>, value: QueryValue<'tcx>) -> Option<Ty<'tcx>> {
     if let QueryValue::Callable(value) = value
         && let ty::FnDef(id, args) = *value.kind()
@@ -757,6 +812,7 @@ fn drop_type<'tcx>(tcx: TyCtxt<'tcx>, value: QueryValue<'tcx>) -> Option<Ty<'tcx
     }
 }
 
+/// 从原生 Drop terminator 记录析构类型，沿用 rustc 的 move 与析构规则。
 fn drop_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> Vec<Record<'tcx>> {
     body.basic_blocks
         .iter()
@@ -803,13 +859,22 @@ fn unsize_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> Vec<Record
         .collect()
 }
 
+/// 收集真实 MIR 的函数项、调用与常量引用，用于按需展开转发或编译器生成实例。
 fn mir_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> Vec<Record<'tcx>> {
+    /// 读取当前 MIR 的函数项操作数，保留实例所属 body 和原始位置。
     struct Calls<'a, 'tcx> {
+        /// 当前编译会话的类型查询入口。
         tcx: TyCtxt<'tcx>,
+
+        /// 提供局部变量类型与来源位置的真实 MIR。
         body: &'a mir::Body<'tcx>,
+
+        /// 析构、常量、擦除与函数项形成的调用摘要。
         records: Vec<Record<'tcx>>,
     }
+
     impl<'tcx> mir::visit::Visitor<'tcx> for Calls<'_, 'tcx> {
+        /// 记录操作数中的真实函数项类型，保持其所属 MIR 的调用位置。
         fn visit_operand(&mut self, operand: &Operand<'tcx>, location: mir::Location) {
             let value = operand.ty(&self.body.local_decls, self.tcx);
             if matches!(
@@ -882,15 +947,20 @@ fn native_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
 }
 
 /// 只使用已有查询摘要的真实身份作为转发入口：方法所属的名义类型，以及已知
-/// 查询函数/闭包。例如 collect<Query<T>> 的 Query 来自业务 next 的 impl Self，
+/// 查询函数/闭包。例如 `collect<Query<T>>` 的 Query 来自业务 next 的 impl Self，
 /// 不靠 collect/next 拼写，也不枚举其他 impl 或猜测泛型实参。这个筛选只决定是否
 /// 读取调用边；实际调用仍必须由 Instance 选择，不能据此直接注册某个方法的查询。
 #[derive(Default)]
 struct QueryCarriers {
+    /// 与已知查询实现相关的名义类型和 trait 定义。
     types: HashSet<DefId>,
+
+    /// 已知能够贡献查询摘要的函数或闭包定义。
     callables: HashSet<DefId>,
 }
+
 impl QueryCarriers {
+    /// 登记查询函数及其名义 Self/trait 身份，返回新发现的载体定义。
     fn add(&mut self, tcx: TyCtxt<'_>, method: DefId) -> Vec<DefId> {
         self.callables.insert(method);
         let mut added = Vec::new();
@@ -925,6 +995,7 @@ impl QueryCarriers {
         added
     }
 
+    /// 只判断记录是否携带已知查询相关身份；实际实现仍需 Instance 求解。
     fn contains<'tcx>(
         &self,
         tcx: TyCtxt<'tcx>,
@@ -940,12 +1011,18 @@ impl QueryCarriers {
 
 // 有限的名义字段/关联类型图，按定义缓存相邻类型，避免每个调用重复扫描 impl。
 // 不物化不断变化的递归泛型实参；此图只用于相关性粗筛。
+/// 缓存有限定义关系以筛选潜在查询载体，不物化递归泛型实参。
 #[derive(Default)]
 struct NominalIdentities<'tcx> {
+    /// 每个名义定义的字段或关联类型邻接关系。
     edges: RefCell<HashMap<DefId, Vec<Ty<'tcx>>>>,
+
+    /// 函数约束可达的 trait 定义，含父接口与关联类型约束。
     callable_bounds: RefCell<HashMap<DefId, Vec<DefId>>>,
 }
+
 impl<'tcx> NominalIdentities<'tcx> {
+    /// 缓存函数、父级和关联类型约束形成的有限 trait 定义闭包。
     fn callable_bounds(&self, tcx: TyCtxt<'tcx>, id: DefId) -> Vec<DefId> {
         self.callable_bounds
             .borrow_mut()
@@ -994,6 +1071,7 @@ impl<'tcx> NominalIdentities<'tcx> {
             .clone()
     }
 
+    /// 沿字段、签名和约束收集名义身份，不枚举无限泛型组合或具体 impl。
     fn identities(&self, tcx: TyCtxt<'tcx>, value: QueryValue<'tcx>) -> HashSet<DefId> {
         let types = match value {
             QueryValue::Service(value) | QueryValue::Callable(value) => vec![value],
@@ -1123,6 +1201,7 @@ impl<'tcx> NominalIdentities<'tcx> {
     }
 }
 
+/// 检查类型或实参是否不再包含开放参数、推断变量和逃逸绑定变量。
 fn closed(value: Ty<'_>) -> bool {
     !value.has_non_region_param() && !value.has_infer() && !value.has_escaping_bound_vars()
 }

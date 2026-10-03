@@ -26,17 +26,17 @@ use zyn::syn::{
 pub(crate) enum FactoryInvocation {
     /// 原始函数直接产生服务或 `Result<服务, 错误>`。
     Sync,
+
     /// 原始函数是 `async fn`，或直接返回显式 `Future<Output = ...>`。
     Async,
 }
 
-/// factory 调用结果是否需要把用户错误归一化为 [`ConstructionError`][1]。
-///
-/// [1]: ::nestrs_core::activation::ConstructionError
+/// factory 调用结果是否需要把用户错误归一化为 core 内部的 `ConstructionError`。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FactoryResultKind {
     /// 直接成功输出。
     Direct,
+
     /// `Result<成功输出, E>`；`E` 不跨过 factory adapter ABI。
     Result,
 }
@@ -46,8 +46,10 @@ pub(crate) enum FactoryResultKind {
 pub(crate) struct FactoryReturn {
     /// 要注册为 provider token 的实际成功 concrete 类型。
     pub(crate) success_type: Type,
+
     /// adapter 是同步还是异步调用器。
     pub(crate) invocation: FactoryInvocation,
+
     /// 是否需要把原始 `Err(E)` 映射到 `ConstructionError::FactoryFailed`。
     pub(crate) result_kind: FactoryResultKind,
 }
@@ -58,14 +60,19 @@ pub(crate) struct FactoryParameterSpec {
     /// 参数在原函数签名中的零基位置。
     /// 在 `FactoryInputs` 中的连续输入槽位。
     pub(crate) input_slot: usize,
+
     /// 参数的简单标识符，用于 adapter 调用、label 和诊断。
     pub(crate) ident: syn::Ident,
+
     /// 已剥离最外层 `Option` 的服务请求类型。
     pub(crate) service_type: Type,
+
     /// 参数请求的静态 key；`None` 即默认 key。
     pub(crate) key: Option<ServiceKeySpec>,
+
     /// 原参数是否为 `Option<T>`，即缺失时可以交付 `None`。
     pub(crate) optional: bool,
+
     /// 是否交付按值的延迟句柄；目标仍参与图校验，但不阻塞当前 factory 启动。
     pub(crate) lazy: bool,
 }
@@ -96,8 +103,13 @@ impl FactoryParameterSpec {
 /// 所有 provider metadata 与 adapter 取参继续读取 `parameters`，避免二次解析。
 #[derive(Clone, Debug)]
 pub(crate) struct FactoryAnalysis {
+    /// helper 已消费且参数已按输入所有权规则改写的业务函数。
     pub(crate) item: ItemFn,
+
+    /// 按签名顺序保存的全部依赖输入事实。
     pub(crate) parameters: Vec<FactoryParameterSpec>,
+
+    /// 成功 concrete 类型、调用方式及错误转换策略。
     pub(crate) output: FactoryReturn,
 }
 
@@ -232,6 +244,7 @@ fn take_parameter_markers(
     Ok((key, lazy))
 }
 
+/// 普通参数借用真实 frame，lazy 参数拥有句柄；optional 包装保持在最外层。
 fn injected_parameter_type(
     service_type: &Type,
     optional: bool,
@@ -286,6 +299,7 @@ fn analyze_factory_return(item: &ItemFn) -> syn::Result<FactoryReturn> {
     analyze_success_type(return_type, FactoryInvocation::Sync)
 }
 
+/// 从返回类型提取可注册的成功类型，同时确定是否需要转换 Result 错误。
 fn analyze_success_type(
     candidate: &Type,
     invocation: FactoryInvocation,
@@ -337,7 +351,7 @@ fn reject_qualified_nonstandard_result_path(ty: &Type) -> syn::Result<()> {
 }
 
 /// `impl Trait` 和 `dyn Trait` 不能成为 factory provider 的 concrete token。
-/// trait 导出必须由返回 concrete 服务的 factory 再配合 `#[bind]` 表达。
+/// trait 请求由返回 concrete 服务的 factory 配合普通 impl 的自动绑定满足。
 fn validate_factory_success_type(ty: &Type) -> syn::Result<()> {
     match unparenthesized_type(ty) {
         Type::ImplTrait(_) => Err(syn::Error::new_spanned(
@@ -385,6 +399,7 @@ fn explicit_future_output(ty: &Type) -> Option<&Type> {
     }
 }
 
+/// 只在可识别的标准 Future 约束中读取 Output 关联类型。
 fn future_output_in_bound(bound: &syn::TypeParamBound) -> Option<&Type> {
     let syn::TypeParamBound::Trait(trait_bound) = bound else {
         return None;
@@ -405,6 +420,7 @@ fn future_output_in_bound(bound: &syn::TypeParamBound) -> Option<&Type> {
     })
 }
 
+/// 接受裸名称与完整 std/core 路径，不将任意同名限定路径当作标准类型。
 fn is_standard_library_type_path(path: &syn::Path, module: &str, terminal: &str) -> bool {
     let mut segments = path.segments.iter();
     let Some(first) = segments.next() else {

@@ -5,20 +5,44 @@ use super::*;
 use crate::diagnostics::{Diagnostic, source_span};
 use model::{DependencyEdge, DiagnosticEvidence as Evidence};
 
+/// 将元数据槽位映射回业务声明的诊断来源集合。
 pub(super) struct Origin {
+    /// 声明主位置，也是更细位置缺失时的回退值。
     pub declaration: Span,
+
+    /// 完整服务类型的源码范围。
     pub service: Span,
+
+    /// 声明名称，只用于诊断展示。
     pub name: String,
+
+    /// 显式构造方法名称；自动字段构造时可为空。
     pub constructor: Option<String>,
+
+    /// 输入槽位到请求类型源码范围的映射。
     pub inputs: HashMap<usize, Span>,
+
+    /// 显式输入 key 的位置。
     pub input_keys: HashMap<usize, Span>,
+
+    /// 尚待合并的输入类型末端 token 位置。
     input_ends: HashMap<usize, Span>,
+
+    /// 尚待合并的服务类型末端 token 位置。
     service_end: Option<Span>,
+
+    /// 生命周期配置的位置。
     pub lifetime: Option<Span>,
+
+    /// primary 配置的位置。
     pub primary: Option<Span>,
+
+    /// provider key 配置的位置。
     pub key: Option<Span>,
 }
+
 impl Origin {
+    /// 以声明位置初始化来源集合，细粒度 marker 后续逐项覆盖。
     pub fn new(fallback: Span) -> Self {
         Self {
             declaration: fallback,
@@ -34,6 +58,8 @@ impl Origin {
             key: None,
         }
     }
+
+    /// 只合并同一文件与卫生上下文中兼容的类型首尾范围。
     pub fn finish(&mut self, tcx: TyCtxt<'_>) {
         // proc_macro 的 join 不一定跨 token 可用；两端来自同一原始类型，
         // 但宏实参可能来自不同文件/上下文，因此只在原始区间兼容时合并。
@@ -62,9 +88,13 @@ impl Origin {
             self.service = join(self.service, end);
         }
     }
+
+    /// 取得输入类型位置，缺失细粒度信息时回退到声明位置。
     pub fn input(&self, slot: usize) -> Span {
         self.inputs.get(&slot).copied().unwrap_or(self.declaration)
     }
+
+    /// 解码一个来源 marker，按槽位保留配置或类型端点；未知协议种类返回错误。
     pub fn record(
         &mut self,
         kind: u128,
@@ -95,15 +125,28 @@ impl Origin {
     }
 }
 
+/// 一次图错误渲染共享的类型名称、声明与查询来源。
 struct Context<'a, 'tcx> {
+    /// 用于解析源码位置和类型名称的当前会话。
     tcx: TyCtxt<'tcx>,
+
+    /// 诊断证据中的类型索引目录。
     types: &'a [Ty<'tcx>],
+
+    /// 必要时消除短名称冲突后的展示名称。
     names: Vec<String>,
+
+    /// 裁剪前的 provider 目录。
     providers: &'a [Provider<'tcx>],
+
+    /// 裁剪前的绑定目录。
     bindings: &'a [Binding<'tcx>],
+
+    /// 查询根类型及引入该需求的位置。
     requests: &'a HashMap<Ty<'tcx>, Vec<Span>>,
 }
 
+/// 将纯图错误证据映射回业务来源，经统一 rustc 诊断出口终止当前编译。
 pub(super) fn report<'tcx>(
     tcx: TyCtxt<'tcx>,
     types: &[Ty<'tcx>],
@@ -145,6 +188,7 @@ pub(super) fn report<'tcx>(
     )
 }
 
+/// 生成诊断中的 key 标签，区分默认、字符串与整数身份。
 fn key_description(key: &model::Key) -> String {
     match key {
         model::Key::Default => "默认 key".into(),
@@ -154,9 +198,12 @@ fn key_description(key: &model::Key) -> String {
 }
 
 impl<'tcx> Context<'_, 'tcx> {
+    /// 根据 provider 的类型索引取得已消除冲突的展示名称。
     fn service(&self, provider: usize) -> &str {
         &self.names[self.providers[provider].data.type_id]
     }
+
+    /// 优先展示工厂声明名称，其余 provider 展示服务类型名称。
     fn declaration(&self, provider: usize) -> String {
         let item = &self.providers[provider];
         if item.kind.contains("factory") && !item.origin.name.is_empty() {
@@ -165,6 +212,8 @@ impl<'tcx> Context<'_, 'tcx> {
             format!("服务 `{}`", self.service(provider))
         }
     }
+
+    /// 按自动字段、显式构造或工厂形态组合输入的业务标签。
     fn input_name(&self, provider: usize, slot: usize) -> String {
         let item = &self.providers[provider];
         let label = &item.data.inputs[slot].label;
@@ -180,6 +229,7 @@ impl<'tcx> Context<'_, 'tcx> {
         }
     }
 
+    /// 定位所有请求同一 type/key 的消费者输入，供缺失或歧义诊断列出使用点。
     fn uses(&self, type_id: usize, key: &model::Key) -> Vec<(usize, usize)> {
         self.providers
             .iter()
@@ -195,6 +245,8 @@ impl<'tcx> Context<'_, 'tcx> {
             })
             .collect()
     }
+
+    /// 取得对应查询根的首个位置，没有直接查询时返回 dummy span。
     fn root(&self, type_id: usize) -> Span {
         self.requests
             .get(&self.types[type_id])
@@ -202,6 +254,8 @@ impl<'tcx> Context<'_, 'tcx> {
             .copied()
             .unwrap_or(rustc_span::DUMMY_SP)
     }
+
+    /// 把消费者和输入请求信息补入诊断，帮助定位需求从何而来。
     fn usage_notes(&self, diagnostic: &mut Diagnostic, provider: usize, slot: usize) {
         let p = &self.providers[provider];
         let input = &p.data.inputs[slot];
@@ -237,6 +291,8 @@ impl<'tcx> Context<'_, 'tcx> {
             }
         }
     }
+
+    /// 把依赖证据链渲染为可审阅文本，不重新选择图边。
     fn edges(&self, edges: &[DependencyEdge]) -> String {
         let mut rows = Vec::new();
         for (index, edge) in edges.iter().enumerate() {
@@ -267,6 +323,8 @@ impl<'tcx> Context<'_, 'tcx> {
         }
         rows.join("\n")
     }
+
+    /// 为证据中的依赖边追加用户输入位置标签。
     fn edge_labels(&self, diagnostic: &mut Diagnostic, edges: &[DependencyEdge]) {
         for edge in edges.iter().take(6) {
             diagnostic.labels.push((
@@ -279,6 +337,8 @@ impl<'tcx> Context<'_, 'tcx> {
             ));
         }
     }
+
+    /// 按图错误种类构造代码、主位置、关联标签及完整 cause。
     fn render(&self, issue: &model::Diagnostic) -> Diagnostic {
         let mut result = match &issue.evidence {
             Evidence::MissingDependency { consumer, slot } => {

@@ -29,8 +29,13 @@ const DEFERRED_FACTORY_PRIMARY_ATTRIBUTE: &str = "__nestrs_factory_primary";
 /// 类型，让属性顺序协调与未来可能的 `primary` 配置扩展保持在同一处。
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PrimaryConfig {
+    /// 该声明是否显式选择为同 key trait 候选中的 primary。
     primary: bool,
+
+    /// 已消费属性的诊断来源，缺省时没有策略位置。
     source_span: Option<zyn::proc_macro2::Span>,
+
+    /// 被 provider 提前消费的原宏路径，用匿名导入保留名称解析与使用状态。
     consumed_attribute_path: Option<syn::Path>,
 }
 
@@ -56,10 +61,12 @@ impl PrimaryConfig {
         }
     }
 
+    /// 返回显式策略来源，供 provider 诊断 marker 保存。
     pub(crate) fn source_span(&self) -> Option<zyn::proc_macro2::Span> {
         self.source_span
     }
 
+    /// 返回最终布尔策略，不依赖 primary 与 provider 的属性顺序。
     pub(crate) fn is_primary(&self) -> bool {
         self.primary
     }
@@ -74,6 +81,7 @@ impl PrimaryConfig {
         Some(syn::parse_quote!(use #path as _;))
     }
 
+    /// 构造当前 primary 宏调用的启用配置。
     fn enabled() -> Self {
         Self {
             primary: true,
@@ -82,6 +90,7 @@ impl PrimaryConfig {
         }
     }
 
+    /// 记录 provider 提前消费的原属性路径与真实位置。
     fn consumed(path: syn::Path) -> Self {
         Self {
             primary: true,
@@ -165,6 +174,7 @@ pub(crate) fn take_primary_for_factory(
     )
 }
 
+/// 合并原属性与私有交接 marker，拒绝重复并保留所有无关属性。
 fn take_primary_for_provider(
     attributes: &mut Vec<Attribute>,
     deferred_attribute: &str,
@@ -198,12 +208,14 @@ fn take_primary_for_provider(
     Ok(primary.unwrap_or_default())
 }
 
+/// 按属性路径末段检测尚未展开的协作宏，支持保留末段名称的模块别名。
 pub(crate) fn has_attribute_named(attributes: &[Attribute], name: &str) -> bool {
     attributes
         .iter()
         .any(|attribute| attribute_is_named(attribute, name))
 }
 
+/// 比较路径末段；此处只协调语法顺序，不解析任意宏导入别名。
 fn attribute_is_named(attribute: &Attribute, name: &str) -> bool {
     attribute
         .path()
@@ -212,6 +224,7 @@ fn attribute_is_named(attribute: &Attribute, name: &str) -> bool {
         .is_some_and(|segment| segment.ident == name)
 }
 
+/// 为不支持的 primary 参数生成统一诊断。
 fn primary_arguments_error(span: zyn::proc_macro2::Span) -> syn::Error {
     syn::Error::new(span, "`#[primary]` 不接受参数")
 }

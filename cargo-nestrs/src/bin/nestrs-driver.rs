@@ -22,30 +22,43 @@ mod protocol;
 
 #[path = "../compiler/arguments.rs"]
 mod arguments;
+
 #[path = "../compiler/autobind_codegen.rs"]
 mod autobind_codegen;
+
 #[path = "../compiler/autobind_semantic.rs"]
 mod autobind_semantic;
+
 #[path = "../compiler/constructor.rs"]
 mod constructor;
+
 #[path = "../compiler/di_plan/mod.rs"]
 mod di_plan;
+
 #[path = "../compiler/diagnostics.rs"]
 mod diagnostics;
+
 #[path = "../compiler/documentation.rs"]
 mod documentation;
+
 #[path = "../compiler/graph_entry.rs"]
 mod graph_entry;
+
 #[path = "../compiler/internal_access.rs"]
 mod internal_access;
+
 #[path = "../compiler/query_roots.rs"]
 mod query_roots;
+
 #[path = "../compiler/reflection.rs"]
 mod reflection;
+
 #[path = "../compiler/registration_codegen.rs"]
 mod registration_codegen;
+
 #[path = "../compiler/registration_reachability.rs"]
 mod registration_reachability;
+
 #[path = "../compiler/type_source.rs"]
 mod type_source;
 
@@ -67,15 +80,19 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+/// 第一轮真实读取的规范源码快照，两轮编译共享并校验其内容。
 type Sources = Arc<Mutex<BTreeMap<PathBuf, String>>>;
 
+/// 记录第一轮首次读取内容的文件加载器，重复读取时拒绝源码变化。
 struct SnapshotLoader(Sources);
 
 impl FileLoader for SnapshotLoader {
+    /// 按文档来源映射查询真实文件是否存在。
     fn file_exists(&self, path: &Path) -> bool {
         RealFileLoader.file_exists(&documentation::remap_source_path(path))
     }
 
+    /// 读取并固定首个源码快照，后续读取发现变化时拒绝继续。
     fn read_file(&self, path: &Path) -> io::Result<String> {
         let path = documentation::remap_source_path(path);
         let path = path.as_path();
@@ -92,21 +109,28 @@ impl FileLoader for SnapshotLoader {
         Ok(contents)
     }
 
+    /// 通过文档来源映射读取二进制 include 输入。
     fn read_binary_file(&self, path: &Path) -> io::Result<Arc<[u8]>> {
         RealFileLoader.read_binary_file(&documentation::remap_source_path(path))
     }
 
+    /// 沿用标准文件加载器的当前目录语义。
     fn current_directory(&self) -> io::Result<PathBuf> {
         RealFileLoader.current_directory()
     }
 }
 
+/// 第一轮语义发现状态，只收集待生成关系，不完成最终代码输出。
 struct Discover {
+    /// 首轮语义分析结果；未进入分析阶段时仍为 None。
     analysis: Option<Result<Analysis, String>>,
+
+    /// 首轮文件加载器记录的不可替换来源快照。
     sources: Sources,
 }
 
 impl Callbacks for Discover {
+    /// 启用发现阶段的查询扩展、IDE 捕获和源码快照，并延后最终 lint。
     fn config(&mut self, config: &mut interface::Config) {
         di_plan::enable(false);
         constructor::capture_ide(true);
@@ -120,6 +144,7 @@ impl Callbacks for Discover {
         config.file_loader = Some(Box::new(SnapshotLoader(self.sources.clone())));
     }
 
+    /// 在标准展开前准备工具反射及计划占位声明。
     fn after_crate_root_parsing(
         &mut self,
         compiler: &interface::Compiler,
@@ -130,6 +155,7 @@ impl Callbacks for Discover {
         Compilation::Continue
     }
 
+    /// 认证私有访问与构造关系，完成自动绑定发现后停止首轮编译。
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &interface::Compiler,
@@ -144,14 +170,23 @@ impl Callbacks for Discover {
     }
 }
 
+/// 第二轮覆盖源码编译状态，要求语义输入与首轮预期一致后才继续输出。
 struct Generate {
+    /// 本轮尚未交给 rustc 的虚拟源码覆盖层。
     loader: Option<OverlayFileLoader>,
+
+    /// 首轮已读取的全部原始源码，用于第二轮输入一致性校验。
     snapshots: BTreeMap<PathBuf, String>,
+
+    /// 预期 provider、request、显式/自动 binding 与 blueprint 数量。
     expected: (usize, usize, usize, usize, usize),
+
+    /// 第二轮语义和计划验证结果，未进入对应阶段时为 None。
     validation: Option<Result<(), String>>,
 }
 
 impl Callbacks for Generate {
+    /// 启用最终计划生成并把覆盖层包装为受首轮快照约束的加载器。
     fn config(&mut self, config: &mut interface::Config) {
         di_plan::enable(true);
         constructor::capture_ide(false);
@@ -167,6 +202,7 @@ impl Callbacks for Generate {
         });
     }
 
+    /// 为最终编译准备同一反射和执行计划声明。
     fn after_crate_root_parsing(
         &mut self,
         compiler: &interface::Compiler,
@@ -177,6 +213,7 @@ impl Callbacks for Generate {
         Compilation::Continue
     }
 
+    /// 核对语义数量与闭合结果，再完成全图验证及文档捕获。
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &interface::Compiler,
@@ -187,8 +224,18 @@ impl Callbacks for Generate {
         }
         registration_codegen::validate(tcx);
         self.validation = Some(autobind_semantic::analyze(tcx).and_then(|analysis| {
-            let observed = (analysis.providers, analysis.requests, analysis.explicit_bindings, analysis.automatic_bindings, analysis.blueprints);
-            if analysis.generated_bindings != 0 || analysis.generated_blueprints != 0 || observed != self.expected {
+            let observed = (
+                analysis.providers,
+                analysis.requests,
+                analysis.explicit_bindings,
+                analysis.automatic_bindings,
+                analysis.blueprints
+            );
+
+            if analysis.generated_bindings != 0
+                || analysis.generated_blueprints != 0
+                || observed != self.expected
+            {
                 Err(format!(
                     "DI semantic inputs changed between compiler passes: expected {:?}, observed {:?}, still missing {} bindings and {} blueprints",
                     self.expected, observed, analysis.generated_bindings, analysis.generated_blueprints,
@@ -205,6 +252,7 @@ impl Callbacks for Generate {
     }
 }
 
+/// 安装受控语义查询扩展并保留跨 crate 原生 MIR，不替换标准 Rust 类型检查。
 fn configure_compiler(config: &mut interface::Config) {
     config.opts.unstable_opts.always_encode_mir = true;
     config.override_queries = Some(|_, providers| {
@@ -222,9 +270,12 @@ fn configure_compiler(config: &mut interface::Config) {
 /// crate source，不信任额外 sidecar 文件，也不依赖上一次构建留下的缓存标记。
 #[derive(Default)]
 struct TransitiveCoreProbe {
+    /// 真实解析所得的唯一传递 core 工件路径。
     runtime: Option<PathBuf>,
 }
+
 impl Callbacks for TransitiveCoreProbe {
+    /// 为普通外部依赖保留原生 MIR，供下游闭合查询使用。
     fn config(&mut self, config: &mut interface::Config) {
         // 即使本库没有 core 依赖，下游也可能把它的泛型 trait 转发闭合为查询。
         // cargo check 默认可省略这些原生 MIR，导致 check 与 build 得到不同的
@@ -232,6 +283,7 @@ impl Callbacks for TransitiveCoreProbe {
         config.opts.unstable_opts.always_encode_mir = true;
     }
 
+    /// 从真实依赖 crate 身份定位唯一 core，发现后转入两轮语义流程。
     fn after_expansion<'tcx>(
         &mut self,
         _compiler: &interface::Compiler,
@@ -265,15 +317,18 @@ impl Callbacks for TransitiveCoreProbe {
     }
 }
 
+/// 编译 core 本身时启用内部计划协议和访问校验的单轮回调。
 struct RuntimeCompiler;
 
 impl Callbacks for RuntimeCompiler {
+    /// 启用 core 内部计划编译协议，关闭面向应用的 IDE constructor 捕获。
     fn config(&mut self, config: &mut interface::Config) {
         di_plan::enable(true);
         constructor::capture_ide(false);
         configure_compiler(config);
     }
 
+    /// 在 core 标准编译管线中准备反射和计划声明。
     fn after_crate_root_parsing(
         &mut self,
         compiler: &interface::Compiler,
@@ -284,6 +339,7 @@ impl Callbacks for RuntimeCompiler {
         Compilation::Continue
     }
 
+    /// 认证内部访问与声明，并在输出前验证计划及收集文档。
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &interface::Compiler,
@@ -301,16 +357,22 @@ impl Callbacks for RuntimeCompiler {
     }
 }
 
+/// 第二轮虚拟源码加载器；源码文本必须来自首轮快照且磁盘内容未变。
 struct CheckedLoader {
+    /// 第二轮读取生成源码时使用的虚拟覆盖层。
     loader: OverlayFileLoader,
+
+    /// 首轮已读取的全部原始源码，用于第二轮输入一致性校验。
     snapshots: BTreeMap<PathBuf, String>,
 }
 
 impl FileLoader for CheckedLoader {
+    /// 把存在性查询交给已生成的覆盖层。
     fn file_exists(&self, path: &Path) -> bool {
         self.loader.file_exists(path)
     }
 
+    /// 确认文件属于首轮输入且未变化，再返回对应虚拟覆盖内容。
     fn read_file(&self, path: &Path) -> io::Result<String> {
         let path = documentation::remap_source_path(path);
         let path = path.as_path();
@@ -325,15 +387,18 @@ impl FileLoader for CheckedLoader {
         self.loader.read_file(path)
     }
 
+    /// 委托覆盖层读取原始二进制资源，不应用源码文本快照校验。
     fn read_binary_file(&self, path: &Path) -> io::Result<Arc<[u8]>> {
         self.loader.read_binary_file(path)
     }
 
+    /// 沿用虚拟覆盖加载器的当前目录语义。
     fn current_directory(&self) -> io::Result<PathBuf> {
         self.loader.current_directory()
     }
 }
 
+/// 将编译期间输入变化报告为确定的文件加载错误。
 fn source_changed(path: &Path) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
@@ -344,6 +409,7 @@ fn source_changed(path: &Path) -> io::Error {
     )
 }
 
+/// 提供 driver 身份查询或执行编译，并将工具错误转换为进程退出状态。
 fn main() -> ExitCode {
     if std::env::args().nth(1).as_deref() == Some("--nestrs-driver-info") {
         return match cargo_nestrs::toolchain::CompilerIdentity::pinned() {
@@ -366,6 +432,7 @@ fn main() -> ExitCode {
     }
 }
 
+/// 分流 rustc/rustdoc 调用，认证工具链并编排发现、覆盖生成和最终语义验证。
 fn run() -> Result<ExitCode, String> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(code) = documentation::run_builder(&mut args)? {
@@ -587,6 +654,7 @@ fn run() -> Result<ExitCode, String> {
     Ok(second)
 }
 
+/// 依据首参程序名区分 Cargo rustc wrapper 和直接 rustdoc 调用。
 fn is_rustc_wrapper_invocation(args: &[String]) -> bool {
     args.first().is_some_and(|first| {
         Path::new(first)
@@ -623,6 +691,7 @@ fn run_rustdoc(rustdoc: &std::ffi::OsStr, mut args: Vec<String>) -> Result<ExitC
     })
 }
 
+/// 读取 rustc 选项的分隔或等号形式，不改写原始参数。
 fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.windows(2)
         .find_map(|pair| (pair[0] == flag).then_some(pair[1].as_str()))
@@ -632,6 +701,7 @@ fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
         })
 }
 
+/// 执行选定 rustc 的只读查询，移除 bootstrap 并要求成功 UTF-8 输出。
 fn compiler_output(rustc: &str, args: &[&str]) -> Result<String, String> {
     let output = Command::new(rustc)
         .args(args)
@@ -649,6 +719,7 @@ fn compiler_output(rustc: &str, args: &[&str]) -> Result<String, String> {
         .map_err(|error| error.to_string())
 }
 
+/// 将实际 rustc 的完整身份与 driver 固定身份逐字段比较。
 fn check_toolchain(rustc: &str) -> Result<(), String> {
     let version = compiler_output(rustc, &["-vV"])?;
     let expected = cargo_nestrs::toolchain::CompilerIdentity::pinned()?;
@@ -656,6 +727,7 @@ fn check_toolchain(rustc: &str) -> Result<(), String> {
     expected.verify(&actual)
 }
 
+/// 编码本次语义发现与插入位置，作为 target 中的调试审阅记录。
 fn analysis_json(crate_name: &str, analysis: &Analysis) -> String {
     let mut bindings = Vec::new();
     for insertion in &analysis.insertions {
@@ -681,6 +753,7 @@ fn analysis_json(crate_name: &str, analysis: &Analysis) -> String {
     )
 }
 
+/// 为分析记录转义 JSON 字符串，保留 Unicode 并编码控制字符。
 fn json(value: &str) -> String {
     let mut encoded = String::from("\"");
     for character in value.chars() {

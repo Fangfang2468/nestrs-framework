@@ -11,8 +11,10 @@ use std::{
 
 use serde_json::{Value, json};
 
+/// 进程内临时文件序号，与进程 ID 共同避免配置写入文件名冲突。
 static TEMPORARIES: AtomicU64 = AtomicU64::new(0);
 
+/// 合并生成设置并保留 JSONC 文本；写入前备份一次，再核对原文件未被并发修改。
 pub(crate) fn configure(
     workspace_root: &Path,
     project_path: &Path,
@@ -125,6 +127,7 @@ pub(crate) fn configure(
     Ok(path)
 }
 
+/// 固定所选工具路径，同时保留已有 check.extraEnv 中的其他变量。
 fn merge_check_environment(
     source: &str,
     check_env: &BTreeMap<String, String>,
@@ -146,6 +149,7 @@ fn merge_check_environment(
     Ok(Value::Object(environment))
 }
 
+/// 按原始字节范围修改指定设置，保留无关文本与注释并校验最终 JSONC。
 fn merge(source: &str, desired: &[(&str, Value)]) -> Result<String, String> {
     let (sanitized, comments) = sanitize(source)?;
     let data: Value = serde_json::from_slice(&sanitized)
@@ -275,6 +279,7 @@ fn sanitize(source: &str) -> Result<(Vec<u8>, Vec<Range<usize>>), String> {
     Ok((bytes, comments))
 }
 
+/// 跳过 JSON 允许的 ASCII 空白并返回下一个字节位置。
 fn whitespace(bytes: &[u8], mut cursor: usize) -> usize {
     while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
         cursor += 1;
@@ -282,6 +287,7 @@ fn whitespace(bytes: &[u8], mut cursor: usize) -> usize {
     cursor
 }
 
+/// 定位 JSON 字符串结束位置，跳过转义字符且拒绝未闭合字符串。
 fn string_end(bytes: &[u8], start: usize) -> Result<usize, String> {
     let mut cursor = start + 1;
     while cursor < bytes.len() {
@@ -294,6 +300,7 @@ fn string_end(bytes: &[u8], start: usize) -> Result<usize, String> {
     Err("unterminated JSON string".into())
 }
 
+/// 定位单个 JSON 值的结束边界，使用显式深度计数扫描数组和对象。
 fn value_end(bytes: &[u8], start: usize) -> Result<usize, String> {
     if bytes[start] == b'"' {
         return string_end(bytes, start);

@@ -12,14 +12,21 @@ use zyn::{
     syn::{self, spanned::Spanned},
 };
 
+/// 服务声明及策略的业务源码位置，仅供诊断定位，不参与类型匹配。
 #[derive(Clone, Debug)]
 pub(crate) struct ProviderOrigin {
+    /// 业务结构体或工厂名，保留标识符的真实 span。
     pub(crate) name: syn::Ident,
+
+    /// 显式生命周期值的来源位置；缺省策略没有独立位置。
     pub(crate) lifetime: Option<Span>,
+
+    /// primary 属性或交接 marker 的来源位置。
     pub(crate) primary: Option<Span>,
 }
 
 impl ProviderOrigin {
+    /// 从尚未消费的 provider 参数中提取显式策略来源。
     pub(crate) fn from_args(name: syn::Ident, args: &Args, primary: Option<Span>) -> Self {
         let lifetime = args.iter().find_map(|arg| match arg {
             zyn::Arg::Expr(name, expression) if name == "lifetime" => Some(expression.span()),
@@ -32,6 +39,7 @@ impl ProviderOrigin {
         }
     }
 
+    /// 输出声明与已配置策略的位置 marker，复用生成项的卫生上下文。
     pub(crate) fn render(&self, binding_span: Span) -> TokenStream {
         let mut output = origin(
             OriginKind::Declaration,
@@ -55,6 +63,7 @@ impl ProviderOrigin {
 /// SourceMap 中核验同文件及顺序后合并两个端点；这里不搜索源码或重建行列。
 /// 无分隔分组由宏卫生产生，递归到其内部；有分隔分组以原来的闭合符号为终点。
 pub(crate) fn type_end(ty: &impl ToTokens) -> Option<Span> {
+    /// 取得最后一个实际 token 的端点，递归穿过没有分隔符的卫生分组。
     fn last(tokens: TokenStream) -> Option<Span> {
         match tokens.into_iter().last()? {
             TokenTree::Group(group) if group.delimiter() == Delimiter::None => {

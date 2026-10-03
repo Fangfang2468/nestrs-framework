@@ -19,8 +19,13 @@ use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+/// 原生 MIR 查询签名，覆盖构建与析构展开两个阶段。
 type MirBuilt = for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> &'tcx Steal<mir::Body<'tcx>>;
+
+/// 保存原构建 MIR 查询，摘要写入前先获取其正常结果。
 static ORIGINAL_MIR_BUILT: OnceLock<MirBuilt> = OnceLock::new();
+
+/// 保存原析构展开查询，保证 Drop 摘要沿用 rustc 真实规则。
 static ORIGINAL_MIR_DROPS: OnceLock<MirBuilt> = OnceLock::new();
 
 /// 与普通 rustc MIR 构建组合，只追加编译期摘要，绝不改写业务方法的返回或借用。
@@ -31,6 +36,7 @@ pub fn provide(providers: &mut rustc_middle::util::Providers) {
     providers.queries.mir_drops_elaborated_and_const_checked = reflection_drop_mir;
 }
 
+/// 在原生构建 MIR 中保存查询摘要，保留后续标准 rustc 流程。
 fn reflection_mir(tcx: TyCtxt<'_>, definition: LocalDefId) -> &Steal<mir::Body<'_>> {
     let original = ORIGINAL_MIR_BUILT
         .get()
@@ -45,6 +51,7 @@ fn reflection_mir(tcx: TyCtxt<'_>, definition: LocalDefId) -> &Steal<mir::Body<'
 
 // 原生 move 分析与 drop elaboration 决定哪些值真正需要析构；在此之前记录 Drop
 // 会把已移入 forget/ManuallyDrop 的临时值也加入图。此查询仍先于优化和常量分支消除。
+/// 在原生析构展开之后保存真实 Drop 摘要。
 fn reflection_drop_mir(tcx: TyCtxt<'_>, definition: LocalDefId) -> &Steal<mir::Body<'_>> {
     let original =
         ORIGINAL_MIR_DROPS
@@ -121,10 +128,14 @@ pub(crate) fn startup_options(
 /// every source expression, including function-item values and never-executed
 /// bodies, before any code generation can make an invalid pointer reachable.
 pub fn validate(tcx: TyCtxt<'_>) {
+    /// 检查源码对保留计划入口的直接和别名引用。
     struct References<'tcx> {
+        /// 用于确认定义身份及报告位置的当前会话。
         tcx: TyCtxt<'tcx>,
     }
+
     impl References<'_> {
+        /// 拒绝业务代码直接引用编译器保留的计划入口。
         fn check(&self, definition: DefId, span: Span) {
             if let Some(local) = definition.as_local()
                 && crate::di_plan::is_entry(self.tcx, local)
@@ -136,17 +147,25 @@ pub fn validate(tcx: TyCtxt<'_>) {
             }
         }
     }
+
     impl<'tcx> Visitor<'tcx> for References<'tcx> {
+        /// 包含嵌套定义的 HIR 引用审计范围。
         type NestedFilter = rustc_middle::hir::nested_filter::All;
+
+        /// 提供上下文以遍历嵌套 HIR 定义。
         fn maybe_tcx(&mut self) -> TyCtxt<'tcx> {
             self.tcx
         }
+
+        /// 检查已解析路径是否引用保留入口。
         fn visit_path(&mut self, path: &rustc_hir::Path<'tcx>, _: rustc_hir::HirId) {
             if let Some(definition) = path.res.opt_def_id() {
                 self.check(definition, path.span);
             }
             intravisit::walk_path(self, path);
         }
+
+        /// 检查 import/reexport 的真实目标，避免通过别名绕过入口检查。
         fn visit_use(&mut self, path: &'tcx rustc_hir::UsePath<'tcx>, id: rustc_hir::HirId) {
             for resolution in [path.res.type_ns, path.res.value_ns, path.res.macro_ns]
                 .into_iter()
@@ -158,6 +177,8 @@ pub fn validate(tcx: TyCtxt<'_>) {
             }
             intravisit::walk_use(self, path, id);
         }
+
+        /// 补查类型检查后解析的函数项与关联表达式。
         fn visit_expr(&mut self, expression: &'tcx rustc_hir::Expr<'tcx>) {
             let owner = expression.hir_id.owner.def_id;
             if self.tcx.has_typeck_results(owner)
@@ -172,14 +193,21 @@ pub fn validate(tcx: TyCtxt<'_>) {
     tcx.hir_walk_toplevel_module(&mut References { tcx });
 }
 
+/// 已认证反射回调的用途及预期 adapter 形态。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Kind {
+    /// 提供服务构造能力的回调。
     Provider,
+
+    /// 业务显式绑定的投影回调。
     Binding,
+
+    /// 仅在存在实际接口需求时启用的自动投影回调。
     AutomaticBinding,
 }
 
 impl Kind {
+    /// 按保留拼写筛选候选用途，调用者仍需核对真实生成来源。
     fn from_callback(name: &str) -> Option<Self> {
         match name {
             "__nestrs_reflect_provider" | "__nestrs_reflected_factory" => Some(Self::Provider),
@@ -189,6 +217,7 @@ impl Kind {
         }
     }
 
+    /// 返回该回调用途要求的 core adapter 定义路径。
     pub(crate) fn descriptor(self) -> &'static str {
         match self {
             Self::Provider => crate::protocol::ACTIVATION_ADAPTER,
@@ -197,6 +226,7 @@ impl Kind {
     }
 }
 
+/// 从真实 DefPath 构造内部路径，避免诊断打印器的 facade 别名影响身份检查。
 pub(crate) fn definition_path(tcx: TyCtxt<'_>, definition: DefId) -> String {
     tcx.def_path(definition)
         .data
@@ -211,6 +241,7 @@ pub(crate) fn definition_path(tcx: TyCtxt<'_>, definition: DefId) -> String {
         .join("::")
 }
 
+/// 汇总本地与上游可用的已认证回调，按稳定身份排序并去重。
 pub(crate) fn collect_callbacks(tcx: TyCtxt<'_>) -> Vec<(Kind, DefId)> {
     let mut definitions: Vec<_> = tcx
         .hir_body_owners()
@@ -257,10 +288,18 @@ pub(crate) fn authenticated_callback(tcx: TyCtxt<'_>, definition: DefId) -> bool
 
 /// 单个声明调用及其原始 MIR；key 字面量中的局部变量索引只属于这个 body。
 pub(crate) struct DescriptorCall<'tcx> {
+    /// 已认证的声明 marker 定义。
     pub(crate) definition: DefId,
+
+    /// 代入当前闭合实例后的真实泛型实参。
     pub(crate) arguments: ty::GenericArgsRef<'tcx>,
+
+    /// 调用的原始 MIR 操作数，索引属于下方 body。
     pub(crate) operands: &'tcx [Spanned<Operand<'tcx>>],
+
+    /// 操作数所属的 MIR，用于追踪 key 与字面量。
     pub(crate) body: &'tcx mir::Body<'tcx>,
+
     /// marker 的调用位置保留原字段/参数 token；不能用描述函数位置替代。
     pub(crate) span: Span,
 }
@@ -317,6 +356,7 @@ pub(crate) fn descriptor_calls<'tcx>(
     Ok(output)
 }
 
+/// 核对构造依赖 helper 的生成来源、inherent 身份及 `Vec<InputAdapter>` 签名。
 fn validate_constructor_dependencies<'tcx>(
     tcx: TyCtxt<'tcx>,
     definition: DefId,
@@ -366,6 +406,7 @@ fn validate_constructor_dependencies<'tcx>(
     Ok(())
 }
 
+/// 认证候选回调来源和形态，拒绝旧工具协议而不误拒普通业务同名项。
 fn callback_kind(tcx: TyCtxt<'_>, definition: DefId) -> Option<Kind> {
     let name = tcx.opt_item_name(definition)?;
     let obsolete = matches!(
@@ -399,6 +440,7 @@ fn callback_kind(tcx: TyCtxt<'_>, definition: DefId) -> Option<Kind> {
     Some(kind)
 }
 
+/// 检查闭合回调的完整签名与 adapter 类型，返回可供计划使用的输出类型。
 pub(crate) fn callback_descriptor<'tcx>(
     tcx: TyCtxt<'tcx>,
     kind: Kind,

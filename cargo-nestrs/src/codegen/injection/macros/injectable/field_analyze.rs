@@ -25,15 +25,21 @@ pub(crate) enum FieldStrategy {
     Inject {
         /// 请求服务的实际类型；对 `Option<T>` 字段已经剥离最外层 `Option`。
         service_type: Type,
+
         /// 可选的静态服务限定符。
         key: Option<ServiceKeySpec>,
+
         /// 缺失服务时是否允许交付 `None`。
         optional: bool,
+
         /// 延迟字段在首次异步访问时取得实例；仍有完整、静态的依赖描述。
         lazy: bool,
     },
+
     /// 在宏生成的构造 adapter 中原样求值的字段表达式。
+    /// expression 保留业务 token 来源，只在目标端构造时求值。
     Value { expression: Expr },
+
     /// 未标注字段的默认构造策略。
     Default,
 }
@@ -46,10 +52,13 @@ pub(crate) enum FieldStrategy {
 pub(crate) struct FieldSpec {
     /// 字段在声明中的零基位置。
     pub index: usize,
+
     /// 具名字段的名称；元组字段为 `None`。
     pub field_name: Option<syn::Ident>,
+
     /// 已解析的构造策略。
     pub strategy: FieldStrategy,
+
     /// 在生成构造 adapter 与 `ConstructionInputs` 中的注入输入位置。
     pub input_slot: Option<usize>,
 }
@@ -99,9 +108,12 @@ impl FieldSpec {
 /// 三个 consumer 始终共享同一份 [`FieldSpec`]。
 #[derive(Clone, Debug)]
 pub(crate) struct AnalyzedFields {
+    /// IDE 模型中已分配的显式构造辅助名称；普通编译交给 driver 后续选择。
     pub constructor_helpers: Option<crate::ide::constructor::HelperNames>,
+
     /// 已移除 `#[inject]` / `#[value]` marker 的原始结构体。
     pub item: syn::ItemStruct,
+
     /// 所有字段的稳定分析事实。
     pub specs: Vec<FieldSpec>,
 }
@@ -216,6 +228,7 @@ fn remove_field_strategy_attributes(fields: &mut Fields) {
     }
 }
 
+/// 用具名字段名或元组索引描述冲突位置，不为元组字段创建业务标识符。
 fn field_label(field: &Field, index: usize) -> String {
     field
         .ident

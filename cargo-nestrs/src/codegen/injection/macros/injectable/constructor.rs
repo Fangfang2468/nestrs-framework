@@ -122,6 +122,7 @@ fn render_constructor_body(
     }
 }
 
+/// 先验证并取完全部输入，再按声明顺序执行字段表达式并擦除完整实例。
 #[zyn::element]
 fn construct_automatic_injectable(
     analysis: AnalyzedFields,
@@ -269,6 +270,7 @@ fn take_injected_field_value(spec: FieldSpec, context: syn::Ident) -> zyn::Token
     }
 }
 
+/// 仅在需要消费槽位时将输入参数标为 mut，避免无依赖服务产生多余警告。
 fn context_binding(analysis: &AnalyzedFields, context: &syn::Ident) -> zyn::TokenStream {
     if analysis.has_injected_fields() {
         quote!(mut #context: ::nestrs_core::activation::ConstructionInputs)
@@ -277,6 +279,7 @@ fn context_binding(analysis: &AnalyzedFields, context: &syn::Ident) -> zyn::Toke
     }
 }
 
+/// 为自动构造输入创建定义处卫生标识符；仅内部拼接去掉 raw 前缀。
 fn context_identifier(item: &ItemStruct, binding_span: zyn::proc_macro2::Span) -> syn::Ident {
     // 业务类型继续使用原 Ident；只有拼接内部符号时移除 raw 前缀。
     let service = item.ident.unraw();

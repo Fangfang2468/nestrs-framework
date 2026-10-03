@@ -1,3 +1,5 @@
+//! 将服务声明中的生命周期写法归一化为工具侧策略。
+
 use zyn::{
     Arg, FromArg,
     syn::{Expr, ExprLit, Lit, spanned::Spanned},
@@ -6,18 +8,21 @@ use zyn::{
 /// 属性宏在编译期使用的生命周期配置。
 ///
 /// 它不复用 `nestrs-core` 的运行时枚举，确保过程宏实现本身不依赖 DI runtime。
-/// 宏仅在生成的 token 中引用 `::nestrs_core::ServiceLifetime`。
+/// 生成器将该策略编码为编译器 marker 的类型化常量参数，由 driver 固化到执行计划。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceLifetime {
     /// Root frame 拥有且只激活一次的服务。
     Singleton,
+
     /// 每个 scope 独立拥有一次的服务。
     Scoped,
+
     /// 每个消费位置独立激活的服务。
     Transient,
 }
 
 impl FromArg for ServiceLifetime {
+    /// 接受字符串和枚举式路径写法，归一化后映射到三种受支持生命周期。
     fn from_arg(arg: &zyn::Arg) -> zyn::Result<Self> {
         // 提取出原始写法，例如 "scoped" / Scoped / scoped / ServiceLifetime::Scoped
         let raw: String = match arg {

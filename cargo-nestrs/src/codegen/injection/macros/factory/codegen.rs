@@ -72,7 +72,8 @@ pub(crate) fn emit_factory_provider(
                 binding_span = *binding_span,
                 analysis = analysis.clone(),
             )
-        #[allow(dead_code)]
+
+            #[allow(dead_code)]
             fn {{ callback }}() -> ::nestrs_core::activation::adapter::ActivationAdapter {
                 {{ reflection_module.clone() }}::{{ factory_marker }}::<{{ async_factory }}>();
                 {{ reflection_module }}::{{ provider_marker }}::<{{ analysis.output.success_type.clone() }}>(
@@ -88,17 +89,17 @@ pub(crate) fn emit_factory_provider(
                     lazy = *lazy,
                 )
                 ::nestrs_core::activation::adapter::ActivationAdapter {
-                        service_type: ::nestrs_core::service::ServiceType::create::<{{ analysis.output.success_type.clone() }}>(),
-                        cleanup: @RenderCleanupHook(cleanup = config.cleanup.clone()),
-                        inputs: ::std::vec![
-                            @for (parameter in analysis.parameters.iter()) {
-                                @EmitDependencyRequest(request = parameter.dependency_request(), binding_span = *binding_span),
-                            }
-                        ],
-                        constructor: ::nestrs_core::activation::adapter::Constructor::Factory(@RenderFactoryInvoker(
-                            binding_span = *binding_span,
-                            invocation = analysis.output.invocation,
-                        )),
+                    service_type: ::nestrs_core::service::ServiceType::create::<{{ analysis.output.success_type.clone() }}>(),
+                    cleanup: @RenderCleanupHook(cleanup = config.cleanup.clone()),
+                    inputs: ::std::vec![
+                        @for (parameter in analysis.parameters.iter()) {
+                            @EmitDependencyRequest(request = parameter.dependency_request(), binding_span = *binding_span),
+                        }
+                    ],
+                    constructor: ::nestrs_core::activation::adapter::Constructor::Factory(@RenderFactoryInvoker(
+                        binding_span = *binding_span,
+                        invocation = analysis.output.invocation,
+                    )),
                 }
             }
 
@@ -313,6 +314,7 @@ fn take_factory_parameter(
     }
 }
 
+/// 按槽位读取全部 typed 输入并验证消费完整性，然后释放输入数组再执行业务函数。
 #[zyn::element]
 fn take_factory_parameters(
     parameters: Vec<FactoryParameterSpec>,
@@ -342,6 +344,7 @@ fn take_factory_parameters(
     }
 }
 
+/// 把已生成 adapter 包装为同步或异步函数指针，保持实际调用方式一致。
 #[zyn::element]
 fn render_factory_invoker(
     invocation: FactoryInvocation,

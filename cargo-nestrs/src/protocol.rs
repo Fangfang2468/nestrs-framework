@@ -5,47 +5,101 @@
 //! 两个编译目标使用不同子集，因此允许另一个目标专用的定义暂时未使用。
 #![allow(dead_code)]
 
+/// 业务声明中承载工具 marker 的私有反射模块名称。
 pub(crate) const REFLECTION_MODULE: &str = "__nestrs_reflect";
+
+/// 声明 metadata 中用于表达服务 key 的工具内部类型名。
 pub(crate) const COMPILER_KEY: &str = "CompilerKey";
+
+/// 闭合 provider 描述所实现的工具内部 trait 名称。
 pub(crate) const PROVIDER_DEFINITION: &str = "ProviderDefinition";
+
+/// 供 driver 识别 provider 定义能力的描述函数名。
 pub(crate) const PROVIDER_HELPER: &str = "provider_definition";
+
+/// 最终 binary/test 的唯一执行计划入口符号，版本独立于展示 JSON。
 pub(crate) const PLAN_ENTRY: &str = "__nestrs_reflect_v2";
+
+/// core 内部激活适配能力的真实路径，由 driver 校验类型身份。
 pub(crate) const ACTIVATION_ADAPTER: &str = "activation::adapter::ActivationAdapter";
+
+/// core 内部 concrete 到 trait 投影能力的真实路径。
 pub(crate) const PROJECTION_ADAPTER: &str = "activation::adapter::ProjectionAdapter";
 
+/// marker 泛型参数的种类；两端据此生成或认证签名。
 #[derive(Clone, Copy)]
 pub(crate) enum Parameter {
+    /// 真实类型参数，最终由 rustc 提供类型身份。
     Type,
+
+    /// 槽位或标签使用的 usize 常量参数。
     Usize,
+
+    /// 紧凑策略标签使用的 u8 常量参数。
     U8,
+
+    /// 可选、延迟等开关使用的布尔常量参数。
     Bool,
 }
 
+/// marker 普通参数的形状，用于保留 key 和诊断标签。
 #[derive(Clone, Copy)]
 pub(crate) enum Inputs {
+    /// 没有普通运行值参数。
     None,
+
+    /// 只携带服务 key。
     Key,
+
+    /// 同时携带 key 与输入标签。
     KeyLabel,
+
+    /// 只携带诊断来源标签。
     Label,
 }
 
+/// 声明、输入及查询摘要的工具内部标记种类。
 #[derive(Clone, Copy)]
 pub(crate) enum Marker {
+    /// 声明一个 provider 的类型与 key。
     Provider,
+
+    /// 关联 provider 的输入类型和槽位。
     Dependency,
+
+    /// 显式 concrete/trait 投影声明。
     Binding,
+
+    /// 由工具收集的自动投影能力。
     AutomaticBinding,
+
+    /// 携带 provider 的生命周期、primary 和初始化策略。
     PlanProvider,
+
+    /// 携带一个输入槽位的完整交付策略。
     PlanInput,
+
+    /// 记录构造来源是否属于 factory。
     PlanFactory,
+
+    /// 附加供诊断定位的来源类别与槽位。
     PlanOrigin,
+
+    /// 记录已闭合的服务查询需求。
     QueryRoot,
+
+    /// 记录尚需沿真实调用继续闭合的查询相关类型。
     QueryCall,
+
+    /// 保留 concrete 到动态接口转换关系。
     QueryUnsize,
+
+    /// 标记可跨 crate 解码的查询摘要入口。
     QuerySummary,
 }
 
 impl Marker {
+    /// 当前协议允许识别的完整符号集合。
     const ALL: [Self; 12] = [
         Self::Provider,
         Self::Dependency,
@@ -61,6 +115,7 @@ impl Marker {
         Self::QuerySummary,
     ];
 
+    /// 返回双方约定的内部符号名；名称匹配之外仍需认证真实来源。
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Provider => "compiler_provider",
@@ -78,10 +133,12 @@ impl Marker {
         }
     }
 
+    /// 只识别当前协议登记的内部符号，不接受相似名称。
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|marker| marker.name() == name)
     }
 
+    /// 给出 marker 的泛型参数和普通输入形状，供生成与认证共用。
     pub(crate) fn signature(self) -> (&'static [Parameter], Inputs) {
         use Parameter::{Bool, Type, U8, Usize};
         match self {
@@ -103,33 +160,61 @@ impl Marker {
 #[derive(Clone, Copy)]
 #[repr(u8)]
 pub(crate) enum OriginKind {
+    /// 服务声明本身的来源。
     Declaration = 0,
+
+    /// 服务生命周期属性的来源。
     Lifetime = 1,
+
+    /// primary 选择属性的来源。
     Primary = 2,
+
+    /// provider key 字面量的来源。
     ProviderKey = 3,
+
+    /// 输入 key 字面量的来源。
     InputKey = 4,
+
+    /// 输入类型末端位置，供诊断标注或建议使用。
     InputTypeEnd = 5,
+
+    /// provider 类型末端位置。
     ProviderTypeEnd = 6,
+
+    /// 显式构造方法选择的来源。
     Constructor = 7,
 }
 
+/// provider 生命周期的 metadata 数值编码，与运行期 Rust 类型解耦。
 #[derive(Clone, Copy)]
 #[repr(u8)]
 pub(crate) enum Lifetime {
+    /// 同一个 root 共享实例。
     Singleton = 0,
+
+    /// 同一个 scope 共享实例。
     Scoped = 1,
+
+    /// 每个消费 occurrence 独立构造。
     Transient = 2,
 }
 
+/// 服务是否作为独立预热入口的三态编码，不表示字段延迟注入。
 #[derive(Clone, Copy)]
 #[repr(u8)]
 pub(crate) enum Initialization {
+    /// 继承应用入口的初始化默认值。
     Inherit = 0,
+
+    /// 不作为自主预热入口，普通依赖仍可触发构造。
     Lazy = 1,
+
+    /// 在所属生命周期的预热操作中显式选为入口。
     Eager = 2,
 }
 
 impl Initialization {
+    /// 将声明上的可选布尔策略转换为稳定的 metadata 编码。
     pub(crate) fn from_lazy(lazy: Option<bool>) -> Self {
         match lazy {
             None => Self::Inherit,
@@ -138,6 +223,7 @@ impl Initialization {
         }
     }
 
+    /// 还原声明语义，None 保留继承入口配置的含义。
     pub(crate) fn lazy(self) -> Option<bool> {
         match self {
             Self::Inherit => None,
@@ -149,12 +235,18 @@ impl Initialization {
 
 /// 对已认证 marker 的 const 参数解码；位置规则只在这里转换成具名策略。
 pub(crate) struct ProviderPolicy {
+    /// 已验证的 provider 生命周期。
     pub(crate) lifetime: Lifetime,
+
+    /// 同 key 的 trait 多候选选择中是否拥有 primary 优先级。
     pub(crate) primary: bool,
+
+    /// 服务级预热入口策略，允许继承应用默认值。
     pub(crate) initialization: Initialization,
 }
 
 impl ProviderPolicy {
+    /// 核对常量数量与枚举编码，再构造 provider 策略；未知编码明确拒绝。
     pub(crate) fn decode(constants: &[u128]) -> Result<Self, &'static str> {
         let [lifetime, primary, initialization] = constants else {
             return Err("DI provider metadata 版本不匹配");
@@ -179,13 +271,20 @@ impl ProviderPolicy {
     }
 }
 
+/// 已认证输入 marker 中的槽位、缺席和延迟交付策略。
 pub(crate) struct InputPolicy {
+    /// 输入在构造签名中的零起始位置。
     pub(crate) slot: usize,
+
+    /// 缺少候选时是否允许交付 None；不隐藏其他图错误。
     pub(crate) optional: bool,
+
+    /// 是否交付延迟句柄而不把目标作为构造就绪前提。
     pub(crate) lazy: bool,
 }
 
 impl InputPolicy {
+    /// 核对输入 marker 常量数量，并恢复原槽位与交付修饰。
     pub(crate) fn decode(constants: &[u128]) -> Result<Self, &'static str> {
         let [slot, optional, lazy] = constants else {
             return Err("DI input metadata 版本不匹配");
@@ -198,26 +297,47 @@ impl InputPolicy {
     }
 }
 
+/// key 的 metadata 标签；默认、字符串和整数之间保持严格区分。
 #[derive(Clone, Copy)]
 #[repr(usize)]
 pub(crate) enum KeyKind {
+    /// 未配置 key，不能与 named 或 indexed 混同。
     Default = 0,
+
+    /// 由字符串区分的 key。
     Named = 1,
+
+    /// 由整数区分的 key。
     Indexed = 2,
 }
 
+/// 已冻结执行计划向 core 私有装配入口写入的数据类别。
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum PlanSink {
+    /// 写入应用入口的容器默认启动配置。
     Options,
+
+    /// 写入已启用的 concrete/trait 投影能力。
     Binding,
+
+    /// 写入已验证的 provider 执行描述。
     Provider,
+
+    /// 写入一个 provider 已选定的输入动作。
     Input,
+
+    /// 写入 trait 查询到 provider 和投影的冻结路由。
     TraitRoute,
+
+    /// 写入依赖优先的拓扑顺序。
     Order,
+
+    /// 写入关闭和生命周期使用的反向依赖关系。
     Dependent,
 }
 
 impl PlanSink {
+    /// 当前协议允许识别的完整符号集合。
     const ALL: [Self; 7] = [
         Self::Options,
         Self::Binding,
@@ -228,6 +348,7 @@ impl PlanSink {
         Self::Dependent,
     ];
 
+    /// 返回双方约定的内部符号名；名称匹配之外仍需认证真实来源。
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Options => "plan_set_options_v2",
@@ -240,21 +361,33 @@ impl PlanSink {
         }
     }
 
+    /// 只识别当前协议登记的内部符号，不接受相似名称。
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|sink| sink.name() == name)
     }
 }
 
+/// 显式 constructor 在声明桥接与 driver 之间共享的私有名称和载荷。
 pub(crate) mod constructor {
+    /// 显式构造方法携带的工具私有 metadata 项名称。
     pub(crate) const METADATA: &str = "__NESTRS_CONSTRUCTOR";
+
+    /// 显式构造激活辅助项的协议基名。
     pub(crate) const ACTIVATE: &str = "__nestrs_constructor_activate";
+
+    /// 显式构造依赖描述辅助项的协议基名。
     pub(crate) const DEPENDENCIES: &str = "__nestrs_constructor_dependencies";
 
     /// 宏写入、driver 在真实来源认证后读取；字段名及值保持现有 metadata 格式。
     #[derive(serde::Serialize, serde::Deserialize)]
     pub(crate) struct Metadata {
+        /// 用户选定的真实构造方法名称。
         pub(crate) method: String,
+
+        /// 构造返回是否为 Result，需要生成错误转换。
         pub(crate) result: bool,
+
+        /// 原始方法输入 token，用于后续解析和语义关联。
         pub(crate) input: String,
     }
 }

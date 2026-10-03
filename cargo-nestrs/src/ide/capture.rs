@@ -1,3 +1,5 @@
+//! 记录真实 rustc 编译单元，供成功的 Cargo 工件选择当前有效 IDE 输入。
+
 use std::{
     collections::{BTreeMap, hash_map::DefaultHasher},
     env,
@@ -8,19 +10,43 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+/// 一次真实编译的 crate、配置、extern 和环境快照，保留 feature/test 变体身份。
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct Unit {
+    /// rustc 本次实际使用的 crate 名称。
     pub crate_name: String,
+
+    /// 编译单元的根源码路径。
     pub root_module: PathBuf,
+
+    /// 本次 rustc 选择的 Rust edition。
     pub edition: String,
+
+    /// 本次生成的 crate 类型，供库和过程宏匹配使用。
     pub crate_types: Vec<String>,
+
+    /// 同一编译器按真实参数输出的 cfg 集合，包含编译器派生条件。
     pub cfg: Vec<String>,
+
+    /// 本次真实 extern 名称到工件路径的映射，保留 Cargo 重命名。
     pub externs: BTreeMap<String, PathBuf>,
+
+    /// rustc --out-dir 指定的产物目录，不等同于 build.rs 的 OUT_DIR 环境变量。
     pub out_dir: PathBuf,
+
+    /// Cargo 为当前编译配置选择的产物文件名后缀。
     pub extra_filename: String,
+
+    /// Cargo 包信息和 include!/env! 所需的白名单环境值。
     pub env: BTreeMap<String, String>,
+
+    /// 该编译单元所属 package 的目录。
     pub manifest_dir: PathBuf,
+
+    /// 是否由 --test 构建测试入口。
     pub test: bool,
+
+    /// 命令行显式指定的 target；未设置时由工具宿主决定。
     pub target: Option<String>,
 }
 
@@ -84,6 +110,7 @@ pub fn capture_rustc(args: &[String], source: &Path) -> Result<(), String> {
 }
 
 impl Unit {
+    /// 解析具有 crate 名及输出目录的编译调用；工具查询不形成编译单元。
     pub(super) fn parse(
         args: &[String],
         source: &Path,
@@ -138,6 +165,7 @@ impl Unit {
         })
     }
 
+    /// 识别可加载的过程宏库，排除其测试可执行入口。
     pub fn is_proc_macro(&self) -> bool {
         !self.test && self.crate_types.iter().any(|kind| kind == "proc-macro")
     }
@@ -156,6 +184,7 @@ impl Unit {
         identity.finish()
     }
 
+    /// 按输出目录和编译后缀匹配 Cargo 工件，兼容 build-script 的重命名产物。
     pub fn owns_artifact(&self, path: &Path) -> bool {
         if path.parent() != Some(self.out_dir.as_path()) {
             return false;
@@ -180,6 +209,7 @@ impl Unit {
     }
 }
 
+/// 基于捕获时目录解析路径，尽可能取得规范身份并保留尚不存在的路径。
 fn absolute(cwd: &Path, path: impl AsRef<Path>) -> PathBuf {
     let path = path.as_ref();
     let path = if path.is_absolute() {
@@ -190,6 +220,7 @@ fn absolute(cwd: &Path, path: impl AsRef<Path>) -> PathBuf {
     path.canonicalize().unwrap_or(path)
 }
 
+/// 收集指定 rustc 选项的各次取值，兼容等号及 -C 附着语法。
 fn values(args: &[String], flag: &str) -> Vec<String> {
     let mut values = Vec::new();
     let mut args = args.iter();

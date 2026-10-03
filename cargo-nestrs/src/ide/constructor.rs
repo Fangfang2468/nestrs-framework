@@ -14,18 +14,30 @@ use serde::{Deserialize, Serialize};
 
 use super::capture::Unit;
 
+/// 编辑器 constructor 模型的格式版本；版本变化要求重新生成项目。
 pub const MODEL_VERSION: u32 = 2;
+
+/// 承载当前编译单元完整 constructor 模型的编辑器环境变量。
 pub const MODEL_ENV: &str = "NESTRS_IDE_CONSTRUCTORS";
 
+/// driver 已验证的声明、方法与辅助项名称集合，供编辑器只重放语义选择。
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ConstructorModel {
+    /// 当前模型格式版本，用于拒绝过期捕获记录。
     pub version: u32,
+
+    /// 当前编译单元内已验证的结构体声明。
     pub declarations: Vec<Declaration>,
+
+    /// 为本单元分配且不冲突的辅助项名称；没有构造方法时可缺省。
     pub helpers: Option<HelperNames>,
+
+    /// 已验证显式构造方法的完整输入及位置。
     pub methods: Vec<MethodDeclaration>,
 }
 
 impl Default for ConstructorModel {
+    /// 创建当前版本的空模型，用于没有 constructor 捕获记录的编译单元。
     fn default() -> Self {
         Self {
             version: MODEL_VERSION,
@@ -39,51 +51,86 @@ impl Default for ConstructorModel {
 /// 由当前编译单元标准展开后的标识符目录分配，两个属性展开只重放同一已验证结果。
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct HelperNames {
+    /// 生成的激活辅助方法名称。
     pub activate: String,
+
+    /// 生成的依赖描述辅助方法名称。
     pub dependencies: String,
 }
 
+/// 显式构造方法的源码位置和完整输入，用于识别编辑器中的同一声明。
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MethodDeclaration {
+    /// 原始声明的位置；用于与编辑器输入建立来源对应。
     pub anchor: SourceAnchor,
+
+    /// 完整方法 token 文本；位置回退仍要求输入完全一致。
     pub input: String,
 }
 
-/// 定位原始结构体标识符；行从 1 开始，列从 0 开始，与 proc_macro2 相同。
+/// 定位原始声明标识符；行从 1 开始，列从 0 开始，与 proc_macro2 相同。
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 pub struct SourceAnchor {
+    /// 原始声明所在文件的路径。
     pub file: PathBuf,
+
+    /// 起始行，使用 1 起始编号。
     pub line: usize,
+
+    /// 起始列，使用 0 起始编号。
     pub column: usize,
+
+    /// 结束行，使用 1 起始编号。
     pub end_line: usize,
+
+    /// 结束列，使用 0 起始编号。
     pub end_column: usize,
 }
 
+/// 结构体原始声明与编译器确认的字段存储选择。
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Declaration {
+    /// 原始声明的位置；用于与编辑器输入建立来源对应。
     pub anchor: SourceAnchor,
+
     /// helper 已消费、字段尚未包装的结构体 token；只用于检查模型和编辑内容一致。
     pub input: String,
+
     /// 编译器中的完整真实定义身份，用于歧义说明；不用于按名称猜测匹配。
     pub definition: String,
+
+    /// 真实编译器解析并验证的构造与字段选择。
     pub selection: Selection,
 }
 
+/// 是否采用显式构造，以及该选择所需的字段到输入槽位映射。
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Selection {
+    /// 是否由显式 constructor 决定结构体的注入字段存储。
     pub constructor: bool,
+
+    /// 显式参数映射到返回字段的列表；自动字段构造时为空。
     pub fields: Vec<FieldPlan>,
 }
 
+/// 显式构造成功返回中，一个字段对应的完整输入交付形态。
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct FieldPlan {
+    /// 返回结构体中需要改写存储类型的字段名称。
     pub name: String,
+
+    /// 该字段的整值来源参数在构造输入中的槽位。
     pub slot: usize,
+
+    /// 该输入是否按值交付 LazyInjection 句柄。
     pub lazy: bool,
+
+    /// 该输入是否允许缺席并保留 Option 形态。
     pub optional: bool,
 }
 
 impl ConstructorModel {
+    /// 检查版本、位置、辅助项身份和字段映射一致性，拒绝不完整或歧义模型。
     pub fn validate(&self) -> Result<(), String> {
         if self.version != MODEL_VERSION {
             return Err(format!(
@@ -128,6 +175,7 @@ impl ConstructorModel {
         Ok(())
     }
 
+    /// 按完整方法输入和来源定位已验证 helper，允许同文件内未保存编辑造成的位置平移。
     pub fn lookup_method(
         &self,
         anchor: Option<&SourceAnchor>,
@@ -185,6 +233,7 @@ impl ConstructorModel {
     }
 }
 
+/// 要求全部同输入候选具有一致选择；缺失或分歧时提示刷新模型。
 fn consistent_selection(matches: &[&Declaration]) -> Result<Selection, String> {
     let Some(first) = matches.first() else {
         return Err("当前服务声明与编译器 constructor 模型不一致，请保存文件并运行 cargo nestrs init check 刷新 IDE 模型".into());
@@ -251,6 +300,7 @@ pub fn write_constructor_model(
     )
 }
 
+/// 读取精确编译单元的模型并编码为 env 值；无记录时返回有效空模型。
 pub(super) fn environment(captures: &Path, unit: &Unit) -> Result<String, String> {
     let path = model_path(captures, unit);
     let model = match fs::read(&path) {
@@ -269,6 +319,7 @@ pub(super) fn environment(captures: &Path, unit: &Unit) -> Result<String, String
     serde_json::to_string(&model).map_err(|error| error.to_string())
 }
 
+/// 按编译单元身份定位 constructor sidecar，隔离 feature/test 变体。
 fn model_path(directory: &Path, unit: &Unit) -> PathBuf {
     directory
         .join("constructors")

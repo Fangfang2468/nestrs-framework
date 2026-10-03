@@ -23,22 +23,41 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+/// 与 core 同步版本化的唯一计划入口符号。
 const ENTRY: &str = protocol::PLAN_ENTRY;
+
+/// 生成入口使用的虚拟源码身份。
 const SOURCE: &str = "nestrs generated reflection plan";
+
+/// 当前编译阶段是否允许生成最终计划 MIR。
 static ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// 原生 MIR 构建查询签名。
 type MirBuilt = for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> &'tcx Steal<mir::Body<'tcx>>;
+
+/// 原生代码生成属性查询签名。
 type Attrs = for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> CodegenFnAttrs;
+
+/// 保存原 MIR 查询，普通函数沿用此入口。
 static MIR: OnceLock<MirBuilt> = OnceLock::new();
+
+/// 保存原代码生成属性查询，仅覆盖真实计划入口符号。
 static ATTRS: OnceLock<Attrs> = OnceLock::new();
+
+/// 控制本轮是否将已验证计划写入入口 MIR。
 pub fn enable(enabled: bool) {
     ENABLED.store(enabled, Ordering::Relaxed);
 }
+
+/// 保存并包装 MIR 与代码生成属性查询，其余函数继续使用原查询。
 pub fn provide(providers: &mut rustc_middle::util::Providers) {
     MIR.get_or_init(|| providers.queries.mir_built);
     ATTRS.get_or_init(|| providers.queries.codegen_fn_attrs);
     providers.queries.mir_built = plan_mir;
     providers.queries.codegen_fn_attrs = plan_attrs;
 }
+
+/// 仅为最终 binary/test 追加保留入口的普通 AST 声明，不执行目标程序。
 pub fn prepare(compiler: &interface::Compiler, krate: &mut ast::Crate) {
     if !compiler.sess.opts.test
         && !compiler
@@ -75,6 +94,8 @@ pub fn prepare(compiler: &interface::Compiler, krate: &mut ast::Crate) {
         }
     }
 }
+
+/// 核对保留名称与虚拟源码来源，拒绝业务代码冒用入口。
 pub fn is_entry(tcx: TyCtxt<'_>, def: LocalDefId) -> bool {
     if tcx.def_kind(def) != DefKind::Fn
         || tcx.is_foreign_item(def.to_def_id())
@@ -88,11 +109,13 @@ pub fn is_entry(tcx: TyCtxt<'_>, def: LocalDefId) -> bool {
         .sess
         .source_map()
         .lookup_source_file(tcx.def_span(def).lo());
-    if !matches!(&file.name,FileName::Custom(name) if name==SOURCE) {
+    if !matches!(&file.name, FileName::Custom(name) if name == SOURCE) {
         tcx.dcx().fatal("Nestrs 计划入口名称由编译器保留");
     }
     true
 }
+
+/// 仅为真实生成入口指定固定 ABI 符号，其余代码生成属性保持原值。
 fn plan_attrs(tcx: TyCtxt<'_>, def: LocalDefId) -> CodegenFnAttrs {
     let mut attrs = ATTRS.get().unwrap()(tcx, def);
     if is_entry(tcx, def) {
@@ -100,6 +123,8 @@ fn plan_attrs(tcx: TyCtxt<'_>, def: LocalDefId) -> CodegenFnAttrs {
     }
     attrs
 }
+
+/// 在启用且有 core 的最终入口上生成计划 MIR，普通函数返回原 body。
 fn plan_mir(tcx: TyCtxt<'_>, def: LocalDefId) -> &Steal<mir::Body<'_>> {
     let original = MIR.get().unwrap()(tcx, def);
     if !is_entry(tcx, def) || !ENABLED.load(Ordering::Relaxed) || !has_core(tcx) {
@@ -183,6 +208,7 @@ fn emit<'tcx>(
     body.basic_blocks = mir::BasicBlocks::new(blocks);
     body
 }
+
 /// 即使 check 不触发链接、图没有 provider，也必须拒绝旧版 core 输入协议。
 /// 使用已有 options sink 的版本和完整签名握手，不增加运行时回调或读取布局。
 pub(super) fn validate_protocol(tcx: TyCtxt<'_>) {
@@ -214,6 +240,7 @@ pub(super) fn validate_protocol(tcx: TyCtxt<'_>) {
     }
 }
 
+/// 按 core 定义路径收集计划写入函数，具体签名在协议验证与调用前核对。
 fn helpers(tcx: TyCtxt<'_>) -> HashMap<PlanSink, DefId> {
     let mut result = HashMap::new();
     let mut crates = tcx.crates(()).to_vec();
@@ -247,27 +274,54 @@ fn helpers(tcx: TyCtxt<'_>) -> HashMap<PlanSink, DefId> {
     }
     result
 }
+
 /// 选择结果使用具名字段传入；只有 Writer 负责现有 core ABI 的参数位置。
 struct ProviderEmission<'a, 'tcx> {
+    /// 返回真实 ActivationAdapter 的闭合回调。
     callback: ty::Instance<'tcx>,
+
+    /// 已通过全图校验的 provider 声明。
     declaration: &'a Provider<'tcx>,
+
+    /// 该节点的完整激活闭包是否需要 scope。
     requires_scope: bool,
 }
+
+/// 一个输入槽位的声明信息与冻结选择结果。
 struct InputEmission<'a> {
+    /// 消费者在最终 provider 目录中的索引。
     provider: usize,
+
+    /// 消费者内部的输入槽位索引。
     slot: usize,
+
+    /// 已选目标与可选投影，不再在运行期求解。
     selected: &'a model::InputPlan,
+
+    /// 原始请求的 optional、key 与诊断标签。
     declaration: &'a model::Input,
 }
 
+/// 按已认证执行 ABI 构造入口 MIR；不调用用户构造函数。
 struct Writer<'a, 'tcx> {
+    /// 用于构造目标类型、常量及函数实例的编译上下文。
     tcx: TyCtxt<'tcx>,
+
+    /// 将被替换的入口函数体及新增局部变量。
     body: &'a mut mir::Body<'tcx>,
+
+    /// 按调用顺序积累的 MIR 基本块。
     blocks: IndexVec<BasicBlock, BasicBlockData<'tcx>>,
+
+    /// 生成指令共用的入口源码信息。
     info: mir::SourceInfo,
+
+    /// 按定义路径定位的 core 写入函数，调用前仍需核对签名。
     helpers: HashMap<PlanSink, DefId>,
 }
+
 impl<'tcx> Writer<'_, 'tcx> {
+    /// 把入口 manifest 已确定的初始化策略和并发上限写入计划。
     fn options(&mut self, config: &cargo_nestrs::project_config::DiConfig) {
         self.sink(
             PlanSink::Options,
@@ -279,11 +333,13 @@ impl<'tcx> Writer<'_, 'tcx> {
         );
     }
 
+    /// 调用已选 typed projection 描述回调，把返回的 adapter 交给 core。
     fn binding(&mut self, instance: ty::Instance<'tcx>) {
         let value = self.descriptor(instance, protocol::PROJECTION_ADAPTER);
         self.sink(PlanSink::Binding, vec![self.pointer(), value]);
     }
 
+    /// 编码已验证 provider 的生命周期、key、预热策略和用户来源。
     fn provider(&mut self, emission: ProviderEmission<'_, 'tcx>) {
         let value = self.descriptor(emission.callback, protocol::ACTIVATION_ADAPTER);
         let provider = emission.declaration;
@@ -319,6 +375,7 @@ impl<'tcx> Writer<'_, 'tcx> {
         );
     }
 
+    /// 编码输入的已选目标与投影，并保留 optional、key 及诊断标签。
     fn input(&mut self, emission: InputEmission<'_>) {
         let declaration = emission.declaration;
         let key = EncodedKey::new(&declaration.key);
@@ -340,6 +397,7 @@ impl<'tcx> Writer<'_, 'tcx> {
         );
     }
 
+    /// 记录 trait 查询路由使用的 provider 和投影索引。
     fn trait_route(&mut self, provider: usize, binding: usize) {
         self.sink(
             PlanSink::TraitRoute,
@@ -351,6 +409,7 @@ impl<'tcx> Writer<'_, 'tcx> {
         );
     }
 
+    /// 追加一个已验证拓扑顺序中的 provider 索引。
     fn order(&mut self, provider: usize) {
         self.sink(
             PlanSink::Order,
@@ -358,6 +417,7 @@ impl<'tcx> Writer<'_, 'tcx> {
         );
     }
 
+    /// 记录依赖指向消费者的反向边，供运行期推进与关闭使用。
     fn dependent(&mut self, dependency: usize, consumer: usize) {
         self.sink(
             PlanSink::Dependent,
@@ -369,9 +429,12 @@ impl<'tcx> Writer<'_, 'tcx> {
         );
     }
 
+    /// 读取入口的计划装配指针参数，不在编译器宿主解引用它。
     fn pointer(&self) -> Operand<'tcx> {
         Operand::Copy(Local::new(1).into())
     }
+
+    /// 追加一个真实函数调用基本块与返回值局部变量，结果作为下一条调用的操作数。
     fn call(
         &mut self,
         instance: ty::Instance<'tcx>,
@@ -414,6 +477,8 @@ impl<'tcx> Writer<'_, 'tcx> {
         ));
         Operand::Move(local.into())
     }
+
+    /// 验证无参数 typed adapter 回调签名，再生成目标端调用。
     fn descriptor(&mut self, instance: ty::Instance<'tcx>, expected: &str) -> Operand<'tcx> {
         let sig = self
             .tcx
@@ -425,12 +490,18 @@ impl<'tcx> Writer<'_, 'tcx> {
             || !sig.safety().is_safe()
             || sig.abi() != ExternAbi::Rust
             || sig.c_variadic()
-            || !matches!(sig.output().kind(),ty::Adt(d,_) if self.tcx.crate_name(d.did().krate).as_str()=="nestrs_core" && definition_path(self.tcx,d.did())==expected)
+            || !matches!(
+                sig.output().kind(),
+                ty::Adt(d, _) if self.tcx.crate_name(d.did().krate).as_str() == "nestrs_core"
+                    && definition_path(self.tcx, d.did()) == expected
+            )
         {
             self.tcx.dcx().fatal("不兼容的 Nestrs typed descriptor ABI");
         }
         self.call(instance, vec![], sig.output())
     }
+
+    /// 逐参数检查 core 写入 ABI 后生成调用；不兼容协议立即终止编译。
     fn sink(&mut self, sink: PlanSink, args: Vec<Operand<'tcx>>) {
         let name = sink.name();
         let def = *self.helpers.get(&sink).unwrap_or_else(|| {
@@ -462,6 +533,8 @@ impl<'tcx> Writer<'_, 'tcx> {
         self.call(ty::Instance::mono(self.tcx, def), args, self.tcx.types.unit);
     }
 }
+
+/// 为目标 MIR 常量附上当前生成位置。
 fn constant(value: mir::Const<'_>, span: Span) -> Operand<'_> {
     Operand::Constant(Box::new(mir::ConstOperand {
         span,
@@ -469,9 +542,13 @@ fn constant(value: mir::Const<'_>, span: Span) -> Operand<'_> {
         const_: value,
     }))
 }
+
+/// 生成目标 usize 常量，由 rustc 按目标布局表达。
 fn number(tcx: TyCtxt<'_>, value: usize, span: Span) -> Operand<'_> {
     constant(mir::Const::from_usize(tcx, value as u64), span)
 }
+
+/// 以目标 usize::MAX 编码缺席索引，避免混用宿主指针宽度。
 fn optional_number(tcx: TyCtxt<'_>, value: Option<usize>, span: Span) -> Operand<'_> {
     // None使用目标usize::MAX，不能把64位宿主哨兵截断当作类型协议。
     let value = value
@@ -479,6 +556,8 @@ fn optional_number(tcx: TyCtxt<'_>, value: Option<usize>, span: Span) -> Operand
         .unwrap_or_else(|| u64::MAX >> (64 - tcx.sess.target.pointer_width));
     constant(mir::Const::from_usize(tcx, value), span)
 }
+
+/// 生成目标 bool 常量操作数。
 fn boolean(tcx: TyCtxt<'_>, value: bool, span: Span) -> Operand<'_> {
     constant(mir::Const::from_bool(tcx, value), span)
 }
@@ -502,12 +581,20 @@ fn text<'tcx>(tcx: TyCtxt<'tcx>, value: &str, span: Span) -> Operand<'tcx> {
     )
 }
 
+/// 执行 ABI 中 key 的分类与载荷；与审阅 JSON 格式相互独立。
 struct EncodedKey<'a> {
+    /// 默认、字符串或整数 key 的 ABI 标记。
     kind: KeyKind,
+
+    /// 字符串 key 的内容；其余种类使用空串。
     name: &'a str,
+
+    /// 目标 usize 可表达的整数 key；其余种类使用零。
     index: usize,
 }
+
 impl<'a> EncodedKey<'a> {
+    /// 按 key 种类拆分 ABI 载荷；整数须已通过可表示范围校验。
     fn new(key: &'a model::Key) -> Self {
         match key {
             model::Key::Default => Self {

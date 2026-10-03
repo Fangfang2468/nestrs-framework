@@ -142,6 +142,7 @@ pub(crate) fn emit_compiler_key(
     compiler_key_tokens(key.as_ref(), *binding_span)
 }
 
+/// 保留 key 字面量来源位置，同时以定义处卫生引用局部 CompilerKey 协议。
 fn compiler_key_tokens(
     key: Option<&ServiceKeySpec>,
     binding_span: zyn::proc_macro2::Span,

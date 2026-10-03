@@ -30,22 +30,48 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 pub use emission::{enable, is_entry, prepare, provide};
 
+/// 模型 provider 与真实 adapter 实例、用户来源的关联。
 struct Provider<'tcx> {
+    /// 已闭合的执行 adapter 描述回调。
     instance: ty::Instance<'tcx>,
+
+    /// 供纯图算法选择与验证的 provider 数据。
     data: model::Provider,
+
+    /// 用于图工件展示的声明种类。
     kind: &'static str,
+
+    /// 声明的原始位置。
     source: Span,
+
+    /// 字段、参数和配置各自的诊断位置。
     origin: diagnostics::Origin,
 }
+
+/// 一个真实 typed projection 及两端的准确类型身份。
 struct Binding<'tcx> {
+    /// 生成 ProjectionAdapter 的已闭合回调。
     instance: ty::Instance<'tcx>,
+
+    /// 投影前的 concrete 服务类型。
     concrete: Ty<'tcx>,
+
+    /// 投影后的完整 dyn 类型。
     interface: Ty<'tcx>,
 }
+
+/// 当前编译会话内已验证的计划及其 rustc 类型和回调目录。
 struct Compiled<'tcx> {
+    /// 模型类型索引对应的真实 Ty。
     types: Vec<Ty<'tcx>>,
+
+    /// 计划节点对应的 provider 声明与 adapter。
     providers: Vec<Provider<'tcx>>,
+
+    /// 计划选中的投影回调目录。
     bindings: Vec<Binding<'tcx>>,
+
+    /// 已完成候选选择、图验证与编号的不可变模型。
     plan: model::Plan,
 }
 
@@ -74,6 +100,8 @@ pub fn validate(tcx: TyCtxt<'_>) -> Result<(), String> {
     let plan = compile(tcx).unwrap_or_else(|error| crate::diagnostics::internal(tcx, error));
     artifact::write(tcx, &plan)
 }
+
+/// 完整图仅在 binary 或 test 入口汇总，普通库只贡献声明。
 fn entry(tcx: TyCtxt<'_>) -> bool {
     tcx.sess.opts.test
         || tcx
@@ -82,6 +110,8 @@ fn entry(tcx: TyCtxt<'_>) -> bool {
             .crate_types
             .contains(&rustc_session::config::CrateType::Executable)
 }
+
+/// 确认本编译单元已加载 core，包括正在编译 core 自身的情形。
 fn has_core(tcx: TyCtxt<'_>) -> bool {
     tcx.crate_name(LOCAL_CRATE).as_str() == "nestrs_core"
         || tcx
@@ -89,9 +119,13 @@ fn has_core(tcx: TyCtxt<'_>) -> bool {
             .iter()
             .any(|&c| tcx.crate_name(c).as_str() == "nestrs_core")
 }
+
+/// 使用 rustc 的真实类型名称生成展示文字，不参与类型去重。
 fn name<'tcx>(tcx: TyCtxt<'tcx>, service: Ty<'tcx>) -> String {
     rustc_const_eval::util::type_name(tcx, service)
 }
+
+/// 将来源 span 转为用户调用点的文件、1 基行号和列号。
 fn source(tcx: TyCtxt<'_>, span: Span) -> String {
     let pos = tcx
         .sess
@@ -104,6 +138,8 @@ fn source(tcx: TyCtxt<'_>, span: Span) -> String {
         pos.col.0 + 1
     )
 }
+
+/// 在单态化环境中归一化服务类型，拒绝复杂度超限或仍未闭合的结果。
 fn normalize<'tcx>(tcx: TyCtxt<'tcx>, service: Ty<'tcx>, span: Span) -> Result<Ty<'tcx>, String> {
     // 有限声明闭包允许很深的普通 DAG，但不能允许 A<T> -> A<Vec<T>> 这类无限
     // 类型族耗尽编译器内存。检查的是单个类型表达式，不是服务图的路径深度。
@@ -119,6 +155,8 @@ fn normalize<'tcx>(tcx: TyCtxt<'tcx>, service: Ty<'tcx>, span: Span) -> Result<T
     }
     Ok(result)
 }
+
+/// 按真实 Ty 身份为模型分配稳定索引，重复类型复用原槽位。
 fn intern<'tcx>(
     types: &mut Vec<Ty<'tcx>>,
     indices: &mut HashMap<Ty<'tcx>, usize>,
@@ -130,6 +168,8 @@ fn intern<'tcx>(
         index
     })
 }
+
+/// 将编译器声明 key 转换为纯图模型使用的同值 key。
 fn key(key: CompilerKey) -> model::Key {
     match key {
         CompilerKey::Default => model::Key::Default,
@@ -137,6 +177,8 @@ fn key(key: CompilerKey) -> model::Key {
         CompilerKey::Indexed(i) => model::Key::Indexed(i),
     }
 }
+
+/// 读取已确定的标量 const 参数；不接受尚未具体化的元数据。
 fn const_number<'tcx>(_tcx: TyCtxt<'tcx>, constant: ty::Const<'tcx>) -> Result<u128, String> {
     constant
         .try_to_leaf()
@@ -144,6 +186,7 @@ fn const_number<'tcx>(_tcx: TyCtxt<'tcx>, constant: ty::Const<'tcx>) -> Result<u
         .ok_or_else(|| "DI 元数据 const 参数不是确定的标量".into())
 }
 
+/// 读取工具生成的字符串常量，拒绝非字面量操作数或无效 UTF-8。
 fn text_literal<'tcx>(tcx: TyCtxt<'tcx>, operand: &mir::Operand<'tcx>) -> Result<String, String> {
     let mir::Operand::Constant(value) = operand else {
         return Err("DI 标签必须是工具生成的字面量".into());
@@ -157,6 +200,8 @@ fn text_literal<'tcx>(tcx: TyCtxt<'tcx>, operand: &mir::Operand<'tcx>) -> Result
         .ok_or("DI 标签不是字符串")?;
     String::from_utf8(bytes.to_vec()).map_err(|_| "DI 标签不是 UTF-8".into())
 }
+
+/// 从已闭合的描述 MIR 解码 provider、输入与来源，不执行描述或构造函数。
 fn read_provider<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: ty::Instance<'tcx>,
@@ -260,6 +305,8 @@ fn read_provider<'tcx>(
         origin,
     })
 }
+
+/// 从已认证投影描述中恢复 concrete/interface 类型和对应 adapter 实例。
 fn read_binding<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: ty::Instance<'tcx>,
@@ -281,6 +328,8 @@ fn read_binding<'tcx>(
         tcx.def_path_str(instance.def_id())
     ))
 }
+
+/// 汇总有限声明与查询根，选择投影和闭合 provider，验证完整图后冻结计划。
 fn compile<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Compiled<'tcx>, String> {
     emission::validate_protocol(tcx);
     let mut types = Vec::new();

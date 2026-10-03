@@ -18,6 +18,7 @@ use crate::{
     toolchain::{Toolchain, cargo_program},
 };
 
+/// 检查真实编译单元，成功后刷新 IDE 模型；初次初始化可额外生成客户端设置。
 pub(super) fn run(options: super::cli::InitOptions) -> Result<u8, String> {
     let super::cli::InitOptions {
         check: check_mode,
@@ -254,6 +255,7 @@ pub(super) fn run(options: super::cli::InitOptions) -> Result<u8, String> {
     Ok(0)
 }
 
+/// 判断用户是否已经选择 package 或 workspace，避免追加覆盖性默认选择。
 fn selects_package(arg: &std::ffi::OsStr) -> bool {
     arg == "--package"
         || arg == "--workspace"
@@ -262,6 +264,7 @@ fn selects_package(arg: &std::ffi::OsStr) -> bool {
             .is_some_and(|arg| arg.starts_with("-p") || arg.starts_with("--package="))
 }
 
+/// 将 manifest 和配置文件路径固定到当前目录，保证初始化与保存检查复用缓存。
 fn normalize_locations(
     args: Vec<OsString>,
     manifest: PathBuf,

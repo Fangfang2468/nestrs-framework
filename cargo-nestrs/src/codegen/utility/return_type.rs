@@ -1,3 +1,5 @@
+//! 共享的非 unit 返回值检查，保留直接返回、Result 与 Future 的诊断区别。
+
 use zyn::{
     syn::{self, spanned::Spanned},
     zyn,
@@ -83,6 +85,7 @@ pub(crate) fn require_non_unit_future_output_type(
     }
 }
 
+/// 取得显式返回类型；省略箭头的 unit 返回由直接返回检查负责。
 fn explicit_return_type(item: &syn::ItemFn) -> Option<&syn::Type> {
     match &item.sig.output {
         syn::ReturnType::Type(_, return_type) => Some(return_type),
@@ -90,6 +93,7 @@ fn explicit_return_type(item: &syn::ItemFn) -> Option<&syn::Type> {
     }
 }
 
+/// 识别标准 Result 的 unit 成功值，返回其实际诊断位置。
 fn unit_result_success_span(return_type: &syn::Type) -> Option<::zyn::proc_macro2::Span> {
     let syn::Type::Path(type_path) = unparenthesized_type(return_type) else {
         return None;
@@ -111,6 +115,7 @@ fn unit_result_success_span(return_type: &syn::Type) -> Option<::zyn::proc_macro
     is_unit_type(success_type).then(|| success_type.span())
 }
 
+/// 在 impl/dyn Future 的约束中查找 unit Output。
 fn unit_future_output_span(return_type: &syn::Type) -> Option<::zyn::proc_macro2::Span> {
     match unparenthesized_type(return_type) {
         syn::Type::ImplTrait(impl_trait) => impl_trait
@@ -125,6 +130,7 @@ fn unit_future_output_span(return_type: &syn::Type) -> Option<::zyn::proc_macro2
     }
 }
 
+/// 从一个标准 Future 约束中提取 unit Output 的来源位置。
 fn unit_future_output_span_in_bound(
     bound: &syn::TypeParamBound,
 ) -> Option<::zyn::proc_macro2::Span> {
@@ -148,6 +154,7 @@ fn unit_future_output_span_in_bound(
     })
 }
 
+/// 限定裸名称或 std/core 三段路径，避免消费任意同名的限定路径。
 fn is_standard_library_type_path(path: &syn::Path, module: &str, terminal: &str) -> bool {
     let mut segments = path.segments.iter();
     let Some(first) = segments.next() else {
@@ -166,10 +173,12 @@ fn is_standard_library_type_path(path: &syn::Path, module: &str, terminal: &str)
         && third.ident == terminal
 }
 
+/// 忽略语法分组后识别零元素 tuple，即 Rust 的 unit 类型。
 fn is_unit_type(return_type: &syn::Type) -> bool {
     matches!(unparenthesized_type(return_type), syn::Type::Tuple(tuple) if tuple.elems.is_empty())
 }
 
+/// 剥离括号和宏分组，以复用同一份返回类型形状判断。
 fn unparenthesized_type(return_type: &syn::Type) -> &syn::Type {
     match return_type {
         syn::Type::Paren(parenthesized) => unparenthesized_type(&parenthesized.elem),

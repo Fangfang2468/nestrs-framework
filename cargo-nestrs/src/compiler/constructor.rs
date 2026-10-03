@@ -40,6 +40,7 @@ use std::{
 #[path = "constructor_body.rs"]
 mod body;
 
+/// 原生名称解析到 AST lowering 的查询签名；包装器必须整体保留三份结果。
 type LoweringQuery = for<'tcx> fn(
     TyCtxt<'tcx>,
     (),
@@ -48,7 +49,11 @@ type LoweringQuery = for<'tcx> fn(
     &'tcx Steal<ast::Crate>,
     &'tcx ty::ResolverGlobalCtxt,
 );
+
+/// 仅初始化一次的原生 lowering 查询，用于避免包装器递归调用自己。
 static ORIGINAL: OnceLock<LoweringQuery> = OnceLock::new();
+
+/// 本轮是否捕获基于物理源码的 IDE 模型。
 static CAPTURE_IDE: AtomicBool = AtomicBool::new(false);
 
 /// 仅 discovery 使用原始物理源码坐标；最终 overlay 阶段不得覆盖该模型。
@@ -56,36 +61,64 @@ pub fn capture_ide(enabled: bool) {
     CAPTURE_IDE.store(enabled, Ordering::Relaxed);
 }
 
+/// 保存原始 lowering 查询并安装 AST 协调钩子；后续原生类型与借用检查继续执行。
 pub fn provide(providers: &mut Providers) {
     let _ = ORIGINAL.set(providers.queries.resolver_for_lowering_raw);
     providers.queries.resolver_for_lowering_raw = lower_constructors;
 }
 
+/// 某个真实服务类型选中的显式构造路径及字段来源。
 struct Constructor {
+    /// 显式构造声明的位置，供冲突和来源错误诊断。
     span: Span,
+
+    /// 生成 adapter 使用的构造输入绑定名称。
     input: String,
+
+    /// 业务字段到输入槽位及参数存储类型的映射。
     fields: BTreeMap<String, (usize, Box<ast::Ty>)>,
+
+    /// 调用用户构造函数的已认证 helper。
     activate: Helper,
+
+    /// 提供参数依赖描述的已认证 helper。
     dependencies: Helper,
 }
 
+/// 构造 helper 的解析身份；名称只用于重写 AST 引用。
 #[derive(Clone, Copy)]
 struct Helper {
+    /// 保留宏卫生上下文的 helper 标识符。
     ident: rustc_span::Ident,
+
+    /// 名称解析确认的真实定义。
     definition: DefId,
 }
 
 /// impl -> 实际 struct 的映射只依赖名称解析，不能在这里调用 type_of 等 HIR 查询。
 /// 否则 query 会在自己的结果尚未构造完毕时重入，形成循环。
 struct Declarations<'a, 'tcx> {
+    /// 已完成标准名称解析、尚未降低为 HIR 的结果。
     resolver: &'a ty::ResolverAstLowering<'tcx>,
+
+    /// inherent impl 到其实际服务 struct 的映射。
     impls: HashMap<DefId, DefId>,
+
+    /// 服务 struct 的真实定义及原始标识符。
     structs: HashMap<DefId, rustc_span::Ident>,
+
+    /// 按声明顺序记录泛型参数种类，以验证 impl 映射。
     struct_parameters: HashMap<DefId, Vec<ParameterKind>>,
+
+    /// 仅 IDE 捕获阶段收集潜在名称冲突。
     capture_identifiers: bool,
+
+    /// 已展开源码中出现的名称，供 IDE adapter 避让。
     identifiers: HashSet<String>,
 }
+
 impl<'ast> Visitor<'ast> for Declarations<'_, '_> {
+    /// 收集 IDE adapter 需要避让的已展开标识符，包括真实方法调用名称。
     fn visit_ident(&mut self, ident: &'ast rustc_span::Ident) {
         // IDE 的 inherent adapter 也可能遮蔽 trait 默认成员，或影响通过 Deref
         // 查找的业务方法。标准展开后的完整标识符目录同时包括本地声明及真实
@@ -96,6 +129,7 @@ impl<'ast> Visitor<'ast> for Declarations<'_, '_> {
         }
     }
 
+    /// 记录 struct 泛型形状及 inherent impl 的真实 Self 解析关系。
     fn visit_item(&mut self, item: &'ast ast::Item) {
         if let Some(owner) = self.resolver.owners.get(&item.id) {
             match &item.kind {
@@ -130,13 +164,23 @@ impl<'ast> Visitor<'ast> for Declarations<'_, '_> {
     }
 }
 
+/// 从已认证构造元数据收集每个服务的字段与 adapter 信息。
 struct Collect<'a, 'tcx> {
+    /// 本轮编译上下文与诊断入口。
     tcx: TyCtxt<'tcx>,
+
+    /// AST 节点对应的真实名称解析结果。
     resolver: &'a ty::ResolverAstLowering<'tcx>,
+
+    /// 已建立的 impl、struct 与泛型参数目录。
     declarations: &'a Declarations<'a, 'tcx>,
+
+    /// 按服务 DefId 保存的显式构造路径。
     constructors: HashMap<DefId, Constructor>,
 }
+
 impl<'ast> Visitor<'ast> for Collect<'_, '_> {
+    /// 读取已认证的 constructor 元数据，验证参数与成功字段来源。
     fn visit_item(&mut self, item: &'ast ast::Item) {
         if let ast::ItemKind::Impl(implementation) = &item.kind {
             for associated in &implementation.items {
@@ -279,17 +323,25 @@ impl<'ast> Visitor<'ast> for Collect<'_, '_> {
     }
 }
 
+/// 比较协议名称时去除原始标识符前缀，不修改业务 token 的卫生来源。
 fn unraw(name: &str) -> &str {
     name.strip_prefix("r#").unwrap_or(name)
 }
 
+/// 泛型参数的语法种类，用于校验 struct 与 impl 的位置对应。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ParameterKind {
+    /// 生命周期参数。
     Lifetime,
+
+    /// 类型参数。
     Type,
+
+    /// const 参数。
     Const,
 }
 
+/// 提取泛型参数种类，供 struct 与 impl 的位置映射校验。
 fn parameter_kind(kind: &ast::GenericParamKind) -> ParameterKind {
     match kind {
         ast::GenericParamKind::Lifetime => ParameterKind::Lifetime,
@@ -342,6 +394,8 @@ fn generic_constructor_covers_service(
         Res::Def(DefKind::TyParam | DefKind::ConstParam, definition) => Some(definition),
         _ => None,
     };
+
+    /// 仅接受直接类型参数引用及其外层括号，返回原始节点身份。
     fn type_parameter(value: &ast::Ty) -> Option<ast::NodeId> {
         match &value.kind {
             ast::TyKind::Path(None, path)
@@ -353,6 +407,8 @@ fn generic_constructor_covers_service(
             _ => None,
         }
     }
+
+    /// 识别无运算的 const 参数引用，允许括号或单表达式块包裹。
     fn const_parameter(value: &ast::Expr) -> Option<ast::NodeId> {
         match &value.kind {
             ast::ExprKind::Path(None, path)
@@ -400,6 +456,7 @@ fn generic_constructor_covers_service(
     seen.len() == declared.len()
 }
 
+/// 从已完成的名称解析识别服务 struct 或 impl Self，避免触发尚不可用的 HIR 查询。
 fn service_resolution(
     resolver: &ty::ResolverAstLowering<'_>,
     impls: &HashMap<DefId, DefId>,
@@ -457,15 +514,29 @@ fn candidate(
     ))
 }
 
+/// 把选中的显式构造路径写回 AST，并保持节点解析身份。
 struct Rewrite<'a, 'tcx> {
+    /// 编译会话及错误报告入口。
     tcx: TyCtxt<'tcx>,
+
+    /// 需要为新增 AST 节点同步更新的解析结果。
     resolver: &'a mut ty::ResolverAstLowering<'tcx>,
+
+    /// 用于识别 Self 或关联路径的真实 impl 映射。
     impls: &'a HashMap<DefId, DefId>,
+
+    /// 本阶段可选择的显式构造路径。
     constructors: &'a HashMap<DefId, Constructor>,
+
+    /// 已经选中过构造路径的服务，防止重复改写。
     selected: HashSet<DefId>,
+
+    /// 服务到构造输入名称的映射，供字段包装使用。
     inputs: HashMap<DefId, String>,
 }
+
 impl MutVisitor for Rewrite<'_, '_> {
+    /// 按参数来源改写真实服务字段的存储包装，保留业务字段的类型节点。
     fn visit_item(&mut self, item: &mut ast::Item) {
         if let ast::ItemKind::Struct(_, _, data) = &mut item.kind
             && let Some(owner) = self.resolver.owners.get(&item.id)
@@ -503,6 +574,7 @@ impl MutVisitor for Rewrite<'_, '_> {
         mut_visit::walk_item(self, item);
     }
 
+    /// 根据真实服务身份选择显式构造或自动字段分支，并连接已认证 helper。
     fn visit_expr(&mut self, expression: &mut ast::Expr) {
         if let Some((service, dependencies)) =
             candidate(self.tcx, expression, self.resolver, self.impls)
@@ -593,12 +665,19 @@ fn connect_helper(
         resolver.partial_res_map.insert(segment.id, resolution);
     }
 }
+
+/// 自动字段构造标记的扫描结果，用于拒绝与显式构造混用。
 #[derive(Default)]
 struct FieldMode {
+    /// 是否发现显式构造不允许共存的字段注入配置。
     mixed: bool,
+
+    /// 生成默认构造路径使用的输入绑定名称。
     input: Option<String>,
 }
+
 impl<'ast> Visitor<'ast> for FieldMode {
+    /// 读取生成的字段模式标记，以判断显式构造与自动字段配置是否混用。
     fn visit_local(&mut self, local: &'ast ast::Local) {
         if let ast::PatKind::Ident(_, ident, _) = &local.pat.kind
             && ident.as_str() == "__nestrs_constructor_field_mode"
@@ -623,8 +702,8 @@ impl<'ast> Visitor<'ast> for FieldMode {
     }
 }
 
-/// 参数宏已经生成 Option<Injection<T>> / Injection<T>。字段内的 T 仍使用自己
-/// 的原始 AST，不能把 impl<U> 的 U 复制到 struct<T> 中造成跨 owner 泛型引用。
+/// 参数宏已经生成 `Option<Injection<T>>` / `Injection<T>`。字段内的 T 仍使用自己
+/// 的原始 AST，不能把 `impl<U>` 的 U 复制到 `struct<T>` 中造成跨 owner 泛型引用。
 fn rewrite_field(
     resolver: &mut ty::ResolverAstLowering<'_>,
     field: &mut Box<ast::Ty>,
@@ -653,12 +732,16 @@ fn rewrite_field(
     *field = wrapper;
     Ok(())
 }
+
+/// 跳过类型外层括号以检查结构，保留原始 AST 不变。
 fn unparenthesized_type(mut value: &ast::Ty) -> &ast::Ty {
     while let ast::TyKind::Paren(inner) = &value.kind {
         value = inner;
     }
     value
 }
+
+/// 读取去除外层括号后的路径末段；非路径类型没有协议包装名称。
 fn path_name(value: &ast::Ty) -> Option<&str> {
     let value = unparenthesized_type(value);
     let ast::TyKind::Path(_, path) = &value.kind else {
@@ -666,6 +749,8 @@ fn path_name(value: &ast::Ty) -> Option<&str> {
     };
     Some(path.segments.last()?.ident.name.as_str())
 }
+
+/// 读取包装类型的第一个类型实参，不接受 const 或生命周期槽位。
 fn first_type(value: &ast::Ty) -> Option<&ast::Ty> {
     let value = unparenthesized_type(value);
     let ast::TyKind::Path(_, path) = &value.kind else {
@@ -679,6 +764,8 @@ fn first_type(value: &ast::Ty) -> Option<&ast::Ty> {
     };
     Some(value)
 }
+
+/// 定位可改写的第一个类型实参，同时保留外层括号和业务节点身份。
 fn first_type_mut(mut value: &mut ast::Ty) -> Option<&mut Box<ast::Ty>> {
     // 只定位泛型槽位；保留业务类型外层括号、路径、NodeId 和 span。
     loop {
@@ -701,6 +788,8 @@ fn first_type_mut(mut value: &mut ast::Ty) -> Option<&mut Box<ast::Ty>> {
         }
     }
 }
+
+/// 分配新 AST 节点，并复制源节点已有的名称解析结果。
 fn fresh_node(resolver: &mut ty::ResolverAstLowering<'_>, source: ast::NodeId) -> ast::NodeId {
     let id = resolver.next_node_id;
     resolver.next_node_id = ast::NodeId::from_u32(id.as_u32() + 1);
@@ -710,6 +799,7 @@ fn fresh_node(resolver: &mut ty::ResolverAstLowering<'_>, source: ast::NodeId) -
     id
 }
 
+/// 一次性取得 AST 与 resolver，完成收集和字段重写后交还新的 Steal 结果。
 fn lower_constructors<'tcx>(
     tcx: TyCtxt<'tcx>,
     argument: (),
@@ -774,11 +864,18 @@ fn lower_constructors<'tcx>(
 /// 检查位于 typeck 后，能识别 `Service::helper` 的延迟关联项解析以及方法项别名。
 pub fn validate(tcx: TyCtxt<'_>) -> bool {
     use rustc_hir::intravisit::{self, Visitor};
+
+    /// 在类型检查后检查 constructor 私有 helper 的真实使用身份。
     struct Audit<'tcx> {
+        /// 提供关联项解析结果与诊断的编译上下文。
         tcx: TyCtxt<'tcx>,
+
+        /// 已报告的定义与使用位置，防止重复输出。
         seen: HashSet<(DefId, Span)>,
     }
+
     impl Audit<'_> {
+        /// 拒绝普通源码访问已认证的 constructor 内部 helper，并按位置去重错误。
         fn check(&mut self, definition: DefId, span: Span) {
             let Some(name) = self.tcx.opt_item_name(definition) else {
                 return;
@@ -796,11 +893,17 @@ pub fn validate(tcx: TyCtxt<'_>) -> bool {
             }
         }
     }
+
     impl<'tcx> Visitor<'tcx> for Audit<'tcx> {
+        /// 连同嵌套 HIR 项一起审计，防止内部 helper 经嵌套定义访问。
         type NestedFilter = rustc_middle::hir::nested_filter::All;
+
+        /// 向嵌套 HIR 遍历提供同一编译会话。
         fn maybe_tcx(&mut self) -> TyCtxt<'tcx> {
             self.tcx
         }
+
+        /// 检查已解析路径的最终关联项身份和使用位置。
         fn visit_path(&mut self, path: &rustc_hir::Path<'tcx>, _: rustc_hir::HirId) {
             if let Res::Def(_, definition) = path.res {
                 self.check(
@@ -812,6 +915,8 @@ pub fn validate(tcx: TyCtxt<'_>) -> bool {
             }
             intravisit::walk_path(self, path);
         }
+
+        /// 补查 typeck 才能解析的方法与关联项，权限以最终成员的来源为准。
         fn visit_expr(&mut self, expression: &'tcx rustc_hir::Expr<'tcx>) {
             let owner = expression.hir_id.owner.def_id;
             if self.tcx.has_typeck_results(owner) {

@@ -4,6 +4,7 @@
 
 use zyn::syn::{self, Attribute, Meta};
 
+/// 仅识别裸 helper 或 nestrs 命名空间下的 lazy，不消费其他属性路径。
 pub(crate) fn is_marker(attribute: &Attribute) -> bool {
     super::is_helper_attribute(attribute, "lazy")
 }
@@ -19,6 +20,7 @@ pub(crate) fn parse_parameter(attributes: &[Attribute]) -> syn::Result<bool> {
     parse_with_message(attributes, "延迟注入参数只接受无参数的 #[lazy] 属性")
 }
 
+/// 在字段与参数间共用裸 marker 和去重检查，由调用方提供上下文诊断。
 fn parse_with_message(attributes: &[Attribute], message: &str) -> syn::Result<bool> {
     let mut found = false;
     for attribute in attributes.iter().filter(|attribute| is_marker(attribute)) {

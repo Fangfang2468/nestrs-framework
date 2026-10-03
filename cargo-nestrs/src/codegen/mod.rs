@@ -266,6 +266,7 @@ fn primary(item: syn::Item, args: Args) -> zyn::Output {
         syn::Item::Fn(function) if has_attribute_named(&function.attrs, "factory")
     );
 
+    /// 把 primary 展开中的位置与错误信息转换为原生编译诊断 token。
     fn reject(span: ::zyn::proc_macro2::Span, message: &str) -> ::zyn::proc_macro2::TokenStream {
         syn::Error::new(span, message).into_compile_error()
     }
@@ -320,6 +321,7 @@ fn primary(item: syn::Item, args: Args) -> zyn::Output {
     }
 }
 
+/// 校验隐藏显式绑定入口，并为真实 concrete/trait 配对生成类型化投影。
 fn bind(item: syn::ItemImpl, args: Args, binding_span: zyn::proc_macro2::Span) -> zyn::Output {
     let input = syn::Item::Impl(item.clone());
     if let Some(arg) = args.iter().next() {

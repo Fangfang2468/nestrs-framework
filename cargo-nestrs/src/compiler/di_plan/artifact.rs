@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// 保存反射执行清单；仅在完整 graph 入口身份匹配时另写图 sidecar，失败向调用者返回。
 pub(super) fn write<'tcx>(tcx: TyCtxt<'tcx>, plan: &Compiled<'tcx>) -> Result<(), String> {
     write_reflection(tcx, plan)?;
     let Some(_) = std::env::var_os("NESTRS_GRAPH_PLAN") else {
@@ -51,7 +52,15 @@ pub(super) fn write<'tcx>(tcx: TyCtxt<'tcx>, plan: &Compiled<'tcx>) -> Result<()
     };
     let output = metadata.with_extension("nestrs-plan.json");
     let graph = snapshot(tcx, plan);
-    let result = json!({"version":1,"binary":std::env::var("NESTRS_GRAPH_BINARY").map_err(|e|e.to_string())?,"crate":tcx.crate_name(LOCAL_CRATE).as_str(),"manifest":manifest,"source":source,"graph":graph,"metadata":metadata});
+    let result = json!({
+        "version": 1,
+        "binary": std::env::var("NESTRS_GRAPH_BINARY").map_err(|e| e.to_string())?,
+        "crate": tcx.crate_name(LOCAL_CRATE).as_str(),
+        "manifest": manifest,
+        "source": source,
+        "graph": graph,
+        "metadata": metadata
+    });
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -67,9 +76,16 @@ pub(super) fn write<'tcx>(tcx: TyCtxt<'tcx>, plan: &Compiled<'tcx>) -> Result<()
     }
     std::fs::rename(&temporary, &output).map_err(|e| e.to_string())
 }
+
+/// 只有两条路径均可规范化且指向同一位置时才视为一致。
 fn same(a: &Path, b: &Path) -> bool {
-    matches!((a.canonicalize(),b.canonicalize()),(Ok(a),Ok(b)) if a==b)
+    matches!(
+        (a.canonicalize(), b.canonicalize()),
+        (Ok(a), Ok(b)) if a == b
+    )
 }
+
+/// 将已验证计划转换为展示图，使用独立的 1 基节点和槽位编号。
 fn snapshot<'tcx>(tcx: TyCtxt<'tcx>, plan: &Compiled<'tcx>) -> Value {
     let full: Vec<_> = plan.types.iter().map(|ty| name(tcx, *ty)).collect();
     let mut groups = BTreeMap::<String, BTreeSet<&str>>::new();
@@ -103,6 +119,7 @@ fn snapshot<'tcx>(tcx: TyCtxt<'tcx>, plan: &Compiled<'tcx>) -> Value {
     }).collect();
     json!({"version":1,"nodes":nodes})
 }
+
 /// 节点初始化策略与 dependencies[].lazy 的边语义分别展示，避免把跳过预热画成代理注入。
 fn initialization(lazy: Option<bool>) -> &'static str {
     match lazy {
@@ -111,11 +128,13 @@ fn initialization(lazy: Option<bool>) -> &'static str {
         Some(false) => "eager",
     }
 }
+
+/// 将 key 转为审阅 JSON；整数使用字符串保留精度。
 fn key_value(key: &model::Key) -> Value {
     match key {
         model::Key::Default => Value::Null,
-        model::Key::Named(v) => json!({"kind":"named","value":v}),
-        model::Key::Indexed(v) => json!({"kind":"indexed","value":v.to_string()}),
+        model::Key::Named(v) => json!({"kind": "named", "value": v}),
+        model::Key::Indexed(v) => json!({"kind": "indexed", "value": v.to_string()}),
     }
 }
 
@@ -170,21 +189,43 @@ fn write_reflection<'tcx>(tcx: TyCtxt<'tcx>, plan: &Compiled<'tcx>) -> Result<()
     };
     let output = metadata.with_extension("nestrs-reflect.json");
     let options = crate::registration_codegen::startup_options(tcx.sess);
-    let nodes: Vec<_> = plan.providers.iter().enumerate().map(|(id, provider)| {
-        let inputs: Vec<_> = plan.plan.inputs[id].iter().enumerate().map(|(slot, input)| {
-            let declaration = &provider.data.inputs[slot];
-            json!({"slot": slot, "target": input.target, "projection": input.binding,
-                "optional": declaration.optional, "lazy": declaration.lazy,
-                "type": name(tcx, plan.types[declaration.type_id]),
-                "key": key_value(&declaration.key), "label": declaration.label})
-        }).collect();
-        json!({"id": id, "type": name(tcx, plan.types[provider.data.type_id]),
-            "adapter": tcx.def_path_str(provider.instance.def_id()),
-            "adapterCrate": tcx.crate_name(provider.instance.def_id().krate).as_str(),
-            "key": key_value(&provider.data.key), "lifetime": format!("{:?}", provider.data.lifetime),
-            "initialization": initialization(provider.data.lazy), "requiresScope": plan.plan.requires_scope[id],
-            "source": source(tcx, provider.source), "inputs": inputs})
-    }).collect();
+    let nodes: Vec<_> = plan
+        .providers
+        .iter()
+        .enumerate()
+        .map(|(id, provider)| {
+            let inputs: Vec<_> = plan.plan.inputs[id]
+                .iter()
+                .enumerate()
+                .map(|(slot, input)| {
+                    let declaration = &provider.data.inputs[slot];
+                    json!({
+                        "slot": slot,
+                        "target": input.target,
+                        "projection": input.binding,
+                        "optional": declaration.optional,
+                        "lazy": declaration.lazy,
+                        "type": name(tcx, plan.types[declaration.type_id]),
+                        "key": key_value(&declaration.key),
+                        "label": declaration.label
+                    })
+                })
+                .collect();
+
+            json!({
+                "id": id,
+                "type": name(tcx, plan.types[provider.data.type_id]),
+                "adapter": tcx.def_path_str(provider.instance.def_id()),
+                "adapterCrate": tcx.crate_name(provider.instance.def_id().krate).as_str(),
+                "key": key_value(&provider.data.key),
+                "lifetime": format!("{:?}", provider.data.lifetime),
+                "initialization": initialization(provider.data.lazy),
+                "requiresScope": plan.plan.requires_scope[id],
+                "source": source(tcx, provider.source),
+                "inputs": inputs
+            })
+        })
+        .collect();
     let projections: Vec<_> = plan.bindings.iter().enumerate().map(|(id, binding)| json!({
         "id": id, "concrete": name(tcx, binding.concrete), "interface": name(tcx, binding.interface),
         "adapter": tcx.def_path_str(binding.instance.def_id()),
@@ -196,18 +237,27 @@ fn write_reflection<'tcx>(tcx: TyCtxt<'tcx>, plan: &Compiled<'tcx>) -> Result<()
         .iter()
         .map(|route| {
             json!({
-                "type": name(tcx, plan.types[route.type_id]), "key": key_value(&route.key),
-                "provider": route.provider, "projection": route.binding,
+                "type": name(tcx, plan.types[route.type_id]),
+                "key": key_value(&route.key),
+                "provider": route.provider,
+                "projection": route.binding,
             })
         })
         .collect();
-    let result = json!({"format": "nestrs-reflect", "version": 1,
-        "entry": crate::protocol::PLAN_ENTRY, "crate": tcx.crate_name(LOCAL_CRATE).as_str(),
+    let result = json!({
+        "format": "nestrs-reflect",
+        "version": 1,
+        "entry": crate::protocol::PLAN_ENTRY,
+        "crate": tcx.crate_name(LOCAL_CRATE).as_str(),
         "target": tcx.sess.opts.target_triple.to_string(),
         "initialization": if options.eager {"eager"} else {"lazy"},
         "maxConcurrentActivations": options.max_concurrent_activations,
-        "nodes": nodes, "projections": projections, "routes": routes,
-        "order": plan.plan.order, "dependents": plan.plan.dependents});
+        "nodes": nodes,
+        "projections": projections,
+        "routes": routes,
+        "order": plan.plan.order,
+        "dependents": plan.plan.dependents
+    });
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }

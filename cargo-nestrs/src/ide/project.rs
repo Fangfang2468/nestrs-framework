@@ -1,3 +1,5 @@
+//! 将成功的 Cargo 工件与真实 rustc 记录关联，生成原版 rust-analyzer 项目图。
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -9,8 +11,12 @@ use serde_json::{Value, json};
 use super::capture::Unit;
 use crate::toolchain::{Toolchain, capture};
 
+/// 一个成功 Cargo 工件与其精确匹配的 rustc 编译记录。
 struct Selected {
+    /// 提供 cfg、extern、edition 和环境的真实编译记录。
     unit: Unit,
+
+    /// Cargo 确认成功的 compiler-artifact 消息。
     artifact: Value,
 }
 
@@ -271,6 +277,7 @@ pub(crate) fn generate(
     }))
 }
 
+/// 只规范化影响文件解析的 Cargo 路径变量，业务环境值保持原样。
 fn normalize_editor_environment(environment: &mut BTreeMap<String, String>) -> Result<(), String> {
     // These Cargo values feed include!/env! path resolution. Business variables
     // retain their exact values, even when a value happens to look like a path.
@@ -285,11 +292,13 @@ fn normalize_editor_environment(environment: &mut BTreeMap<String, String>) -> R
     Ok(())
 }
 
+/// 转换为当前宿主编辑器可表达的路径；Windows 拒绝设备路径和仅 verbatim 可表示的名称。
 #[cfg(not(windows))]
 fn editor_path(path: &Path) -> Result<PathBuf, String> {
     Ok(path.to_owned())
 }
 
+/// 转换为当前宿主编辑器可表达的路径；Windows 拒绝设备路径和仅 verbatim 可表示的名称。
 #[cfg(windows)]
 fn editor_path(path: &Path) -> Result<PathBuf, String> {
     use std::{ffi::OsString, path::Component, path::Prefix};
@@ -332,6 +341,7 @@ fn editor_path(path: &Path) -> Result<PathBuf, String> {
     Ok(ordinary)
 }
 
+/// 检查 Windows 普通路径组件，拒绝设备名、保留字符及会被系统截断的后缀。
 #[cfg(windows)]
 fn ordinary_windows_component(name: &std::ffi::OsStr) -> bool {
     let Some(name) = name.to_str() else {
@@ -364,12 +374,14 @@ fn ordinary_windows_component(name: &std::ffi::OsStr) -> bool {
     })
 }
 
+/// 读取 Cargo JSON 的必需字符串字段，并保留缺失字段名称。
 fn required_str<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
     value[key]
         .as_str()
         .ok_or_else(|| format!("Cargo message is missing {key}"))
 }
 
+/// 规范化 Cargo 返回的全部工件路径，以便与 rustc 的文件身份比较。
 fn artifact_files(value: &Value) -> Result<Vec<PathBuf>, String> {
     value["filenames"]
         .as_array()

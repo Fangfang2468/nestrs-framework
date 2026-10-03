@@ -16,21 +16,33 @@ use std::sync::Arc;
 pub struct BindingSpec {
     /// A fully qualified, closed, source-expressible concrete type.
     pub concrete: String,
+
     /// The complete `dyn` type, including associated types and auto traits.
     pub interface: String,
+
     /// Original declaration location, independent of generated source offsets.
     pub source_file: String,
+
+    /// 声明位置的 1 基行号，用于生成投影的来源诊断。
     pub source_line: u32,
+
+    /// 声明位置的 1 基列号。
     pub source_column: u32,
 }
 
 /// An insertion into the source version inspected by semantic discovery.
 #[derive(Clone, Debug)]
 pub struct SourceInsertion {
+    /// 需要覆盖的真实源码路径；第二轮编译仍使用该文件身份。
     pub path: PathBuf,
+
     /// Original UTF-8 byte offset, not rustc's normalized source offset.
     pub offset: usize,
+
+    /// 第一轮读取的完整文本，用于拒绝两轮之间发生的源码变化。
     pub expected_source: String,
+
+    /// 此插入点能够合法命名并生成的闭合投影能力。
     pub bindings: Vec<BindingSpec>,
 }
 
@@ -103,8 +115,12 @@ const _: () = {{
     )
 }
 
+/// 单个文件的两阶段快照与替换文本；不回写业务源码。
 struct Overlay {
+    /// 第一轮分析使用的原始文件内容。
     expected_source: String,
+
+    /// 包含自动绑定代码的第二轮编译输入。
     replacement: String,
 }
 
@@ -112,12 +128,18 @@ struct Overlay {
 /// work during the second full compilation. Artifacts are reviewable copies;
 /// rustc still sees the original paths through its `FileLoader` boundary.
 pub struct OverlayFileLoader {
+    /// 按规范路径保存的覆盖文本与对应快照。
     files: BTreeMap<PathBuf, Overlay>,
+
+    /// 未覆盖文件和二进制资源沿用的原生加载器。
     real: RealFileLoader,
+
+    /// 生成片段的精确 UTF-8 字节范围，供私有访问审计使用。
     pub trusted_ranges: Vec<(PathBuf, usize, usize)>,
 }
 
 impl OverlayFileLoader {
+    /// 校验所有第一轮快照与插入位置，再生成覆盖层和可审阅工件；任一源码变化均返回错误。
     pub fn from_insertions(
         insertions: Vec<SourceInsertion>,
         artifact_dir: &Path,
@@ -216,6 +238,7 @@ impl OverlayFileLoader {
         })
     }
 
+    /// 按真实路径查找覆盖文本；读取时再次确认源码未在两轮间变化。
     fn overlay(&self, path: &Path) -> io::Result<Option<&Overlay>> {
         let path = crate::documentation::remap_source_path(path);
         let path = path.as_path();
@@ -234,11 +257,13 @@ impl OverlayFileLoader {
 }
 
 impl FileLoader for OverlayFileLoader {
+    /// 沿文档来源映射查询真实文件是否存在。
     fn file_exists(&self, path: &Path) -> bool {
         self.real
             .file_exists(&crate::documentation::remap_source_path(path))
     }
 
+    /// 返回已校验的覆盖源码，未覆盖路径交给原生加载器。
     fn read_file(&self, path: &Path) -> io::Result<String> {
         let path = crate::documentation::remap_source_path(path);
         let path = path.as_path();
@@ -248,6 +273,7 @@ impl FileLoader for OverlayFileLoader {
         }
     }
 
+    /// 始终读取原始资源字节，避免 include_bytes! 误读源码覆盖文本。
     fn read_binary_file(&self, path: &Path) -> io::Result<Arc<[u8]>> {
         // include_bytes! observes the user's actual asset bytes, even when the
         // same path is a Rust source file being compiled with an overlay.
@@ -255,11 +281,13 @@ impl FileLoader for OverlayFileLoader {
             .read_binary_file(&crate::documentation::remap_source_path(path))
     }
 
+    /// 沿用原生加载器的当前工作目录。
     fn current_directory(&self) -> io::Result<PathBuf> {
         self.real.current_directory()
     }
 }
 
+/// 将两阶段快照不一致转换为包含实际路径的 I/O 错误。
 fn stale_source(path: &Path) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,

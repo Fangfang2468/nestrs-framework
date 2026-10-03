@@ -20,14 +20,19 @@ use rustc_middle::{
 };
 use std::sync::OnceLock;
 
+/// 原生有效可见性查询的签名。
 type EffectiveQuery = for<'tcx> fn(TyCtxt<'tcx>, ()) -> &'tcx EffectiveVisibilities;
+
+/// 保存原查询，代码保留在其结果副本上追加。
 static ORIGINAL_EFFECTIVE: OnceLock<EffectiveQuery> = OnceLock::new();
 
+/// 保存原始有效可见性查询并安装代码保留钩子。
 pub fn provide(providers: &mut Providers) {
     ORIGINAL_EFFECTIVE.get_or_init(|| providers.queries.effective_visibilities);
     providers.queries.effective_visibilities = declaration_reachability;
 }
 
+/// 为真实 typed adapter 和 runtime ABI 添加原生代码可达性，不改变源码可见性。
 fn declaration_reachability(tcx: TyCtxt<'_>, (): ()) -> &EffectiveVisibilities {
     let original =
         ORIGINAL_EFFECTIVE

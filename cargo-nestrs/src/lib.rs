@@ -5,14 +5,21 @@
 mod protocol;
 
 pub mod bridge;
+
 #[doc(hidden)]
 pub mod codegen;
+
 pub mod commands;
+
 #[doc(hidden)]
 pub mod di_plan;
+
 pub mod graph;
+
 #[doc(hidden)]
 pub mod ide;
+
 #[doc(hidden)]
 pub mod project_config;
+
 pub mod toolchain;

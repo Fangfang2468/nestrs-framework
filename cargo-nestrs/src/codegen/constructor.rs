@@ -19,23 +19,40 @@ use super::injection::{
 /// 普通编译保留候选给 driver；编辑器直接渲染已验证的构造选择。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConstructorMode {
+    /// 保留自动与显式候选，等待 driver 在真实名称解析后选择。
     Deferred,
+
+    /// IDE 模型已确认自动字段构造，只输出该候选。
     Automatic,
+
+    /// IDE 模型已确认显式关联构造，只引用对应的输入和激活 helper。
     Explicit,
 }
 
 /// 一项构造参数对应一个图输入；即使参数只用于校验或计算普通字段，也不能删除此输入。
 #[derive(Clone, Debug)]
 pub(crate) struct ConstructorParameterSpec {
+    /// 参数在完整构造输入中的连续槽位，按签名顺序分配。
     pub(crate) input_slot: usize,
+
+    /// 保留原始卫生的业务参数名，用作依赖标签与诊断来源。
     pub(crate) ident: syn::Ident,
+
+    /// 剥离外层 Option 后的真实请求语法类型。
     pub(crate) service_type: Type,
+
+    /// 静态服务 key；缺省时选择默认 key。
     pub(crate) key: Option<ServiceKeySpec>,
+
+    /// 缺少匹配服务时是否允许交付 None。
     pub(crate) optional: bool,
+
+    /// 是否按值交付 LazyInjection，而不是已就绪的 Injection。
     pub(crate) lazy: bool,
 }
 
 impl ConstructorParameterSpec {
+    /// 把参数事实交给字段和 factory 共用的输入描述生成器。
     pub(crate) fn dependency_request(&self) -> DependencyRequest {
         DependencyRequest {
             input_slot: self.input_slot,
@@ -48,17 +65,26 @@ impl ConstructorParameterSpec {
     }
 }
 
+/// 关联构造返回值的语法形态，决定是否生成错误映射。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConstructorResultKind {
+    /// 关联构造直接返回 Self。
     Direct,
+
+    /// 关联构造返回 Result<Self, E>，错误由 adapter 转为 ConstructionError。
     Result,
 }
 
+/// 显式构造的共享分析结果；业务函数体不在此阶段解释。
 #[derive(Clone, Debug)]
 pub(crate) struct ConstructorAnalysis {
     /// 参数 helper 已消费；输入类型已改为按值 Injection / LazyInjection。
     pub(crate) item: ImplItemFn,
+
+    /// 按原签名顺序保存的输入事实，不因字段是否存储参数而裁剪。
     pub(crate) parameters: Vec<ConstructorParameterSpec>,
+
+    /// 决定激活 adapter 的成功值提取与错误转换方式。
     pub(crate) result_kind: ConstructorResultKind,
 }
 
@@ -106,6 +132,7 @@ pub(crate) fn analyze_constructor(mut item: ImplItemFn) -> syn::Result<Construct
     })
 }
 
+/// 拒绝接收 self、异步、unsafe、extern 及方法自有泛型，保留 impl 泛型。
 fn validate_signature(item: &ImplItemFn) -> syn::Result<()> {
     let signature = &item.sig;
     let unsupported = if signature.asyncness.is_some() {
@@ -127,6 +154,7 @@ fn validate_signature(item: &ImplItemFn) -> syn::Result<()> {
     Ok(())
 }
 
+/// 识别 Self 或标准 Result<Self, E>，在宏期拒绝不支持的输出语法。
 fn result_kind(output: &ReturnType) -> syn::Result<ConstructorResultKind> {
     if let ReturnType::Type(_, ty) = output {
         if is_self_type(ty) {
@@ -151,10 +179,12 @@ fn result_kind(output: &ReturnType) -> syn::Result<ConstructorResultKind> {
     ))
 }
 
+/// 忽略括号和宏分组后判断是否为裸 Self。
 fn is_self_type(ty: &Type) -> bool {
     matches!(inject::unparenthesized_type(ty), Type::Path(path) if path.qself.is_none() && path.path.is_ident("Self"))
 }
 
+/// 识别裸类型名或 std/core 的指定路径，不在宏阶段解析别名。
 fn is_standard_path(path: &Path, module: &str, terminal: &str) -> bool {
     let segments: Vec<_> = path.segments.iter().collect();
     match segments.as_slice() {
@@ -168,6 +198,7 @@ fn is_standard_path(path: &Path, module: &str, terminal: &str) -> bool {
     }
 }
 
+/// 只接受简单标识符模式，保留 mut 与原始标识符的业务身份。
 fn parameter_ident(pattern: &Pat) -> syn::Result<&syn::Ident> {
     match pattern {
         Pat::Ident(identifier) if identifier.by_ref.is_none() && identifier.subpat.is_none() => {
@@ -180,6 +211,7 @@ fn parameter_ident(pattern: &Pat) -> syn::Result<&syn::Ident> {
     }
 }
 
+/// 校验并消费参数上的 inject/lazy helper；业务值必须在构造函数体内计算。
 fn take_markers(attributes: &mut Vec<Attribute>) -> syn::Result<(Option<ServiceKeySpec>, bool)> {
     for attribute in attributes.iter() {
         if inject::is_marker(attribute) || lazy::is_marker(attribute) {

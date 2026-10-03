@@ -28,10 +28,19 @@ use rustc_hir::{
 };
 use rustc_middle::ty::{self, TyCtxt};
 
+/// 真实源码检查阶段写出文档载体的环境配置键。
 const CAPTURE: &str = "NESTRS_DOCUMENTATION_CAPTURE";
+
+/// rustdoc 示例构建产物与源码快照目录的环境键。
 const BUILDER: &str = "NESTRS_DOCUMENTATION_BUILDER";
+
+/// 文档示例编译使用的私有 bridge 工件环境键。
 const BRIDGE: &str = "NESTRS_DOCUMENTATION_BRIDGE";
+
+/// 当前 rustdoc 示例源码路径，用于恢复相对 include 来源。
 const SNIPPET_FILE: &str = "NESTRS_DOCUMENTATION_SNIPPET_FILE";
+
+/// 当前示例的原始文档目录环境键。
 const SOURCE_DIRECTORY: &str = "NESTRS_DOCUMENTATION_SOURCE_DIRECTORY";
 
 /// 文档源分析需要导出 HIR，文档示例需要生成最终入口的 registry；这两种编译都不能
@@ -172,6 +181,7 @@ pub fn capture(tcx: TyCtxt<'_>) -> Result<(), String> {
     Ok(())
 }
 
+/// 恢复 rustdoc 使用的具名项目路径；无法保留测试名称的 impl 形态返回错误。
 fn documentation_components(
     tcx: TyCtxt<'_>,
     definition: LocalDefId,
@@ -215,25 +225,42 @@ fn documentation_components(
     }
 }
 
+/// 按语义项目路径组织的 doctest 文档树，不复制业务实现。
 #[derive(Default)]
 struct DocumentationNode {
+    /// 当前项目按原顺序保留的文档片段。
     fragments: Vec<Fragment>,
+
+    /// 具名子项的文档节点，输出次序由路径排序决定。
     children: BTreeMap<String, DocumentationNode>,
 }
 
+/// 一段文档文本及恢复相对 include 所需的来源。
 struct Fragment {
+    /// 保留 rustdoc 示例语义的原始文档内容。
     text: String,
+
+    /// 决定载体以行注释、块注释还是外部 Markdown 输出。
     kind: FragmentKind,
+
+    /// 原始 Rust 或 Markdown 路径；缺失时不能安全输出载体。
     source: Option<PathBuf>,
 }
 
+/// 文档片段的原始表示方式。
 enum FragmentKind {
+    /// 普通行文档注释。
     Line,
+
+    /// 普通块文档注释。
     Block,
+
+    /// doc 属性提供的文本，写入独立 Markdown 载体。
     Raw,
 }
 
 impl DocumentationNode {
+    /// 递归输出纯文档载体及来源索引；来源缺失或跨文件歧义时拒绝生成。
     fn emit_files(
         &self,
         path: &Path,
@@ -285,6 +312,7 @@ impl DocumentationNode {
     }
 }
 
+/// 拆分并校验可写入载体的项目路径，保留原始标识符合法性。
 fn item_components(path: &str, crate_name: &str) -> Result<Vec<String>, String> {
     // Local def-path display may omit the crate prefix; downstream paths retain it.
     let suffix = path
@@ -609,6 +637,7 @@ pub fn remap_source_path(path: &Path) -> PathBuf {
     remap_relative_source(path, &snippet, &directory)
 }
 
+/// 将 snippet 下的相对读取映射回原文档目录，保留绝对路径原义。
 fn remap_relative_source(path: &Path, snippet: &Path, directory: &Path) -> PathBuf {
     if path == snippet {
         return path.to_owned();
@@ -619,6 +648,7 @@ fn remap_relative_source(path: &Path, snippet: &Path, directory: &Path) -> PathB
         .map_or_else(|| path.to_owned(), |relative| directory.join(relative))
 }
 
+/// 按显式 sysroot 或 rustdoc 位置定位配套 rustc；实际身份仍由 driver 检查。
 fn compiler_path(rustdoc: &OsStr, arguments: &[String]) -> Result<PathBuf, String> {
     let executable = if cfg!(windows) { "rustc.exe" } else { "rustc" };
     if let Some(sysroot) = option_value(arguments, "--sysroot") {
@@ -642,6 +672,7 @@ fn compiler_path(rustdoc: &OsStr, arguments: &[String]) -> Result<PathBuf, Strin
         .unwrap_or_else(|| executable.into()))
 }
 
+/// 兼容 --option value 与 --option=value 两种参数形式。
 fn option_value<'a>(arguments: &'a [String], option: &str) -> Option<&'a str> {
     arguments.iter().enumerate().find_map(|(index, argument)| {
         if argument == option {
@@ -652,12 +683,17 @@ fn option_value<'a>(arguments: &'a [String], option: &str) -> Option<&'a str> {
     })
 }
 
+/// 从 rustdoc 参数恢复的真实源码预检查输入。
 #[derive(Debug)]
 struct AnalysisArguments {
+    /// 可传给 driver/rustc 的参数序列。
     compiler: Vec<String>,
+
+    /// 源码参数的位置，供后续定位或替换。
     source_index: Option<usize>,
 }
 
+/// 筛出真实源码分析所需的 rustc 参数，分离 rustdoc 选项并定位输入文件。
 fn analysis_arguments(arguments: &[String], directory: &Path) -> Result<AnalysisArguments, String> {
     let compiler_options = [
         "--crate-name",
