@@ -56,6 +56,30 @@ fn constructors_preserve_dependency_and_lifetime_semantics_across_crates() {
 }
 
 #[test]
+fn parenthesized_constructor_optional_fields_preserve_slots_and_leases() {
+    for release in [false, true] {
+        for operation in ["check", "run"] {
+            let mut command = command(operation, "parenthesized_optional");
+            if release {
+                command.arg("--release");
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "parenthesized optional {operation} release={release}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if operation == "run" {
+                assert!(
+                    String::from_utf8_lossy(&output.stdout)
+                        .contains("constructor parenthesized optional contracts passed")
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn generic_constructor_identity_is_total_before_connecting_associated_adapters() {
     for release in [false, true] {
         let mut valid = command("run", "generic_identity");

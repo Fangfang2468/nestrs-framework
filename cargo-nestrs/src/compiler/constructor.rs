@@ -653,13 +653,21 @@ fn rewrite_field(
     *field = wrapper;
     Ok(())
 }
+fn unparenthesized_type(mut value: &ast::Ty) -> &ast::Ty {
+    while let ast::TyKind::Paren(inner) = &value.kind {
+        value = inner;
+    }
+    value
+}
 fn path_name(value: &ast::Ty) -> Option<&str> {
+    let value = unparenthesized_type(value);
     let ast::TyKind::Path(_, path) = &value.kind else {
         return None;
     };
     Some(path.segments.last()?.ident.name.as_str())
 }
 fn first_type(value: &ast::Ty) -> Option<&ast::Ty> {
+    let value = unparenthesized_type(value);
     let ast::TyKind::Path(_, path) = &value.kind else {
         return None;
     };
@@ -671,18 +679,27 @@ fn first_type(value: &ast::Ty) -> Option<&ast::Ty> {
     };
     Some(value)
 }
-fn first_type_mut(value: &mut ast::Ty) -> Option<&mut Box<ast::Ty>> {
-    let ast::TyKind::Path(_, path) = &mut value.kind else {
-        return None;
-    };
-    let ast::GenericArgs::AngleBracketed(args) = path.segments.last_mut()?.args.as_deref_mut()?
-    else {
-        return None;
-    };
-    let ast::AngleBracketedArg::Arg(ast::GenericArg::Type(value)) = args.args.first_mut()? else {
-        return None;
-    };
-    Some(value)
+fn first_type_mut(mut value: &mut ast::Ty) -> Option<&mut Box<ast::Ty>> {
+    // 只定位泛型槽位；保留业务类型外层括号、路径、NodeId 和 span。
+    loop {
+        match &mut value.kind {
+            ast::TyKind::Paren(inner) => value = inner,
+            ast::TyKind::Path(_, path) => {
+                let ast::GenericArgs::AngleBracketed(args) =
+                    path.segments.last_mut()?.args.as_deref_mut()?
+                else {
+                    return None;
+                };
+                let ast::AngleBracketedArg::Arg(ast::GenericArg::Type(value)) =
+                    args.args.first_mut()?
+                else {
+                    return None;
+                };
+                return Some(value);
+            }
+            _ => return None,
+        }
+    }
 }
 fn fresh_node(resolver: &mut ty::ResolverAstLowering<'_>, source: ast::NodeId) -> ast::NodeId {
     let id = resolver.next_node_id;

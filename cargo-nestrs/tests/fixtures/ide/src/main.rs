@@ -100,6 +100,30 @@ impl ConstructorService {
     }
 }
 
+struct MissingConstructorDependency;
+
+#[allow(unused_parens)]
+#[injectable]
+struct ParenthesizedConstructor<T: Send + Sync + 'static> {
+    present: (((::std::option::Option<(T)>))),
+    absent: ((Option<MissingConstructorDependency>)),
+    delayed_present: ((::core::option::Option<((T))>)),
+    delayed_absent: (((Option<MissingConstructorDependency>))),
+}
+
+#[allow(unused_parens)]
+impl<T: Send + Sync + 'static> ParenthesizedConstructor<T> {
+    #[constructor]
+    fn new(
+        present: ((Option<T>)),
+        absent: (::std::option::Option<MissingConstructorDependency>),
+        #[lazy] delayed_present: (::core::option::Option<T>),
+        #[lazy] delayed_absent: ((Option<MissingConstructorDependency>)),
+    ) -> Self {
+        Self { present, absent, delayed_present, delayed_absent }
+    }
+}
+
 struct Client(&'static str);
 
 #[factory]
@@ -159,5 +183,10 @@ async fn main() {
     assert_eq!(ConstructorService::__nestrs_ide_constructor_1_dependencies(), 53);
     assert_eq!(ConstructorService::__nestrs_ide_constructor_2_activate(), 59);
     assert_eq!(ConstructorService::__nestrs_ide_constructor_2_dependencies(), 61);
+    let optional = provider.get_required_service::<ParenthesizedConstructor<External>>().await.unwrap();
+    assert_eq!(optional.present.as_ref().unwrap().number, 23);
+    assert!(optional.absent.is_none());
+    assert_eq!(optional.delayed_present.as_ref().unwrap().get().await.unwrap().number, 23);
+    assert!(optional.delayed_absent.is_none());
     provider.dispose_async().await.unwrap();
 }

@@ -281,6 +281,12 @@ def validate_model(path, project, alternate, release):
     fields = {field["name"]: field for field in selections[0]["fields"]}
     assert fields["constructor_port"]["slot"] == 0 and not fields["constructor_port"]["lazy"], fields
     assert fields["later"]["slot"] == 1 and fields["later"]["lazy"], fields
+    optional_selections = [entry["selection"] for entry in constructor_model["declarations"]
+                           if "struct ParenthesizedConstructor" in entry["input"]]
+    assert len(optional_selections) == 1 and optional_selections[0]["constructor"], optional_selections
+    optional_fields = {field["name"]: field for field in optional_selections[0]["fields"]}
+    for slot, name in enumerate(["present", "absent", "delayed_present", "delayed_absent"]):
+        assert optional_fields[name] == {"name": name, "slot": slot, "lazy": slot >= 2, "optional": True}, optional_fields
     assert (Path(app["env"]["OUT_DIR"]) / "generated.rs").is_file(), app["env"]
     dependencies = {entry["name"]: crates[entry["crate"]] for entry in app["deps"]}
     assert {"nestrs", "nestrs_core", "tokio"} <= dependencies.keys(), dependencies.keys()
@@ -315,6 +321,14 @@ def lsp_cases(server, project, settings, environment, output, full, release):
         )
         assert "Default::default" not in constructor_expanded["expansion"], constructor_expanded
         evidence["constructor_expansion"] = constructor_expanded
+        optional_params = params(uri, source, "#[injectable]\nstruct ParenthesizedConstructor", len("#["))
+        optional_expanded = session.until(
+            lambda: session.request("rust-analyzer/expandMacro", optional_params),
+            lambda item: item and "LazyInjection" in item.get("expansion", "") and "Injection" in item.get("expansion", ""),
+            "parenthesized constructor optional expansion",
+        )
+        assert "Default::default" not in optional_expanded["expansion"], optional_expanded
+        evidence["constructor_optional_expansion"] = optional_expanded
         evidence["cold_diagnostics"] = session.clean_diagnostics(uri)
         # Generated associated helpers must neither shadow these business
         # members nor redirect navigation into a macro expansion.
@@ -359,6 +373,20 @@ def lsp_cases(server, project, settings, environment, output, full, release):
         assert lazy_field and "LazyInjection" in json.dumps(lazy_field), lazy_field
         evidence["constructor_field_hover"] = constructor_field
         evidence["constructor_lazy_hover"] = lazy_field
+        optional_fields = {}
+        for name, token in [("present", "Injection"), ("absent", "Injection"),
+                            ("delayed_present", "LazyInjection"), ("delayed_absent", "LazyInjection")]:
+            location = params(uri, source, f"optional.{name}.", len("optional."))
+            hover = session.request("textDocument/hover", location)
+            assert hover and "Option" in json.dumps(hover) and token in json.dumps(hover), (name, hover)
+            definitions = session.request("textDocument/definition", location)
+            definitions = [definitions] if isinstance(definitions, dict) else definitions or []
+            expected_line = position(source, f"    {name}: (")["line"]
+            assert any(file_uri_matches(item.get("targetUri", item.get("uri")), main)
+                       and item.get("targetSelectionRange", item.get("range", {})).get("start", {}).get("line") == expected_line
+                       for item in definitions), (name, definitions)
+            optional_fields[name] = {"hover": hover, "definitions": definitions}
+        evidence["constructor_optional_fields"] = optional_fields
         factory = session.request("textDocument/hover", params(uri, source, "Client(port.label())", len("Client(")))
         assert factory and "Port" in json.dumps(factory) and "&" in json.dumps(factory), factory
         evidence["factory_hover"] = factory

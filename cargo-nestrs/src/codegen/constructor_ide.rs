@@ -130,7 +130,7 @@ pub(super) fn apply_fields(
                         ),
                     )
                 })?;
-            let (ty, optional) = split_optional(
+            let (_, optional) = split_optional(
                 &field.ty,
                 GrammarMessages {
                     optional_shape: "constructor 可选字段必须写为 Option<T>",
@@ -142,19 +142,46 @@ pub(super) fn apply_fields(
                     "constructor IDE 模型的可选性与字段不一致，请保存并刷新项目模型",
                 ));
             }
-            let token: syn::Type = if plan.lazy {
+            let slot = if optional {
+                optional_field_slot(&mut field.ty)?
+            } else {
+                &mut field.ty
+            };
+            let ty = &*slot;
+            *slot = if plan.lazy {
                 syn::parse_quote!(::nestrs_core::LazyInjection<#ty>)
             } else {
                 syn::parse_quote!(::nestrs_core::Injection<#ty>)
             };
-            field.ty = if optional {
-                syn::parse_quote!(::core::option::Option<#token>)
-            } else {
-                token
-            };
         }
     }
     Ok(())
+}
+
+/// 与 rustc 字段改写相同，只替换 Option 的服务槽，保留原路径和分组的 AST/span。
+fn optional_field_slot(mut ty: &mut syn::Type) -> syn::Result<&mut syn::Type> {
+    loop {
+        ty = match ty {
+            syn::Type::Paren(value) => &mut value.elem,
+            syn::Type::Group(value) => &mut value.elem,
+            syn::Type::Path(value) => {
+                let span = syn::spanned::Spanned::span(value);
+                if let Some(segment) = value.path.segments.last_mut()
+                    && let syn::PathArguments::AngleBracketed(arguments) = &mut segment.arguments
+                    && let Some(syn::GenericArgument::Type(inner)) = arguments.args.first_mut()
+                {
+                    return Ok(inner);
+                }
+                return Err(syn::Error::new(span, "constructor 可选字段缺少服务类型"));
+            }
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    ty,
+                    "constructor 可选字段必须写为 Option<T>",
+                ));
+            }
+        };
+    }
 }
 
 #[cfg(test)]
@@ -237,6 +264,41 @@ mod tests {
         assert!(tokens.contains("Injection < Database < T > >"));
         assert!(tokens.contains("Option < :: nestrs_core :: LazyInjection < dyn Audit > >"));
         assert!(tokens.contains("label : String"));
+    }
+
+    #[test]
+    fn editor_optional_fields_preserve_parentheses_qualified_paths_and_generic_types() {
+        let mut structure: syn::ItemStruct = syn::parse_quote! {
+            struct Service<T> {
+                present: (((::std::option::Option<((T))>))),
+                absent: ((::core::option::Option<Missing<T>>)),
+            }
+        };
+        let expected: syn::ItemStruct = syn::parse_quote! {
+            struct Service<T> {
+                present: (((::std::option::Option<::nestrs_core::Injection<((T))>>))),
+                absent: ((::core::option::Option<::nestrs_core::LazyInjection<Missing<T>>>)),
+            }
+        };
+        let selection = Selection {
+            constructor: true,
+            fields: vec![
+                FieldPlan {
+                    name: "present".into(),
+                    slot: 0,
+                    lazy: false,
+                    optional: true,
+                },
+                FieldPlan {
+                    name: "absent".into(),
+                    slot: 1,
+                    lazy: true,
+                    optional: true,
+                },
+            ],
+        };
+        apply_fields(&mut structure, &selection).unwrap();
+        assert_eq!(structure, expected);
     }
 
     #[test]
