@@ -1,0 +1,11 @@
+[package]
+name = "plain-helper"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+nestrs-core = { path = "../../../../../nestrs-core", optional = true }
+
+[features]
+core-control = ["dep:nestrs-core"]

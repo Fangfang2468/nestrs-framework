@@ -225,6 +225,13 @@ struct TransitiveCoreProbe {
     runtime: Option<PathBuf>,
 }
 impl Callbacks for TransitiveCoreProbe {
+    fn config(&mut self, config: &mut interface::Config) {
+        // 即使本库没有 core 依赖，下游也可能把它的泛型 trait 转发闭合为查询。
+        // cargo check 默认可省略这些原生 MIR，导致 check 与 build 得到不同的
+        // 查询图。保留编译器自己的 metadata，不注入服务声明或运行期依赖。
+        config.opts.unstable_opts.always_encode_mir = true;
+    }
+
     fn after_expansion<'tcx>(
         &mut self,
         _compiler: &interface::Compiler,

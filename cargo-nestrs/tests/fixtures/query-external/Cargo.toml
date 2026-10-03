@@ -1,0 +1,35 @@
+[package]
+name = "nestrs-query-external"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+members = ["plain-helper", "plain-relay"]
+
+[dependencies]
+nestrs-core = { path = "../../../../nestrs-core" }
+plain-helper = { path = "plain-helper" }
+plain-relay = { path = "plain-relay" }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
+
+[features]
+helper-core = ["plain-helper/core-control", "plain-relay/core-control"]
+direct-only = []
+primitive-direct = []
+invalid-forward = []
+invalid-family = []
+invalid-family-default = []
+invalid-family-return = []
+invalid-family-nested = []
+invalid-family-dynamic = []
+invalid-primitive = []
+invalid-erasure = []
+invalid-deep = []
+invalid-closure = []
+invalid-default = []
+invalid-associated = []
+invalid-unexecuted = []
+invalid-unexecuted-erasure = []
+invalid-unexecuted-associated = []
+invalid-direct = []

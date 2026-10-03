@@ -85,7 +85,41 @@ const CASES: &[(&str, &str)] = &[
         "projected_small_control",
         include_str!("fixtures/type-budget/projected_small_control.rs"),
     ),
+    (
+        "trait_distinct_impls",
+        include_str!("fixtures/type-budget/trait_distinct_impls.rs"),
+    ),
+    (
+        "trait_distinct_split_control",
+        include_str!("fixtures/type-budget/trait_distinct_split_control.rs"),
+    ),
+    (
+        "trait_distinct_default",
+        include_str!("fixtures/type-budget/trait_distinct_default.rs"),
+    ),
+    (
+        "trait_distinct_constants",
+        include_str!("fixtures/type-budget/trait_distinct_constants.rs"),
+    ),
+    (
+        "trait_distinct_cross_crate",
+        include_str!("fixtures/type-budget/trait_distinct_cross_crate.rs"),
+    ),
+    (
+        "trait_distinct_cross_crate_control",
+        include_str!("fixtures/type-budget/trait_distinct_cross_crate_control.rs"),
+    ),
+    (
+        "trait_method_growth",
+        include_str!("fixtures/type-budget/trait_method_growth.rs"),
+    ),
+    (
+        "trait_constant_growth",
+        include_str!("fixtures/type-budget/trait_constant_growth.rs"),
+    ),
 ];
+
+const DISTINCT_LIBRARY: &str = include_str!("fixtures/type-budget/distinct_library.rs");
 
 #[test]
 fn ordinary_complex_types_do_not_consume_di_budgets_and_real_di_growth_is_rejected() {
@@ -127,6 +161,9 @@ with-di = []
             .collect::<String>()
     );
     fs::write(directory.join("src/wide.rs"), &wide).unwrap();
+    let wide_generic = wide.replace("type Wide = (", "type WideOf<T> = (T,");
+    fs::write(directory.join("src/wide_generic.rs"), &wide_generic).unwrap();
+    fs::write(directory.join("src/lib.rs"), DISTINCT_LIBRARY).unwrap();
     for &(name, source) in CASES {
         fs::write(directory.join(format!("src/bin/{name}.rs")), source).unwrap();
     }
@@ -156,6 +193,12 @@ with-di = []
                     | "trait_associated_const"
                     | "fixed_query_generic"
                     | "projected_small_control"
+                    | "trait_distinct_impls"
+                    | "trait_distinct_split_control"
+                    | "trait_distinct_default"
+                    | "trait_distinct_constants"
+                    | "trait_distinct_cross_crate"
+                    | "trait_distinct_cross_crate_control"
             );
             let mut command = Command::new(if native {
                 "cargo"
@@ -255,6 +298,14 @@ with-di = []
     assert_eq!(
         fs::read_to_string(directory.join("src/wide.rs")).unwrap(),
         wide
+    );
+    assert_eq!(
+        fs::read_to_string(directory.join("src/wide_generic.rs")).unwrap(),
+        wide_generic
+    );
+    assert_eq!(
+        fs::read_to_string(directory.join("src/lib.rs")).unwrap(),
+        DISTINCT_LIBRARY
     );
     for &(name, source) in CASES {
         assert_eq!(

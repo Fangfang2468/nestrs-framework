@@ -4,7 +4,8 @@
 //! 摘要分别记录直接查询的 T、引用的函数项类型 F 和常量的真实定义及实参；查询与
 //! 函数摘要复制到 MIR 入口，不可变 static 的闭合摘要汇入私有 summary 函数，常量
 //! 引用沿用原生 required_consts。因此 `if false`、未调用函数和 Release 消除都
-//! 不会删掉业务声明。标准库转发只按携带已知查询类型的闭合调用读取其原生 MIR；
+//! 不会删掉业务声明。无摘要的外部转发只按携带已知查询类型的闭合调用读取原生 MIR，
+//! 并使用 rustc 的 mentioned_items/required_consts 保留优化前的调用与常量身份；
 //! 泛型替换和调用展开使用显式队列，不执行业务函数，也不求值静态函数指针。
 
 extern crate rustc_index;
@@ -96,10 +97,41 @@ struct Record<'tcx> {
 
 /// 粗筛展开链使用 arena 索引，避免深链的递归遍历和析构。不同闭合调用的初始
 /// 大类型互不影响；只有同一条发现链反复扩大同一定义的实参才施加增长防护。
-struct DiscoveryStep {
+struct DiscoveryStep<'tcx> {
     parent: usize,
-    definition: Option<DefId>,
+    definition: Option<ty::InstanceKind<'tcx>>,
     size: usize,
+}
+
+fn validate_discovery_growth<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    discovery: &[DiscoveryStep<'tcx>],
+    mut ancestor: usize,
+    definition: ty::InstanceKind<'tcx>,
+    size: usize,
+    span: Span,
+    origin: Span,
+) {
+    let limit = (tcx.recursion_limit().0 * 8).max(1024);
+    if size <= limit {
+        return;
+    }
+    while ancestor != 0 {
+        let step = &discovery[ancestor];
+        if step.definition == Some(definition) && step.size < size {
+            expansion_error(
+                tcx,
+                span,
+                origin,
+                "single_type_tree_nodes",
+                limit,
+                format!(
+                    "DI 泛型类型不断增长或过于复杂：单个类型树超过 {limit} 个节点；请终止递归泛型查询或拆分类型\n查询载体发现过程中，同一函数或常量的泛型实参沿调用链持续增长"
+                ),
+            );
+        }
+        ancestor = step.parent;
+    }
 }
 
 /// 常量引用保留真实定义与实参；FnPtr 只描述签名，不能恢复其初始化器身份。
@@ -676,8 +708,14 @@ fn external_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
             })
         })
         .collect();
-    // rustc 在 promotion 和优化之前记录此列表；if false 中被消除的常量引用也在。
-    // 不读取已求值函数地址，不遍历分配，也不把常量签名误当成函数项。
+    records.extend(constant_summary(tcx, body));
+    records
+}
+
+// rustc 在 promotion 和优化之前记录此列表；if false 中被消除的常量引用也在。
+// 不读取已求值函数地址，不遍历分配，也不把常量签名误当成函数项。
+fn constant_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> Vec<Record<'tcx>> {
+    let mut records = Vec::new();
     for constant in body.required_consts.iter().flatten() {
         if let mir::Const::Unevaluated(value, _) = constant.const_
             && value.promoted.is_none()
@@ -696,9 +734,6 @@ fn external_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
     records
 }
 
-/// 标准库没有 Nestrs marker，但其泛型 MIR 保留了真实函数项与 trait 调用。
-/// 只在闭合调用的实参携带已知查询实现/闭包时读取，不扫描整套标准库；函数指针
-/// 转换前的 FnDef 同样保留，不能只看 Call terminator 丢掉传递给回调的函数项。
 fn drop_callable<'tcx>(tcx: TyCtxt<'tcx>, value: Ty<'tcx>, span: Span) -> Record<'tcx> {
     let method = tcx.require_lang_item(LangItem::DropGlue, span);
     Record {
@@ -795,14 +830,51 @@ fn mir_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> Vec<Record<'t
         records: drop_summary(tcx, body),
     };
     calls.records.extend(unsize_summary(tcx, body));
+    calls.records.extend(constant_summary(tcx, body));
+    // 普通依赖与标准库不生产 Nestrs marker，但 rustc 自身在优化前保存调用、
+    // 析构与擦除身份。必须读取这份列表，否则 if false/Release 消除会使相同的
+    // 已检查泛型转发随优化级别丢根。当前 MIR 再补充函数项 operand 等存活引用。
+    for item in body.mentioned_items.iter().flatten() {
+        let value = match item.node {
+            mir::MentionedItem::Fn(value) | mir::MentionedItem::Closure(value) => {
+                QueryValue::Callable(tcx.erase_and_anonymize_regions(value))
+            }
+            mir::MentionedItem::Drop(value) => {
+                calls.records.push(drop_callable(tcx, value, item.span));
+                continue;
+            }
+            mir::MentionedItem::UnsizeCast {
+                source_ty,
+                target_ty,
+            } => QueryValue::Unsize(
+                tcx.erase_and_anonymize_regions(source_ty),
+                tcx.erase_and_anonymize_regions(target_ty),
+            ),
+        };
+        calls.records.push(Record {
+            value,
+            span: item.span,
+        });
+    }
     mir::visit::Visitor::visit_body(&mut calls, body);
     let mut seen = HashSet::new();
     calls.records.retain(|record| seen.insert(record.value));
     calls.records
 }
 
-fn standard_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
-    if tcx.is_mir_available(id) {
+/// 无 Nestrs 摘要的普通外部库与标准库按同一规则补充原生调用边。仅在真实闭合
+/// 调用携带已知查询身份时读取，不扫描依赖库，也不以函数指针签名猜测目标。
+fn native_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
+    if matches!(
+        tcx.def_kind(id),
+        DefKind::Const { .. } | DefKind::AssocConst { .. } | DefKind::InlineConst
+    ) {
+        if tcx.defaultness(id).has_value() && tcx.trivial_const(id).is_none() {
+            mir_summary(tcx, tcx.mir_for_ctfe(id))
+        } else {
+            Vec::new()
+        }
+    } else if tcx.is_mir_available(id) {
         mir_summary(tcx, tcx.optimized_mir(id))
     } else {
         Vec::new()
@@ -871,8 +943,57 @@ impl QueryCarriers {
 #[derive(Default)]
 struct NominalIdentities<'tcx> {
     edges: RefCell<HashMap<DefId, Vec<Ty<'tcx>>>>,
+    callable_bounds: RefCell<HashMap<DefId, Vec<DefId>>>,
 }
 impl<'tcx> NominalIdentities<'tcx> {
+    fn callable_bounds(&self, tcx: TyCtxt<'tcx>, id: DefId) -> Vec<DefId> {
+        self.callable_bounds
+            .borrow_mut()
+            .entry(id)
+            .or_insert_with(|| {
+                let mut identities = HashSet::new();
+                let mut traits = VecDeque::new();
+                let mut parent = Some(id);
+                while let Some(id) = parent {
+                    let predicates = tcx.predicates_of(id);
+                    for &(clause, _) in predicates.predicates {
+                        if let Some(predicate) = clause.as_trait_clause() {
+                            traits.push_back(predicate.skip_binder().trait_ref.def_id);
+                        }
+                    }
+                    parent = predicates.parent;
+                }
+                // Family::Target: Run<P> 的 Run 不一定出现在函数签名中，例如
+                // helper 在 body 内构造 Target::default() 再调用它。沿真实关联
+                // 类型声明和父接口的约束形成有限定义图；只走 DefId，不物化变化的
+                // 泛型实参，也不枚举 Family 的实现或猜测实际 Target。
+                while let Some(id) = traits.pop_front() {
+                    if !identities.insert(id) {
+                        continue;
+                    }
+                    for bound in tcx.explicit_super_predicates_of(id).iter_identity_copied() {
+                        let (clause, _) = bound.skip_normalization();
+                        if let Some(predicate) = clause.as_trait_clause() {
+                            traits.push_back(predicate.skip_binder().trait_ref.def_id);
+                        }
+                    }
+                    for item in tcx.associated_items(id).in_definition_order() {
+                        if !item.is_type() {
+                            continue;
+                        }
+                        for bound in tcx.explicit_item_bounds(item.def_id).iter_identity_copied() {
+                            let (clause, _) = bound.skip_normalization();
+                            if let Some(predicate) = clause.as_trait_clause() {
+                                traits.push_back(predicate.skip_binder().trait_ref.def_id);
+                            }
+                        }
+                    }
+                }
+                identities.into_iter().collect()
+            })
+            .clone()
+    }
+
     fn identities(&self, tcx: TyCtxt<'tcx>, value: QueryValue<'tcx>) -> HashSet<DefId> {
         let types = match value {
             QueryValue::Service(value) | QueryValue::Callable(value) => vec![value],
@@ -881,8 +1002,13 @@ impl<'tcx> NominalIdentities<'tcx> {
         };
         let mut pending = types;
         let mut identities = HashSet::new();
+        if let QueryValue::Constant(id, _) = value {
+            identities.insert(id);
+            identities.extend(self.callable_bounds(tcx, id));
+        }
         let mut fields_seen = HashSet::new();
         let mut aliases_seen = HashSet::new();
+        let mut signatures_seen = HashSet::new();
         while let Some(value) = pending.pop() {
             for argument in value.walk() {
                 let Some(value) = argument.as_type() else {
@@ -965,11 +1091,29 @@ impl<'tcx> NominalIdentities<'tcx> {
                         });
                         pending.extend(types.iter().copied());
                     }
-                    ty::FnDef(id, _)
-                    | ty::Closure(id, _)
-                    | ty::Coroutine(id, _)
-                    | ty::CoroutineClosure(id, _) => {
+                    ty::FnDef(id, _) => {
                         identities.insert(id);
+                        identities.extend(self.callable_bounds(tcx, id));
+                        // FnDef 的泛型实参不包含整个签名。真实输入/输出可能通过
+                        // M::Target 才携带查询类型；读取定义签名的有限类型关系，
+                        // 实参本身仍由外层 walk 保留。相同定义只展开一次。
+                        if signatures_seen.insert(id) {
+                            let signature = tcx
+                                .fn_sig(id)
+                                .instantiate_identity()
+                                .skip_normalization()
+                                .skip_binder();
+                            pending.extend(signature.inputs_and_output.iter());
+                        }
+                    }
+                    ty::Closure(id, _) | ty::Coroutine(id, _) | ty::CoroutineClosure(id, _) => {
+                        identities.insert(id);
+                        // 无摘要 helper 的实际约束也提供转发相关性。例如
+                        // invoke<T: Run<P>, P> 可在 Self 与 P 都是基本类型时调用
+                        // 业务 Run impl；只寻找参数中的名义 struct 会漏掉该调用。
+                        // 此处只记录 trait/supertrait 身份，仍须闭合后由 Instance
+                        // 选择实际 impl，不枚举实现，也不把约束直接当成查询根。
+                        identities.extend(self.callable_bounds(tcx, id));
                     }
                     _ => {}
                 }
@@ -1132,7 +1276,7 @@ fn concrete_virtual_call<'tcx>(
 
 /// 每个编译入口汇总全部已类型检查的 body。非泛型 body 即使没有被调用也贡献查询；
 /// 泛型 body 的闭合查询同样直接贡献，带参数的查询则等待实际闭合函数项进行替换。
-/// 业务部分沿保存的语义摘要遍历；标准库只补充闭合回调的原生 MIR 转发边。
+/// 业务部分沿保存的语义摘要遍历；无摘要的外部库只补充闭合回调的原生 MIR 转发边。
 pub fn collect<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Vec<QueryRoot<'tcx>>, String> {
     collect_with_providers(tcx, &[])
 }
@@ -1364,33 +1508,20 @@ pub fn collect_with_providers<'tcx>(
             if !seen_discovery.insert(record.value) {
                 continue;
             }
-            let size = record.value.complexity();
-            let limit = (tcx.recursion_limit().0 * 8).max(1024);
-            if size > limit {
-                let mut ancestor = path;
-                while ancestor != 0 {
-                    let step = &discovery[ancestor];
-                    if step.definition == Some(definition) && step.size < size {
-                        expansion_error(
-                            tcx,
-                            record.span,
-                            origin,
-                            "single_type_tree_nodes",
-                            limit,
-                            format!(
-                                "DI 泛型类型不断增长或过于复杂：单个类型树超过 {limit} 个节点；请终止递归泛型查询或拆分类型\n查询载体发现过程中，同一函数或常量的泛型实参沿调用链持续增长"
-                            ),
-                        );
-                    }
-                    ancestor = step.parent;
-                }
+            // 普通函数/常量身份在归一化前已经确定，可以提前拦截其重复增长。
+            // trait item 尚未选择 impl；共享 trait 声明绝不能被记作一次真实重入。
+            // DropGlue 也要等 InstanceKind 带上真实类型后再判断，不能混用公共入口。
+            if tcx.trait_of_assoc(definition).is_none() && drop_type(tcx, record.value).is_none() {
+                validate_discovery_growth(
+                    tcx,
+                    &discovery,
+                    path,
+                    ty::InstanceKind::Item(definition),
+                    record.value.complexity(),
+                    record.span,
+                    origin,
+                );
             }
-            discovery.push(DiscoveryStep {
-                parent: path,
-                definition: Some(definition),
-                size,
-            });
-            path = discovery.len() - 1;
         }
         record.value = record.value.normalize(tcx, record.span, origin)?;
         if !record.value.closed() {
@@ -1434,11 +1565,11 @@ pub fn collect_with_providers<'tcx>(
             QueryValue::Service(_) | QueryValue::Unsize(..) => unreachable!(),
         };
         let mut drop_instance = None;
-        let (id, args) = if matches!(
+        let (definition, id, args) = if matches!(
             tcx.def_kind(id),
             DefKind::Closure | DefKind::SyntheticCoroutineBody
         ) {
-            (id, args)
+            (ty::InstanceKind::Item(id), id, args)
         } else {
             match ty::Instance::try_resolve(tcx, ty::TypingEnv::fully_monomorphized(), id, args)
                 .map_err(|_| format!("无法解析 DI 查询 helper {}", tcx.def_path_str(id)))?
@@ -1468,15 +1599,29 @@ pub fn collect_with_providers<'tcx>(
                     ) {
                         drop_instance = Some(instance);
                     }
-                    (instance.def_id(), instance.args)
+                    (instance.def, instance.def_id(), instance.args)
                 }
                 Some(_) => continue,
                 None => continue,
             }
         };
-        if !seen.insert((id, args)) {
+        if !seen.insert((definition, args)) {
             continue;
         }
+        // 只比较已选定的真实函数/常量定义；不同 impl 即使来自同一个 trait item，
+        // 也各自拥有独立的增长链。默认方法仍使用同一个真实 body 的身份。
+        let size = args
+            .types()
+            .map(|value| value.walk().count())
+            .sum::<usize>()
+            + usize::from(matches!(record.value, QueryValue::Callable(_)));
+        validate_discovery_growth(tcx, &discovery, path, definition, size, record.span, origin);
+        discovery.push(DiscoveryStep {
+            parent: path,
+            definition: Some(definition),
+            size,
+        });
+        path = discovery.len() - 1;
         if let Some(instance) = drop_instance {
             // rustc 的真实胶水覆盖用户 Drop、聚合字段、Box/Vec/数组等结构。
             // 胶水按 Instance（含实际 T）生成，不能按公共 drop 函数 DefId 缓存。
@@ -1487,10 +1632,13 @@ pub fn collect_with_providers<'tcx>(
             }
             continue;
         }
-        if standard_definition(tcx, id) {
+        if !id.is_local()
+            && !processed_crates.contains(&id.krate)
+            && (standard_definition(tcx, id) || business_definition(tcx, id))
+        {
             summaries
                 .entry(id)
-                .or_insert_with(|| standard_summary(tcx, id));
+                .or_insert_with(|| native_summary(tcx, id));
         }
         let Some(records) = summaries.get(&id) else {
             continue;
