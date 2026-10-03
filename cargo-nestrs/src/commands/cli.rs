@@ -16,6 +16,16 @@ const CARGO_COMMANDS: &[(&str, &str)] = &[
     ("test", "构建并运行单元测试和集成测试"),
 ];
 
+/// 只读工具链诊断的输出形式与可选缓存目录查询。
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct DoctorOptions {
+    /// 输出带版本号的结构化信息，供外部验证脚本读取。
+    pub json: bool,
+
+    /// 显式查询此 Cargo target 下的缓存路径；不发现项目或创建目录。
+    pub target_directory: Option<PathBuf>,
+}
+
 /// 图导出的工具选项与尚未改写的 Cargo 选择参数。
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct GraphOptions {
@@ -46,7 +56,7 @@ pub(super) struct InitOptions {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Invocation {
     /// 只读检查固定工具链的身份和安装工件。
-    Doctor,
+    Doctor(DoctorOptions),
 
     /// 构建并导出所选 binary 的编译期依赖图。
     Graph(GraphOptions),
@@ -183,7 +193,29 @@ fn command() -> Command {
         .subcommand(
             command_node("doctor")
                 .about("检查固定版本的编译器、rustc-dev 和驱动是否安装正确")
-                .long_about("检查固定版本的编译器标识、rustc-dev 库、编译器驱动和私有声明桥接库。\n检查成功后输出相关路径和驱动指纹。\n此命令不会构建项目或安装工具链组件。")
+                .long_about("检查固定版本的编译器标识、rustc-dev 库、编译器驱动和私有声明桥接库。\n检查成功后输出相关路径和驱动指纹；--json 输出版本化的结构化信息。\n此命令无需项目，不构建、不安装组件，也不创建目录。")
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .help_heading("选项")
+                        .action(ArgAction::SetTrue)
+                        .help("将已验证的工具链信息输出为 JSON"),
+                )
+                .arg(
+                    Arg::new("target-dir")
+                        .long("target-dir")
+                        .help_heading("选项")
+                        .value_name("PATH")
+                        .requires("json")
+                        .value_parser(OsStringValueParser::new().try_map(|value| {
+                            if value.is_empty() {
+                                Err("target directory must not be empty")
+                            } else {
+                                Ok(PathBuf::from(value))
+                            }
+                        }))
+                        .help("同时查询此目录对应的缓存路径；相对路径基于当前目录，需 --json"),
+                )
                 .after_help("NESTRS_RUSTC：指定编译器，其完整标识必须与固定工具链一致。\nNESTRS_DRIVER：指定驱动路径；默认使用 CLI 同目录下的 nestrs-driver。\nNESTRS_MACRO_BRIDGE：指定与驱动配套的私有过程宏库。\n\n等价的帮助写法：cargo nestrs help doctor / cargo nestrs doctor help"),
         )
         .subcommand(help_command())
@@ -376,7 +408,10 @@ pub(super) fn parse(mut args: Vec<OsString>) -> Result<Invocation, Error> {
     };
     let cargo_args = cargo;
     match name {
-        "doctor" => Ok(Invocation::Doctor),
+        "doctor" => Ok(Invocation::Doctor(DoctorOptions {
+            json: matches.get_flag("json"),
+            target_directory: matches.get_one::<PathBuf>("target-dir").cloned(),
+        })),
         "graph" => Ok(Invocation::Graph(GraphOptions {
             output: matches.get_one::<PathBuf>("output").cloned(),
             cargo_args,
@@ -411,6 +446,55 @@ mod tests {
     #[test]
     fn command_schema_is_consistent() {
         command().debug_assert();
+    }
+
+    #[test]
+    fn doctor_preserves_text_default_and_accepts_structured_target_queries() {
+        for prefix in [vec![], vec!["nestrs"]] {
+            let mut args = prefix.clone();
+            args.push("doctor");
+            assert_eq!(
+                parse(arguments(&args)).unwrap(),
+                Invocation::Doctor(DoctorOptions {
+                    json: false,
+                    target_directory: None,
+                })
+            );
+            args.push("--json");
+            assert_eq!(
+                parse(arguments(&args)).unwrap(),
+                Invocation::Doctor(DoctorOptions {
+                    json: true,
+                    target_directory: None,
+                })
+            );
+        }
+        for args in [
+            vec!["doctor", "--json", "--target-dir", "构建 with spaces"],
+            vec!["doctor", "--target-dir=构建 with spaces", "--json"],
+        ] {
+            assert_eq!(
+                parse(arguments(&args)).unwrap(),
+                Invocation::Doctor(DoctorOptions {
+                    json: true,
+                    target_directory: Some("构建 with spaces".into()),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn doctor_rejects_missing_empty_or_non_json_target_options() {
+        for args in [
+            vec!["doctor", "--target-dir", "target"],
+            vec!["doctor", "--json", "--target-dir"],
+            vec!["doctor", "--json", "--target-dir="],
+            vec!["doctor", "--json", "--target-dir", ""],
+            vec!["doctor", "--json", "--target-dir", "--json"],
+            vec!["doctor", "--json", "--manifest-path", "Cargo.toml"],
+        ] {
+            assert!(parse(arguments(&args)).is_err(), "accepted {args:?}");
+        }
     }
 
     #[test]

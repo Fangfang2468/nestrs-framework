@@ -600,8 +600,8 @@ Factory provider 不继承或合并返回类型上 injectable 的 provider 配�
 [Class / Factory 执行契约](src/activation/adapter.rs)。已有
 [图模型测试](../cargo-nestrs/tests/di_plan.rs)覆盖 primary 不能消除具体类型重复、
 不同 key 保留独立路由；[真实 driver 契约](../cargo-nestrs/tests/registry_abi.rs)通过
-[同 key 工厂优先](../tools/compiler-probe/fixtures/auto-binding/src/bin/factory_override.rs)与
-[不同 key 保留蓝图](../tools/compiler-probe/fixtures/auto-binding/src/bin/factory_other_key.rs)
+[同 key 工厂优先](../cargo-nestrs/tests/fixtures/auto-binding/src/bin/factory_override.rs)与
+[不同 key 保留蓝图](../cargo-nestrs/tests/fixtures/auto-binding/src/bin/factory_other_key.rs)
 验证实际查询结果。
 
 ### 普通方法如何贡献查询根

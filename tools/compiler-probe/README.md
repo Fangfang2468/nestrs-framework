@@ -1,6 +1,6 @@
 # rustc 语义探针
 
-这里保留独立的编译器边界实验和早期自动绑定 fixture。生产工具使用标准过程宏桥接
+这里保留独立的编译器边界实验及正式自动绑定回归的便捷入口。生产工具使用标准过程宏桥接
 与 `nestrs-driver`；探针成功不等于完整 DI、跨 crate 或 IDE 验收。当前生产实现见
 [rustc 指南](../../docs/NESTRS_RUSTC_EXTENSION_GUIDE.md)，正式回归见
 [工具链指南](../../docs/NESTRS_CARGO_TOOLCHAIN.md#回归入口与核对位置)和
@@ -60,40 +60,38 @@ python3 tools/compiler-probe/verify_lowering.py
 fixture 子进程不继承该授权。不要设置全局 bootstrap；产物固定写仓库 target，
 没有接入正式 CLI 的 Cargo target_directory 选择逻辑。
 
-## 自动绑定历史 fixture
+## 正式自动绑定回归入口
 
-`verify_autobind.py` 的全 binary 构建和旧运行期 panic 预期**尚未适配当前 AOT 验证**。
-不能把它当作当前应全部通过的 gate，也不要要求此混合正负例项目 `build --bins`
-成功。当前最终入口在 check/build 阶段拒绝非法图。
-
-| Binary | 覆盖目的与当前预期 |
-| --- | --- |
-| `positive` | 私有/宏生成 impl、factory-only、闭合泛型、实例共享、scope 隔离、optional/key/primary、cleanup |
-| `ambiguity` | 无唯一 primary 的 trait 候选；预期编译失败 |
-| `duplicate_explicit` | 重复显式绑定；预期编译失败 |
-| `unsatisfied_bound` | 不满足泛型约束时无绑定，optional 返回空 |
-| `explicit` | 已有内部显式绑定不被自动重复生成 |
-| `cfg_selected` | 默认与 alternate 各只选择当前分支 |
-| `factory_override` | 同类型/key factory 优先于蓝图 |
-| `factory_other_key` | 其他 key 的 factory 不抑制默认 key 蓝图 |
-| `semantic_edges` | 闭合 impl 根、关联类型、auto traits、私有作用域与泛型链 |
-| `source_forms` | 宏生成项、类型/const 泛型投影保持实例身份 |
-| `higher_ranked` | 闭合 HRTB trait 查询与注入 |
-| `unreferenced_generic` | 未物化蓝图不贡献 dyn 请求 |
-| `explicit_generic_root` | 显式闭合 binding 触发其蓝图依赖验证 |
-
-`explicit`、`duplicate_explicit`、`explicit_generic_root` 使用隐藏 bind 入口验证内部
-兼容边界，不是业务推荐 API。其余业务通过普通 trait impl 自动绑定。可以定向运行：
+早期自动绑定 fixture 已迁入
+[cargo-nestrs/tests/fixtures/auto-binding](../../cargo-nestrs/tests/fixtures/auto-binding/Cargo.toml)，
+由 [autobind_contracts.rs](../../cargo-nestrs/tests/autobind_contracts.rs) 统一验证。
+正式测试不再读取本目录的历史 fixture；`verify_autobind.py` 保留原调用入口，
+只准备工具链并执行该 Rust harness，不实现自动绑定或复制缓存目录算法。
 
 ```sh
-cargo nestrs run --manifest-path tools/compiler-probe/fixtures/auto-binding/Cargo.toml \
-  --bin positive --offline
-# 下列命令预期非零退出，以观察编译期歧义诊断。
-cargo nestrs check --manifest-path tools/compiler-probe/fixtures/auto-binding/Cargo.toml \
-  --bin ambiguity --offline
+# 默认先从源码构建匹配的 CLI、driver 与 bridge，再执行正式测试。
+python3 tools/compiler-probe/verify_autobind.py
+# 工具已与当前源码匹配时：
+python3 tools/compiler-probe/verify_autobind.py --skip-build
 ```
 
-旧验证器的日志和快照写到 `target/nestrs-autobind/`。当前生产 gate 使用
-`compiler-driver` feature suite、跨 crate 验证器与独立 AOT 失败 harness；
-`registry_abi` 保留历史测试文件名，但验证当前 v2 入口与真实私有权限。
-实际 rust-analyzer LSP 交互由 `tools/verify-ide.py` 验证，详见 [IDE 指南](../../docs/NESTRS_IDE.md)。
+harness 分别构建并运行有效图，覆盖私有类型、泛型、key、factory 优先级、cfg、
+实例共享及投影身份；alternate 配置单独检查。`ambiguity` 和 `duplicate_explicit`
+在 check / build 阶段核对准确的编译诊断，不再构建全部 binary 后等待运行期 panic。
+原有效图的业务与投影断言继续保留。薄脚本日志写入 `target/nestrs-autobind/`，
+逐项编译与执行证据由正式 harness 写入 target。
+
+只观察一个目标时，可以直接调用真实 CLI：
+
+```sh
+cargo nestrs run --manifest-path cargo-nestrs/tests/fixtures/auto-binding/Cargo.toml \
+  --bin positive --locked --offline
+# 预期编译失败，以观察歧义诊断。
+cargo nestrs check --manifest-path cargo-nestrs/tests/fixtures/auto-binding/Cargo.toml \
+  --bin ambiguity --locked --offline
+```
+
+隐藏 bind 入口只用于显式 pair 的内部兼容回归，不是业务推荐 API。
+早期整组 verifier 与运行期非法图预期的迁移背景保留在
+[修复记录](../../docs/NESTRS_FIXES.md)。真实 rust-analyzer LSP 交互仍由
+`tools/verify-ide.py` 独立验证，详见 [IDE 指南](../../docs/NESTRS_IDE.md)。

@@ -140,6 +140,40 @@ CLI 默认查找同目录的 driver 与 bridge。`NESTRS_DRIVER`、`NESTRS_MACRO
 core API 的应用，调用 build（无论传 None 或 Some）时返回 `BuildError::CompilerPlanUnavailable`，
 不会把缺失工具链计划解释成合法空图。
 
+维护程序可以读取 `cargo nestrs doctor --json` 的结构化报告，无需解析面向人的
+文本输出。报告 `version` 为 1，包含 `rustc` 的 release / commit_hash / host，
+以及 `compiler`、`sysroot`、`driver`、`macro_bridge` 和联合 `fingerprint`。
+缓存目录由正式工具计算：
+
+```sh
+cargo nestrs doctor --json
+cargo nestrs doctor --json --target-dir ./target/verification
+```
+
+指定 `--target-dir` 时，报告同时给出绝对的 `target_directory`、实际隔离后的
+`cache_directory` 和 `compiler_output_directory`。该查询不构建项目、不创建
+目标目录，也不要求当前目录有 Cargo.toml。相对路径按执行命令的当前目录解释；
+工具版本或组件不匹配仍以非零状态失败。默认 `doctor` 保留面向人的文本输出。
+未指定 `--target-dir` 时，三个目录字段为 null，不读取项目或环境中的 target 默认值。
+
+### 源码构建与维护脚本的职责
+
+`tools/build-toolchain.py` 是 CLI 尚未存在时的源码构建入口，负责检查已经安装的
+固定编译器、限定 bootstrap 授权并调用 Cargo 构建 CLI / driver / bridge。它保留
+首次构建必需的跨平台路径和动态库环境准备；正式应用构建、身份验证及缓存隔离
+仍由 Rust 工具实现。已有工具的维护脚本通过 doctor 的结构化报告获取实际信息，
+不复制缓存哈希算法。
+
+正式编译回归的 Rust harness 和业务夹具集中于 `cargo-nestrs/tests/`；Python
+验证器负责进程编排、记录证据或模拟外部客户端。原版 rust-analyzer LSP、浏览器
+页面和性能测量各自保留独立验证入口。`tools/compiler-probe/` 保留 rustc 边界实验，
+其中自动绑定脚本只转交正式 `autobind_contracts` 测试，正负例统一维护在
+`cargo-nestrs/tests/fixtures/auto-binding/`。
+
+源码构建入口不承担安装、升级、卸载或完整工具包分发；这些能力仍待单独设计和
+验收。`cargo install` 目前也不会自动部署配套 bridge 与完整 sysroot。以上职责
+整理没有新增应用依赖、runtime crate 或公开宏 package。
+
 Cargo 仍管理依赖、features、cfg、profile、target 和 build.rs。CLI 转发 Cargo
 选项和 `--` 后的业务参数，不支持与其他 Rust 编译包装器叠加。
 
@@ -362,6 +396,7 @@ python3 tools/verify-macro-toolchain.py --skip-build
 python3 tools/verify-cross-crate-binding.py --skip-build
 python3 tools/verify-graph.py --skip-build
 python3 tools/verify-ide.py --skip-build --rust-analyzer /path/to/rust-analyzer
+python3 tools/compiler-probe/verify_autobind.py --skip-build
 ```
 
 Windows 使用 PowerShell 和相同脚本名，把 `python3` 替换为本机 `python`，并使用
@@ -379,6 +414,7 @@ workspace 的 default-members 仅含 core 和工具，因此不指定 package �
 | --- | --- |
 | 命令解析与帮助 | [commands/cli.rs](../cargo-nestrs/src/commands/cli.rs)、[cli.rs 测试](../cargo-nestrs/tests/cli.rs) |
 | pin、工具匹配与缓存 | [toolchain.rs](../cargo-nestrs/src/toolchain.rs)、[build-toolchain.py](../tools/build-toolchain.py) |
+| 自动绑定正例与编译期负例 | [autobind_contracts.rs](../cargo-nestrs/tests/autobind_contracts.rs)、[auto-binding fixture](../cargo-nestrs/tests/fixtures/auto-binding/Cargo.toml) |
 | 启动配置 | [project_config.rs](../cargo-nestrs/src/project_config.rs)、[startup_config 回归](../cargo-nestrs/tests/startup_config.rs) |
 | graph 选择与输出保留 | [commands/graph.rs](../cargo-nestrs/src/commands/graph.rs)、[verify-graph.py](../tools/verify-graph.py) |
 | 本机路径、metadata 与 doctest | [native_host.rs](../cargo-nestrs/tests/native_host.rs)、[bridge_metadata.rs](../cargo-nestrs/tests/bridge_metadata.rs)、[rustdoc.rs](../cargo-nestrs/tests/rustdoc.rs) |

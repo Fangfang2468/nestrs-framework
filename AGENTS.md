@@ -319,6 +319,10 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   nestrs_driver 与私有 nestrs_tool_bridge 构建；bridge 仅为生成绑定取得定义点 span，
   仍委托单一 codegen 后端并保留业务 token 来源。普通 core/工具单元测试无需该授权，
   不改变全局工具链，也不向应用传播该变量。
+* 源码构建脚本保留首次构建前的身份校验与环境准备；已构建工具的路径、指纹及缓存
+  位置由 `cargo nestrs doctor --json` 查询，指定 `--target-dir` 时复用正式缓存算法。
+  维护脚本不得另写一份缓存目录算法或从 doctor 人类可读输出中猜测字段。
+  LSP、浏览器及性能验证继续作为外部客户端，不把测试逻辑搬入生产 CLI 或 core。
 * CLI 按完整编译器身份及 driver、bridge 的联合内容指纹隔离 target；Cargo 保留
   构建单元复用，rustc incremental 当前关闭，不宣称已有完整增量事务协议。
 * 编译器和 rustdoc 同时获得 bridge 所在目录的 dependency 搜索路径，使没有直接
@@ -386,8 +390,10 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   完整 sysroot，现阶段使用源码构建。规划不授权发布或提交。
 * bootstrap 与 create 保持第 10 节边界；应用级 Clippy、更多图目标、其他 host/编辑器
   和更广泛宏组合仍属后续范围，不从旧讨论恢复手动注册 DSL 或公开宏 package。
-* `tools/compiler-probe/verify_autobind.py` 仍有运行期捕获非法图的历史预期，不能作为
-  当前整组应通过的 gate；维护它时应将负例迁到 check/build 拒绝，保留有效图运行断言。
+* 正式自动绑定 fixture 位于 `cargo-nestrs/tests/fixtures/auto-binding/`，由
+  `cargo-nestrs/tests/autobind_contracts.rs` 统一执行有效图运行与非法图 check/build
+  拒绝；`tools/compiler-probe/verify_autobind.py` 只准备工具并调用该 harness。
+  基础语义/展开实验继续留在 compiler-probe，正式回归不反向引用其历史 fixture。
 * 当前文档入口为 [文档导航](docs/README.md)。服务用法集中于声明指南，运行期设计
   集中于 core README，编译器原理集中于 rustc 指南；修改实现时更新相应唯一入口。
   重复的阶段计划与迁移日志不再增加独立主文档；详细命令、原始日志和临时核查记录放

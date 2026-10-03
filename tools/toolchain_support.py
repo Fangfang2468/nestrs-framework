@@ -3,9 +3,11 @@
 This module is only a build/test helper. The installed CLI never imports Python.
 """
 
+import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 
 
@@ -27,16 +29,61 @@ def validate_compiler(expected, actual):
         raise RuntimeError(f"Unsupported rustc host: expected one of {expected['hosts']}, found {actual.get('host')}")
 
 
-def cache_directory(target, release, commit, host, fingerprint):
-    """Match Toolchain::cache_directory when inspecting generated artifacts."""
-    base = target / "nestrs"
-    if "windows" in host:
-        digest = 0xCBF29CE484222325
-        for field in [release, commit, host, fingerprint]:
-            for byte in field.encode("utf-8") + b"\0":
-                digest = ((digest ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
-        return base / f"{digest:016x}"
-    return base / f"{release}-{commit}-{host}" / fingerprint
+def query_doctor(cli, *, environment=None, cwd=None, target_dir=None, log=None):
+    """Read the installed CLI's versioned toolchain and optional cache paths.
+
+    Paths and the fingerprint are opaque CLI results. Maintenance scripts must
+    not reconstruct the production cache layout or parse human-facing output.
+    When requested, raw stdout/stderr and the exact process status are retained
+    even if the command fails or its JSON cannot be consumed.
+    """
+    command = [str(cli), "doctor", "--json"]
+    if target_dir is not None:
+        command.extend(["--target-dir", str(target_dir)])
+    result = subprocess.run(
+        command, cwd=cwd, env=environment, text=True, capture_output=True,
+        check=False, encoding="utf-8",
+    )
+    if log is not None:
+        log = Path(log)
+        log.with_suffix(".stdout.txt").write_text(result.stdout, encoding="utf-8")
+        log.with_suffix(".stderr.txt").write_text(result.stderr, encoding="utf-8")
+        log.with_suffix(".status.json").write_text(
+            json.dumps({"command": command, "exit_code": result.returncode}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    result.check_returncode()
+    return parse_doctor_output(result.stdout, require_directories=target_dir is not None)
+
+
+def parse_doctor_output(output, *, require_directories=False):
+    """Validate only the doctor JSON contract, never infer tool identity or paths."""
+    try:
+        value = json.loads(output)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Invalid doctor JSON: {error}") from error
+    if not isinstance(value, dict):
+        raise ValueError("Doctor JSON must be an object")
+    if type(value.get("version")) is not int or value["version"] != 1:
+        raise ValueError(f"Unsupported doctor JSON version: {value.get('version')!r}")
+
+    def require_string(record, field, label):
+        if not isinstance(record.get(field), str) or not record[field].strip():
+            raise ValueError(f"Doctor JSON requires a nonempty string for {label}")
+
+    identity = value.get("rustc")
+    if not isinstance(identity, dict):
+        raise ValueError("Doctor JSON requires a rustc identity object")
+    for field in ["release", "commit_hash", "host"]:
+        require_string(identity, field, f"rustc.{field}")
+    for field in ["compiler", "sysroot", "driver", "macro_bridge", "fingerprint"]:
+        require_string(value, field, field)
+    for field in ["target_directory", "cache_directory", "compiler_output_directory"]:
+        if field not in value:
+            raise ValueError(f"Doctor JSON is missing {field}")
+        if require_directories or value[field] is not None:
+            require_string(value, field, field)
+    return value
 
 
 def compiler_command_environment(environment, compiler):

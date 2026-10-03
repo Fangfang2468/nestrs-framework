@@ -16,7 +16,7 @@
 
 原始日志、任务起点快照、精确差异及工具哈希保存在各轮 `target/` 目录，不随仓库分发。
 本文正文和正式源码、测试链接保留必要说明，使清理 `target/` 后仍能理解修复。
-记录编号 R01～R13 是本文的时间线索引，不是原报告中会重复使用的 F1/P2 编号，
+记录编号 R01～R14 是本文的时间线索引，不是原报告中会重复使用的 F1/P2 编号，
 也不是 Git 提交号。各轮基线均包含当时已有未提交工作，没有用 Git HEAD 代替实际快照。
 
 ## 修复与复核时间线
@@ -36,6 +36,7 @@
 | 2026-10-03 / R11 | 统一 root / scope 创建初始化，移除独立 warm_up API | 属于明确授权的 API 调整；此前功能和性能结论不自动覆盖本次实现 |
 | 2026-10-03 / R12 | build / create_scope 各收敛为接受 Option 的单一入口 | 保留 R11 的初始化契约；None 继承默认，Some 完整覆盖，两者不能混同 |
 | 2026-10-03 / R13 | 修复 IDE 验证脚本对单行字段访问的依赖 | 夹具格式化阻断正式验证；保留原有 LSP 类型和导航断言 |
+| 2026-10-03 / R14 | 收敛工具链查询、正式自动绑定夹具与维护脚本职责 | 构建前准备保留独立入口；安装分发、LSP 与性能验证各有明确边界 |
 
 这些发现来自逐步扩充的输入组合。后续新缺陷不意味着前一轮的原始修复失效；每轮都应
 同时保留原触发复测和新增失败证据，不能用已有测试全绿替代边界核查。
@@ -563,3 +564,56 @@ default 配置下字段及工厂 hover、补全、定义跳转、未保存编辑
 通过；不支持的 cfg 仍被拒绝并保留原模型及设置。原始 IDE 夹具内容保持不变。
 本次仅修复验证脚本和补充配套回归、文档，未重新运行完整 core / compiler-driver
 矩阵，也未重新验证 Windows、其他 target、性能或服务器容量。
+
+
+## R14：收敛工具链查询与正式回归的职责
+
+**背景与范围。** R13 之后的源码核查确认，DI 运行期、编译器分析和 IDE 项目生成
+均在正式 Rust crate 中。维护层仍有两处可消除的耦合：Python 辅助模块复制正式
+缓存目录算法；正式 registry_abi 测试反向读取 compiler-probe 历史目录的 fixture。
+源码构建脚本另外承担 CLI 尚不存在时的环境准备。这一轮分别处理维护规则、测试
+资源归属及文档边界，不改变 DI 行为、查询根分析或初始化协议。
+
+**结构化查询。** `cargo nestrs doctor --json` 输出带 version 1 的工具链报告，
+包含已验证的编译器身份、实际工件路径和联合指纹；显式传入 `--target-dir` 时，
+由正式 `Toolchain::cache_directory` 计算隔离缓存及编译器输出目录。查询不要求
+Cargo 项目、不构建、不创建目录。默认 doctor 的文本输出保留；Python 消费者
+核对 JSON 版本与必需字段，不再从文本标题拆字段或复制 Windows 缓存哈希算法。
+
+**正式回归归位。** 原 `tools/compiler-probe/fixtures/auto-binding/` 整体迁入
+[正式 fixture 目录](../cargo-nestrs/tests/fixtures/auto-binding/Cargo.toml)，既有未提交
+修改和锁文件一并保留。registry_abi 及 core 文档改为引用新位置。
+[autobind_contracts.rs](../cargo-nestrs/tests/autobind_contracts.rs)统一维护有效图的
+构建、运行、需求与投影断言，以及 cfg alternate 对照。两个非法图
+`ambiguity` / `duplicate_explicit` 改为在 check 和 build 阶段核对准确诊断，
+不再捕获运行期 panic。原 [verify_autobind.py](../tools/compiler-probe/verify_autobind.py)
+调用入口保留为工具准备及 Rust harness 的薄编排，旧分析断言归入正式测试，
+不在 Python 中维护另一套图验证预期。
+
+**构建与验证边界。** build-toolchain.py 仍负责首次从源码构建 CLI / driver /
+bridge，只准备已经安装的固定工具链与限定 bootstrap 环境；该入口不被描述成
+安装、升级或完整分发。LSP、浏览器、性能验证及基础 rustc 实验继续独立，正式
+产品不依赖它们运行，也不为了测试公开 core 私有实现。当前职责说明集中于
+[工具链指南](NESTRS_CARGO_TOOLCHAIN.md#源码构建与维护脚本的职责)。
+
+**整合中发现并修正。** 新薄脚本第一次实际执行时，将默认的 `rustc` 命令作为
+显式 `NESTRS_RUSTC` 传给 doctor，触发正式工具对 rustup proxy 的拒绝。默认路径
+已改为交给 doctor 原生发现；显式 `--rustc` 先查询其 sysroot，再将真实编译器路径
+交给正式身份校验。默认 / 显式与构建 / 跳过构建四种组合、原始失败码及日志保留
+均纳入 Python 回归。独立复核发现的测试路径分隔符问题也已按本机 Path 生成期望，
+未据此宣称 Windows 已验收。
+
+**本轮实际验证。** 固定 Rust 1.98.0 的 Linux x86_64 上，匹配 CLI / driver /
+bridge 的源码构建通过；普通 core / 工具测试 389 项、Python 维护脚本测试
+25 项通过。正式 native_host 与 registry_abi 共 12 项通过，包含无项目目录中的
+doctor JSON / 文本兼容、实际路径、只读查询和错误传播，以及迁移后的闭合蓝图回归。
+正式自动绑定脚本退出 0，执行 3 个 Rust 外层测试：11 个默认有效目标和一个
+alternate 目标实际构建运行成功，两个非法目标各在 check / build 阶段得到准确
+单条诊断。原版 LSP 的 default 完整交互与保存检查、alternate / release 项目模型
+和冷启动、不支持 cfg 的拒绝与旧文件保留全部通过。普通及 compiler-driver
+严格 Clippy、格式和差异空白检查通过。
+
+各测试集合有重叠，不能相加；259 个显式忽略的文档测试未计入通过数量。本轮没有
+重跑完整 compiler-driver、全部跨 crate / 图浏览器矩阵，也没有重新验证 Windows、
+其他 target、性能或 2 GiB / 2 核容量。基线快照、迁移对照、首次失败与最终成功日志
+保存在 `target/tools-boundary-cleanup-20261003/`，不覆盖 R13 或更早轮次的记录。

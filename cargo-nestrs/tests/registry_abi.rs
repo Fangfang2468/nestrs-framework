@@ -264,8 +264,8 @@ fn main() { panic!("duplicate binding validation must not execute main"); }
 fn closed_generic_blueprints_keep_demand_and_exact_factory_priority() {
     let directory = artifacts("closed-blueprint-priority");
     fs::create_dir_all(&directory).unwrap();
-    let manifest = workspace().join("tools/compiler-probe/fixtures/auto-binding/Cargo.toml");
-    // 逐一执行有效正例，不调用仍把非法图当作运行期错误的历史 --bins probe。
+    let manifest = workspace().join("cargo-nestrs/tests/fixtures/auto-binding/Cargo.toml");
+    // 逐一执行有效正例；完整正负例由 autobind_contracts 按目标验证。
     // 这些 fixture 同时检查实际服务行为和编译器生成的需求/显式投影清单。
     for (binary, expected) in [
         (

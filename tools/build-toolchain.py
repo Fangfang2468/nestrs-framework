@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Build the complete pinned Nestrs toolchain, including its private macro bridge."""
+"""Bootstrap the CLI, driver and private bridge from this repository's sources.
+
+This entry point works before a Nestrs CLI exists. It checks an already installed
+compiler and prepares only the environment needed to build the three artifacts;
+it does not install, upgrade or distribute a toolchain. Once built, use the CLI's
+doctor command for artifact discovery and its structured toolchain report.
+"""
 
 import argparse
 import json

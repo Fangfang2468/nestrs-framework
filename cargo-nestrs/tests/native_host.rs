@@ -117,6 +117,89 @@ fn success(command: &mut Command) -> Output {
     output
 }
 
+/// JSON 诊断可在没有项目和 Cargo 的目录工作，且显式目录查询只读取安装状态。
+#[test]
+fn doctor_reports_real_artifacts_and_cache_paths_without_a_project_or_writes() {
+    use cargo_nestrs::toolchain::{CompilerIdentity, Toolchain};
+
+    let directory = std::env::temp_dir().join(format!("nestrs doctor 空格 {}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let workspace = Workspace(directory.canonicalize().unwrap());
+    let doctor = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-nestrs"));
+        command
+            .arg("doctor")
+            .current_dir(&workspace.0)
+            .env("CARGO", workspace.0.join("cargo-must-not-run"))
+            .env("CARGO_TARGET_DIR", workspace.0.join("ignored-target"))
+            .env("NESTRS_DRIVER", env!("CARGO_BIN_EXE_nestrs-driver"));
+        clear_build_overrides(&mut command);
+        command
+    };
+
+    let output = success(doctor().arg("--json"));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["version"], 1);
+    let identity = CompilerIdentity::pinned().unwrap();
+    assert_eq!(report["rustc"]["release"], identity.release);
+    assert_eq!(report["rustc"]["commit_hash"], identity.commit);
+    assert_eq!(report["rustc"]["host"], identity.host);
+    for field in ["compiler", "sysroot", "driver", "macro_bridge"] {
+        let path = Path::new(report[field].as_str().unwrap());
+        assert!(path.is_absolute() && path.exists(), "{field}: {path:?}");
+    }
+    for field in [
+        "target_directory",
+        "cache_directory",
+        "compiler_output_directory",
+    ] {
+        assert!(report.get(field).unwrap().is_null());
+    }
+    let toolchain = Toolchain {
+        identity,
+        rustc: report["compiler"].as_str().unwrap().into(),
+        sysroot: report["sysroot"].as_str().unwrap().into(),
+        driver: report["driver"].as_str().unwrap().into(),
+        bridge: report["macro_bridge"].as_str().unwrap().into(),
+        fingerprint: report["fingerprint"].as_str().unwrap().into(),
+    };
+    assert!(!toolchain.fingerprint.is_empty());
+    let text = String::from_utf8(success(&mut doctor()).stdout).unwrap();
+    assert!(text.starts_with("Nestrs toolchain is ready\n"));
+    assert!(text.contains(&format!("driver fingerprint: {}", toolchain.fingerprint)));
+
+    let target = workspace.0.join("未创建 target");
+    for path in [Path::new("未创建 target"), target.as_path()] {
+        let output = success(doctor().args(["--json", "--target-dir"]).arg(path));
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let reported_target = Path::new(report["target_directory"].as_str().unwrap());
+        assert!(reported_target.is_absolute());
+        // Windows current_dir may return the ordinary spelling of a verbatim
+        // input path. Compare the existing parent by filesystem identity.
+        assert_eq!(
+            reported_target.parent().unwrap().canonicalize().unwrap(),
+            workspace.0
+        );
+        assert_eq!(reported_target.file_name(), target.file_name());
+        let cache = toolchain.cache_directory(reported_target);
+        assert_eq!(report["cache_directory"], cache.to_str().unwrap());
+        assert_eq!(
+            report["compiler_output_directory"],
+            cache.join("nestrs").join("compiler").to_str().unwrap()
+        );
+    }
+
+    let failed = doctor()
+        .arg("--json")
+        .env("NESTRS_DRIVER", workspace.0.join("missing-driver"))
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert!(failed.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("cannot find compiler driver"));
+    assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
+}
+
 #[test]
 fn native_tools_compile_run_export_and_refresh_ide_in_paths_with_spaces() {
     let workspace = Workspace::new();

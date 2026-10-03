@@ -20,7 +20,7 @@ import time
 from urllib.parse import unquote, urlsplit
 from urllib.request import url2pathname
 
-from toolchain_support import bridge_name, executable_name
+from toolchain_support import bridge_name, executable_name, query_doctor
 
 
 def source_hashes(directory):
@@ -535,13 +535,10 @@ def main():
     cli = toolchain / executable_name("cargo-nestrs")
     environment["NESTRS_DRIVER"] = str(toolchain / executable_name("nestrs-driver"))
     environment["NESTRS_MACRO_BRIDGE"] = str(toolchain / bridge_name())
-    doctor = subprocess.run([str(cli), "doctor"], cwd=root, env=environment, text=True, capture_output=True, encoding="utf-8")
-    assert doctor.returncode == 0, doctor.stderr
-    (output / "doctor.stdout.txt").write_text(doctor.stdout, encoding="utf-8")
-    selected_tools = dict(line.split(": ", 1) for line in doctor.stdout.splitlines() if ": " in line)
+    selected_tools = query_doctor(cli, cwd=root, environment=environment, log=output / "doctor")
     expected_check_env = {
         "NESTRS_DRIVER": selected_tools["driver"],
-        "NESTRS_MACRO_BRIDGE": selected_tools["macro bridge"],
+        "NESTRS_MACRO_BRIDGE": selected_tools["macro_bridge"],
         "NESTRS_RUSTC": selected_tools["compiler"],
     }
     before = source_hashes(fixture)

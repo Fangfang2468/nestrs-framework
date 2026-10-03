@@ -10,6 +10,7 @@ use std::{
 use crate::toolchain::{Toolchain, cargo_program};
 
 mod cli;
+mod doctor;
 mod graph;
 mod init;
 
@@ -42,21 +43,7 @@ fn execute(args: Vec<OsString>) -> Result<u8, String> {
         Invocation::CargoHelp(command) => {
             spawn(Command::new(cargo_program()).args([&command, "--help"]))
         }
-        Invocation::Doctor => {
-            let toolchain = Toolchain::discover()?;
-            println!("Nestrs toolchain is ready");
-            println!(
-                "rustc: {} ({})",
-                toolchain.identity.release, toolchain.identity.commit
-            );
-            println!("host: {}", toolchain.identity.host);
-            println!("compiler: {}", toolchain.rustc.display());
-            println!("sysroot: {}", toolchain.sysroot.display());
-            println!("driver: {}", toolchain.driver.display());
-            println!("macro bridge: {}", toolchain.bridge.display());
-            println!("driver fingerprint: {}", toolchain.fingerprint);
-            Ok(0)
-        }
+        Invocation::Doctor(options) => doctor::run(options),
         Invocation::Cargo { command, args } => run_cargo(&command, args),
         Invocation::Graph(args) => graph::run(args),
         Invocation::Init(args) => init::run(args),
