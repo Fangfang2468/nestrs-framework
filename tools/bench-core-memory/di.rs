@@ -135,10 +135,10 @@ pub struct Root(ServiceProvider);
 pub struct Scope<'a>(ServiceScope<'a>);
 impl Root {
     pub async fn new() -> Self {
-        Self(ServiceProvider::build().await.unwrap())
+        Self(ServiceProvider::build(None).await.unwrap())
     }
-    pub fn scope(&self) -> Scope<'_> {
-        Scope(self.0.create_scope())
+    pub async fn scope(&self) -> Scope<'_> {
+        Scope(self.0.create_scope(None).await.unwrap())
     }
     pub async fn settle(&self) {
         self.0.get_required_service::<Base>().await.unwrap();

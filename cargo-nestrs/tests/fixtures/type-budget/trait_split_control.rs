@@ -57,7 +57,7 @@ fn never_called(value: &Wide, provider: &ServiceProvider) {
 
 #[tokio::main]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert_eq!(QueryRunner::<u8>(PhantomData).run(&provider).await, 37);
     provider.dispose_async().await.unwrap();
 }

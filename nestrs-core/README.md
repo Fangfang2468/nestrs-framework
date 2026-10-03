@@ -41,7 +41,7 @@ core 不依赖 CLI、代码生成库或 rustc 内部库，应用运行时也不�
 
 应用开发需要 Nestrs 工具链：`#[injectable]`、`#[constructor]`、`#[factory]` 等声明的处理、trait 自动绑定、查询根收集和跨 crate 汇总均由 `cargo nestrs` 管理。应用的 `Cargo.toml` 依赖 core 与业务库；`use nestrs::{injectable, constructor, factory, lazy};` 中的 `nestrs` 是工具注入的 extern 名称，无需增加公开宏 package。
 
-core 自身可以用普通 Cargo 检查和测试；使用 Nestrs 声明的应用通过 `cargo nestrs check/build/run/test` 构建运行。当前没有公开的手动注册门面、运行时扩图接口或单独的 `register!` 宏。普通 Cargo 可以编译 core 自身；未经过 Nestrs 工具链的应用调用 `build` 或 `build_with_options` 时返回 `BuildError::CompilerPlanUnavailable`，不会交付一个静默空容器。
+core 自身可以用普通 Cargo 检查和测试；使用 Nestrs 声明的应用通过 `cargo nestrs check/build/run/test` 构建运行。当前没有公开的手动注册门面、运行时扩图接口或单独的 `register!` 宏。普通 Cargo 可以编译 core 自身；未经过 Nestrs 工具链的应用调用 `build` 时返回 `BuildError::CompilerPlanUnavailable`，不会交付一个静默空容器。
 
 ### 工具怎样把声明交给 core
 
@@ -73,7 +73,7 @@ flowchart TB
         activation["activation：类型化构造、投影与 lease"]
     end
     compiledEntry -->|"首次装配"| immutablePlan
-    application -->|"查询、预热、关闭"| facadeApi
+    application -->|"创建、查询、关闭"| facadeApi
     facadeApi -.->|"查固定路由"| immutablePlan
     facadeApi --> runtimeHandle
     runtimeHandle -->|"命令通道"| coordinator
@@ -113,7 +113,7 @@ flowchart TB
 | 最终 binary / test 的 DI 编译 | 全部注册及已知闭合类型的缺失依赖、歧义、循环、输入协议与生命周期 | `cargo nestrs check/build` 编译错误，应用无需运行 |
 | 实际初始化 | constructor / factory 执行，以及数据库连接等外部资源操作 | 返回初始化错误；构造 panic 被 worker 捕获并转为错误 |
 
-最终 binary / test 的 `cargo nestrs check/build` 包含完整 DI 结构校验。单独编译 library 时只保留服务声明和查询摘要，等最终入口汇总后再检查应用图是否完整。结构合法不代表外部资源一定能初始化成功；未覆盖策略的服务在默认 Lazy 下把第三个阶段推迟到查询时，显式 `#[lazy(false)]` 的 Singleton 则提前预热，**两者都不会推迟或跳过编译期结构校验**。
+最终 binary / test 的 `cargo nestrs check/build` 包含完整 DI 结构校验。单独编译 library 时只保留服务声明和查询摘要，等最终入口汇总后再检查应用图是否完整。结构合法不代表外部资源一定能初始化成功；未覆盖策略的服务在默认 Lazy 下把第三个阶段推迟到查询时，显式 `#[lazy(false)]` 的 Singleton / Scoped 则在对应 owner 创建时提前初始化，**两者都不会推迟或跳过编译期结构校验**。
 
 全图验证只处理服务描述，不执行 constructor、factory、`Default`、`#[value]` 表达式或 cleanup。一个从未被查询的已注册服务存在图错误，也会使最终入口编译失败。
 
@@ -151,11 +151,9 @@ Scoped 业务服务依赖 Singleton 仓储，先创建 root，再为请求创建
 
 | API | 语义 |
 | --- | --- |
-| `ServiceProvider::build().await` | 使用入口项目的启动配置，加载共享编译计划并创建独立运行时，返回 `Result<ServiceProvider, BuildError>`；未配置时为 Lazy / 32 |
-| `ServiceProvider::build_with_options(options).await` | 用代码中的完整选项覆盖项目启动默认值，保留服务级显式策略 |
-| `provider.create_scope()` | 同步创建 scope，本身不实例化服务 |
+| `ServiceProvider::build(options).await` | 接受 `Option<ServiceProviderOptions>`；None 使用入口项目配置，Some 完整显式覆盖；加载共享计划并等待选中 Singleton 初始化，返回 `Result<ServiceProvider, BuildError>` |
+| `provider.create_scope(options).await` | 接受 `Option<ServiceScopeOptions>`；None 使用当前 root 的 scope 默认，Some 只覆盖本次创建；等待选中 Scoped 初始化，返回 `Result<ServiceScope<'_>, ScopeBuildError>` |
 | `scope.service_provider()` | 返回轻量的 `ServiceProviderRef<'_>` 查询视图 |
-| `scope.warm_up().await` | 按声明策略预热当前 scope 的 Scoped 服务及必要依赖 |
 | `LazyInjection<T>::get().await` | 获取字段或构造参数所声明的固定延迟目标，返回借用句柄的 `Result<&T, ResolveError>` |
 | `provider.dispose_async().await` | 消费 root，等待已接受工作、scope 关闭和 root 清理 |
 | `scope.dispose_async().await` | 消费 scope，等待该 scope 的工作与清理 |
@@ -181,7 +179,7 @@ Scoped 业务服务依赖 Singleton 仓储，先创建 root，再为请求创建
 
 | 类型 | 实际字段与拥有的能力 | 设计原因 |
 | --- | --- | --- |
-| `ServiceProvider` | `Arc<ValidatedGraph>`、`Arc<Runtime>`、`Arc<Owner>` | 拥有一个 root 的使用入口；消费这个门面意味着请求结束整个容器的生命周期 |
+| `ServiceProvider` | `Arc<ValidatedGraph>`、`Arc<Runtime>`、`Arc<Owner>`，以及 scope 默认初始化策略 | 拥有一个 root 的使用入口；消费这个门面意味着请求结束整个容器的生命周期 |
 | `ServiceScope<'provider>` | 借用 root，加上自己的 `Arc<Owner>` | 复用同一个 runtime 与 Singleton，但独立管理本 scope 的实例；root 借用阻止 scope 仍被使用时提前消费 root |
 | `ServiceProviderRef<'owner>` | 借用图、runtime 和 owner，`Clone + Copy` | 仅传递查询能力，不创建新容器、不复制缓存，不新增 Arc 强持有；借用仍要求 owner 在视图及查询结果被使用期间存活 |
 
@@ -240,18 +238,27 @@ core 的私有 [activation::adapter](src/activation/adapter.rs) 仅定义执行�
 生成入口为私有的 `__nestrs_reflect_v2`。完整验证之后，工具只交付输入或查询路由实际使用的投影，并同步重编号；未使用的已注册 provider 仍接受全图检查。入口 metadata 旁的 `*.nestrs-reflect.json` 保存同一份已选计划，便于审阅节点、槽位和路由，运行时不读取此文件。文件位置与字段说明见[rustc 集成指南](../docs/NESTRS_RUSTC_EXTENSION_GUIDE.md)。
 
 `v2` 表示 core 与工具生成代码之间的内部执行 ABI；JSON 清单的格式 `version` 仍为 `1`，
-两者独立演进。driver 在引用 core 的最终 `check/build` 中核对 `plan_set_options_v2`
-及其完整签名，空服务图也不能混用旧 core。更新工具和 core 后应一起重新编译；CLI
+两者独立演进。包含 root / scope 两种默认策略的 options sink 为 `plan_set_options_v3`；
+driver 在引用 core 的最终 `check/build` 中核对这个 sink 及其完整签名，空服务图也不能
+混用旧 core。更新工具和 core 后应一起重新编译；CLI
 使用 driver/bridge 内容指纹隔离生成缓存。
 
 core 的 [CompiledApplication::load](src/graph/plan.rs) 使用入口共享的 `OnceLock` 装配不可变计划。首次装配仍调用目标端执行适配回调，以安全取得真实 `TypeId` 和 typed adapter 地址；这些回调不再选择候选、展开泛型或验证拓扑，也不会执行用户构造器。后续 `build` 复用同一份计划，各自创建独立的运行时、缓存与实例。这里的共享只针对结构计划，不会让不同 root 共享 Singleton。
 
-### `build()` 建立了哪些对象
+### `build` 建立了哪些对象
 
-对应入口是 [ServiceProvider::build_from_plan](src/facade.rs)。它按顺序加载
+对应入口是 [ServiceProvider::build](src/facade.rs)。它按顺序加载
 `CompiledApplication`，选定启动选项，确认当前存在 Tokio runtime，再通过
-`Runtime::start` 建立 root owner 与中央协调任务，最后等待策略选出的 Singleton
-预热请求。预热失败时会先等待尚未交付的 root 关闭，再返回错误。
+`Runtime::start(...).await` 建立 root owner 与中央协调任务，并等待策略选出的 Singleton
+初始化请求。初始化失败时会先等待尚未交付的 root 关闭，再返回错误。
+
+`create_scope(options).await` 采用同样的“建立 owner → 按策略初始化 → 成功后交付”流程，
+内部调用 `Runtime::create_scope(...).await`，复用当前 root 的计划和 runtime，
+只为新 scope 建立独立 owner、缓存与 journal。二者共用私有 `initialize_owner`：
+它持有尚未交付的 owner，初始化失败先关闭，并不能对已交付 owner 再发起批量初始化。
+它选择 Scoped 入口，不再创建另一份协调器；Scoped 的 Singleton 依赖仍归 root。
+scope 初始化失败时只关闭这个尚未交付的 scope，root 和其他 scope 可以继续使用；
+若失败来自共享 Singleton，该 Singleton 的失败缓存仍保留在 root，不会自动重试。
 
 `CompiledApplication` 保存项目默认选项和 `Arc<ValidatedGraph>`。共享与隔离关系如下：
 
@@ -435,7 +442,7 @@ error: [NESTRS-DI007] `Service` 在默认 key 下有多个创建声明
   = help: 保留一个创建声明，或为它们设置不同 key。
 ```
 
-这里的 `main` 没有调用容器 `build()`，仍然会报错；Lazy 初始化或从不查询这个服务
+这里的 `main` 没有调用容器 `build(None)`，仍然会报错；Lazy 初始化或从不查询这个服务
 也不会推迟或跳过重复声明检查。library 可以先贡献声明，冲突在最终入口汇总时验证。
 
 增加 `#[primary]` 不能消除这种冲突。primary 用于同 key 的接口多候选选择，不能
@@ -489,7 +496,7 @@ fn make_service() -> Service {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = ServiceProvider::build().await?;
+    let provider = ServiceProvider::build(None).await?;
     let default = provider.get_required_service::<Service>().await?;
     let custom = provider
         .get_required_keyed_service::<Service>(ServiceKey::Named("custom".into()))
@@ -540,7 +547,7 @@ fn make_u64_service() -> Service<u64> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = ServiceProvider::build().await?;
+    let provider = ServiceProvider::build(None).await?;
     let from_factory = provider.get_required_service::<Service<u64>>().await?;
     let from_blueprint = provider.get_required_service::<Service<u32>>().await?;
 
@@ -579,7 +586,7 @@ Factory provider 不继承或合并返回类型上 injectable 的 provider 配�
 蓝图与 factory 使用相同 key，最终也采用工厂这一整份配置；工厂未设置的项目使用
 它自己的默认规则，例如未指定 lifetime 时为 Singleton，未指定服务级 lazy 时
 不设置服务级预热覆盖，未指定 cleanup 时没有该 provider 的异步清理回调。
-未覆盖时的具体预热行为由本次 build 或 scope 预热操作决定，见第 6 节。
+未覆盖时的具体初始化行为由本次 build 或 create_scope 的配置决定，见第 6 节。
 
 结构体的 Rust 定义仍然有效：injectable 对注入字段生成的 `Injection<T>`、
 `LazyInjection<T>` 或 optional 包装不会因改由 factory 创建而消失。工厂必须按
@@ -661,94 +668,168 @@ Transient 不进入共享缓存，不意味着查询返回后立即释放。所�
 
 | 控制位置 | 决定什么 | 生效时点 |
 | --- | --- | --- |
-| 全局 `InitializationMode::Lazy` / `Eager` | build 时，未写服务级覆盖的 Singleton 是否主动构造 | `build().await` / `build_with_options(...).await` |
-| 服务声明上的 `#[lazy]` / `#[lazy(false)]` | 这个服务是否被选为本次预热的独立入口 | build 的 Singleton 预热，或显式 scope 的 Scoped 预热 |
+| root / scope 各自的 `InitializationMode::Lazy` / `Eager` | 未写服务级覆盖的服务是否主动构造；root 针对 Singleton，scope 针对 Scoped | build 或 create_scope 成功返回前 |
+| 服务声明上的 `#[lazy]` / `#[lazy(false)]` | 这个服务是否被选为所属 owner 创建过程的初始化入口 | Singleton 在 build，Scoped 在 create_scope |
 | 字段、constructor / factory 参数上的 `#[lazy]` | 创建消费者时，是否先只交付句柄，把这一处依赖的获取推迟到 `get().await` | 消费者构造与之后的业务访问 |
 
 前两项控制**选谁主动构造**；第三项控制**构造一个消费者时，是否必须等这条依赖**。
-生命周期另行决定实例共享范围。全局 Lazy、服务级 lazy 和延迟字段都不改变
+生命周期另行决定实例共享范围。默认 Lazy、服务级 lazy 和延迟字段都不改变
 Singleton / Scoped / Transient 的含义，也不免除完整依赖图的编译期检查。
 
-### 在 Cargo.toml 设置启动默认值
+### 在 Cargo.toml 设置创建默认值
 
-`build()` 使用最终入口 package 的 `[nestrs-cli]` 配置；缺省为 Lazy / 32。这里的
-Lazy 是初始化默认值，32 是同一 root 及所有 scope 共享的构造名额。
-配置在编译期验证并固化进计划，不继承依赖或 workspace 默认值；core 运行时不解析
-TOML。修改配置后需要重新构建。配置格式、合法值和 manifest 跟踪见
+`build(None)` 使用最终入口 package 的 `[nestrs-cli]` 配置。root 和 scope 的默认策略
+**分别设置、互不继承，未配置时均为 Lazy**；同一 root 及所有 scope 共享默认 32 个
+构造名额。例如，服务器可以在启动时准备共享资源，每个请求仍只构造实际需要的服务：
+
+```toml
+[nestrs-cli]
+initialization = "eager"
+scope-initialization = "lazy"
+max-concurrent-activations = 32
+```
+
+`initialization` 控制 build 的 Singleton 初始化；`scope-initialization` 保存在
+所创建的 root 中，供之后的 `create_scope(None)` 选择 Scoped 入口。只把 root 设置为
+Eager 不会自动让每个 scope 都 Eager。配置在编译期验证并固化进计划，不继承依赖或
+workspace 默认值；core 运行时不解析 TOML。修改配置后需要重新构建。完整规则见
 [工具链指南](../docs/NESTRS_CARGO_TOOLCHAIN.md#cargotoml-中的容器启动配置)。
 
 ### 代码显式覆盖
 
-需要程序化控制时，仍可使用既有选项：
+需要程序化控制时，向 `build` 传入 `Some(options)` 完整覆盖项目默认值：
 
 ```rust
 use std::num::NonZeroUsize;
-use nestrs_core::{InitializationMode, ServiceProvider, ServiceProviderOptions};
+use nestrs_core::{
+    InitializationMode, ServiceProvider, ServiceProviderOptions, ServiceScopeOptions,
+};
 
-let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
+let provider = ServiceProvider::build(Some(ServiceProviderOptions {
     initialization: InitializationMode::Eager,
+    scope_initialization: InitializationMode::Lazy,
     max_concurrent_activations: NonZeroUsize::new(16).unwrap(),
-})
+}))
 .await?;
+
+// 使用当前 root 的 scope 默认值 Lazy；显式 #[lazy(false)] 的 Scoped 仍会初始化。
+let request_scope = provider.create_scope(None).await?;
+request_scope.dispose_async().await?;
+
+// 只为这一次批处理 scope 选择 Eager，不修改 root 或随后 scope 的默认值。
+let batch_scope = provider
+    .create_scope(Some(ServiceScopeOptions {
+        initialization: InitializationMode::Eager,
+    }))
+    .await?;
+batch_scope.dispose_async().await?;
+provider.dispose_async().await?;
 ```
 
-全局默认的优先级为 **`build_with_options` 的完整显式选项 > `[nestrs-cli]` 项目配置 > Lazy / 32 基线**。
-`ServiceProviderOptions::default()` 始终表示库的 Lazy / 32 基线，不读取项目配置。
-例如 `build_with_options(ServiceProviderOptions::default())` 会显式覆盖项目中设置的 Eager；
-希望使用项目配置时应调用 `build()`。确定全局默认后，每个服务仍可用自己的策略覆盖它。
+`None` 与 `Some` 的区别是**是否采用外部默认值**，不是 Lazy 与 Eager 的区别：
 
-### 服务级预热策略
+| 调用 | 采用的默认配置 |
+| --- | --- |
+| `ServiceProvider::build(None)` | 入口 package 固化进计划的配置；manifest 未设置的字段才采用库基线 |
+| `ServiceProvider::build(Some(options))` | 完整使用传入的 `ServiceProviderOptions`，不逐字段合并项目配置 |
+| `provider.create_scope(None)` | 当前 root 保存的 `scope_initialization` |
+| `provider.create_scope(Some(options))` | 仅这一次采用传入的 `ServiceScopeOptions`，不改变 root 或之后 scope 的默认值 |
 
-“预热入口”是本次主动请求构造的服务。**没有被选为入口，不代表绝不会被创建**：
-另一个入口的普通依赖也可能需要它。下面的“选中 / 跳过”只描述入口选择，不描述
-依赖展开之后的全部实例。
+`ServiceProviderOptions::default()` 始终表示库的 root Lazy / scope Lazy / 32 基线，
+不读取项目配置。因此 **`build(Some(Default::default()))` 不等于 `build(None)`**：
+前者明确选择库基线，后者可能采用项目配置的 Eager 或其他构造上限。
+`ServiceScopeOptions::default()` 明确选择 Lazy，所以在 scope 默认 Eager 的容器中，
+`create_scope(Some(Default::default()))` 会为本次选择 Lazy，`create_scope(None)`
+仍采用 Eager。即使 options 字面量使用 `..Default::default()`，也只是补齐库默认
+字段，不能用来表达“其余字段继承项目”。
 
-| 该服务的声明 | build：全局 Lazy，且服务是 Singleton | build：全局 Eager，且服务是 Singleton | 显式 `scope.warm_up()`，且服务是 Scoped |
-| --- | --- | --- | --- |
-| 不写服务级 `lazy` | 跳过 | 选中 | 选中 |
-| `#[lazy]` / `#[lazy()]` / `#[lazy(true)]` | 跳过 | 跳过 | 跳过 |
-| `#[lazy(false)]` | 选中 | 选中 | 选中 |
+这些选项只控制默认策略，服务上的显式 `#[lazy]` / `#[lazy(false)]` 始终优先。
+所有 scope 复用 root 的构造并发额度，不提供独立的 worker 上限。已移除
+`build_with_options` 与 `create_scope_with_options`；两类创建各自只有一个公开入口。
+
+### 服务级初始化策略
+
+“初始化入口”是创建 owner 时主动请求构造的服务。**没有被选为入口，不代表绝不会
+被创建**：另一个入口的普通依赖也可能需要它。下面只描述入口选择，不描述依赖展开
+之后的全部实例；Singleton 在 build 使用 root 模式，Scoped 在 create_scope 使用
+本次 scope 模式。
+
+| 该服务的声明 | 所属 owner 为 Lazy | 所属 owner 为 Eager |
+| --- | --- | --- |
+| 不写服务级 `lazy` | 跳过 | 选中 |
+| `#[lazy]` / `#[lazy()]` / `#[lazy(true)]` | 跳过 | 跳过 |
+| `#[lazy(false)]` | 选中 | 选中 |
 
 这张表还需要结合生命周期和调用入口阅读：
 
-- **build 只选择 Singleton 入口**。即使全局 Eager，也不会创建 scope 或预热 Scoped。
-  全局 Lazy 仍会检查服务级覆盖，因此存在 `#[lazy(false)]` Singleton 时，build 也会构造服务。
-- **`create_scope()` 只创建 owner 和缓存边界，不构造任何服务**。Scoped 上的
-  `#[lazy(false)]` 也不会使它自动构造。
-- **`scope.warm_up().await` 明确发起当前 scope 的预热**，以 Eager 作为未标注 Scoped
-  的默认值；即使 root 当初按全局 Lazy 建立，这次显式预热仍生效。它不遍历所有
-  Singleton 作为独立入口，但 Scoped 的普通依赖可以触发尚未创建的 Singleton。
-- **Transient 从不作为预热入口**，包括标注 `#[lazy(false)]` 的情况。它可以作为
-  某个入口的普通依赖被构造，每个消费槽位仍有独立实例。
+- **build 只选择 Singleton 入口**。即使 root 为 Eager，也不会创建 scope 或初始化
+  Scoped。root 为 Lazy 时，显式 `#[lazy(false)]` 的 Singleton 仍会在 build 返回前构造。
+- **create_scope 只选择当前 scope 的 Scoped 入口**。scope 为 Lazy 时，显式
+  `#[lazy(false)]` 的 Scoped 仍在 scope 返回前构造；scope 为 Eager 时，未标注服务
+  也参与初始化。Scoped 的普通依赖可以触发尚未创建的 Singleton。
+- **Transient 从不作为自主初始化入口**，包括标注 `#[lazy(false)]` 的情况。它可以
+  作为某个入口的普通依赖被构造，每个消费槽位仍有独立实例。
 
-公开 `warm_up()` 属于 scope；root 的主动预热在 build 中完成，没有单独的公开
-`ServiceProvider::warm_up()`。build 之后需要某个服务时，使用普通查询方法。
+创建成功表示选中服务已经准备好。当前没有公开 `warm_up()`，也没有“先创建 scope，
+再单独调用预热”的内部操作入口；需要提前构造时，在创建前选择模式。owner 已交付后，
+使用普通查询取得所需服务。即使 Lazy 下没有任何选中入口，`create_scope(None)` 仍是
+异步且返回 Result 的统一接口；即使没有服务需要构造，它也会等待协调器确认 owner
+登记成功，不能交付已被关闭中的 runtime 拒绝的 scope。业务调用应保留 `.await?`。
 
-服务上的 lazy 不生成代理，也不把普通输入改成延迟句柄。若已预热的消费者普通依赖
-一个 `#[lazy]` 服务，该目标仍须先完成构造，消费者才能构造。直接查询该目标也会
-按正常规则构造或复用它。完整声明语法见
+服务上的 lazy 不生成代理，也不把普通输入改成延迟句柄。若已初始化的消费者普通
+依赖一个 `#[lazy]` 服务，该目标仍须先完成构造，消费者才能构造。直接查询该目标
+也会按正常规则构造或复用它。完整声明语法见
 [服务级预热声明](../docs/NESTRS_MACROS.md#34-用-lazy-控制某个服务是否自主预热)。
 
-### 一次预热实际怎样执行
+### 创建时的初始化实际怎样执行
 
-root 的 build 和 scope 的 warm_up 使用同一个解析调度器：
+root 的 build 和 scope 的 create_scope 使用同一个解析调度器：
 
-1. 从冻结计划中按生命周期和上表选出入口，先提交全部选中请求，再等待其结果。
+1. 建立尚未交付的 owner；scope 还须等待协调器确认登记。然后从冻结计划中按
+   生命周期和策略选出入口，先提交全部选中请求，再等待其结果。
 2. 每个请求先检查所属 owner 的状态与生命周期缓存。已成功的 Singleton / Scoped
    复用实例；正在构造的复用同一任务；已缓存的构造失败仍返回原失败。
 3. 为需要新构造的节点展开普通输入。普通依赖准备好后才调用消费者的构造函数；
    延迟输入此时只创建 `LazyInjection<T>` 句柄，不因这条输入立即构造目标。
 4. 就绪节点共享 root 的构造名额并发执行。依赖一就绪即可推进消费者，不等待整层
    完成，也不保证互相独立的服务按某个固定顺序执行业务副作用。
-5. 等待所选请求完成。正常等待期间遇到构造错误，仍收齐其他已提交请求的结果，再返回错误。
+5. 等待所选请求完成。正常等待期间遇到构造错误，仍收齐其他已提交请求的结果。
+   成功才交付 owner；失败则先等待它关闭，再返回保留初始化与清理原因的错误。
 
-这里的 `.await` 会等待预热完成；**返回成功只保证选中的入口及其普通依赖已构造成功并发布**。
-它不保证所有 lazy 字段都调用过 `get()`，也不保证从未触达的外部资源可用。
-构造名额限制同时执行的构造 worker，不限制服务方法并发、业务请求数量或队列长度。
+这里的 `.await` 会等待初始化完成；**返回成功只保证选中的入口及其普通依赖已构造
+成功并发布**。它不保证所有 lazy 字段都调用过 `get()`，也不保证从未触达的外部资源
+可用。构造名额限制同时执行的构造 worker，不限制业务请求数量或队列长度。
 
-同一 scope 再次 warm_up 会命中已有 Scoped 缓存，不重新构造消费者或它已保存的
-Transient 输入，也不扫描已创建消费者的 lazy 字段。另一个 scope 有独立缓存，
-需要在它自己的查询或 warm_up 中创建 Scoped 实例。
+后续查询复用已创建的 Scoped 实例及其已保存的 Transient 输入，不重新构造消费者，
+也不扫描消费者的 lazy 字段。另一个 scope 有独立缓存，根据自己的创建配置或查询
+构造实例；不会继承上一个 scope 的 Scoped 实例。
+
+对于“每个 HTTP 请求创建一个 scope”，默认 Lazy 通常能避免构造本次请求不使用的
+服务；Eager 适合希望在业务开始前确认一组 Scoped 服务可用的流程。切换为 Eager
+主要改变初始化时机，不保证减少总耗时或内存，也不改变依赖图验证。
+
+### 从同步 scope 和独立预热迁移
+
+原来的 `let scope = provider.create_scope();` 改为
+`let scope = provider.create_scope(None).await?;`，调用函数需要能够等待并处理
+`ScopeBuildError`。原来的 `scope.warm_up().await?` 删除，把 Eager 放进 root 的
+`scope_initialization`、manifest 的 `scope-initialization`，或本次
+`create_scope(Some(ServiceScopeOptions { initialization: InitializationMode::Eager }))`。
+旧调用曾在 Lazy root 下显式预热所有默认 Scoped，
+迁移时应明确选择 scope Eager，不能只删除那次调用而保留 scope Lazy。
+
+创建失败不再把“已交付但预热失败的 scope”留给调用者。错误中的 `error` 保留
+`ResolveError`，`dispose_error` 保留可能的 `DisposeError`；调用者仍负责自己已经
+持有的 root 和其他 scope 的关闭。已经记录的 scope cleanup 错误仍会按既有规则汇总到
+root 的最终关闭结果；“root 仍可用”不表示它最终关闭时会忽略这些错误。新增的
+`ServiceProviderOptions::scope_initialization` 也需要补进完整结构体字面量；使用
+`..Default::default()` 时则默认 Lazy。
+
+如果已经采用上一阶段的异步 scope API，再把 `build().await` 改为 `build(None).await`、
+`create_scope().await` 改为 `create_scope(None).await`；
+`build_with_options(options)` / `create_scope_with_options(options)` 分别改为
+`build(Some(options))` / `create_scope(Some(options))`。返回值、初始化失败关闭和取消
+语义沿用上一阶段，变化是配置参数收敛进单一入口。
 
 ### 按构造时序理解普通依赖与延迟依赖
 
@@ -764,7 +845,7 @@ flowchart LR
 
 | 时点 | 实际发生的事 |
 | --- | --- |
-| `build().await` | 选择 Checkout 和 Database；先完成 Database，再构造 Checkout。Checkout 取得可用的 Database 令牌和尚未请求的 ReportClient 句柄 |
+| `build(options).await` | 选择 Checkout 和 Database；先完成 Database，再构造 Checkout。Checkout 取得可用的 Database 令牌和尚未请求的 ReportClient 句柄 |
 | build 返回成功 | Checkout / Database 已可用；ReportClient 尚未构造，报表连接初始化也尚未执行 |
 | 查询 Checkout | 返回 root 已有的同一实例，不创建 ReportClient |
 | 业务首次执行 `checkout.reports.get().await` | 该句柄请求 ReportClient；协调器构造目标并交付同一实例的强 lease，句柄缓存类型化结果 |
@@ -816,14 +897,15 @@ Scoped。`get()` 不重新选择 provider、不扩图。Singleton 或同一 scop
 
 ### 失败、取消与关闭发生在什么时候
 
-预热把选中服务的运行期初始化错误提前到启动或 warm_up；延迟获取则把尚未触达
+创建时初始化把选中服务的运行期错误提前到 build 或 create_scope；延迟获取则把尚未触达
 目标的错误留到首次 `get()`。图结构错误仍在 check/build 阶段拒绝，与两种时机无关。
 
 | 场景 | 当前处理 |
 | --- | --- |
 | build 的预热失败 | 返回 `BuildError::Initialization`；交付 root 前先等待关闭，初始化错误和可能的清理错误均保留 |
-| 显式 `scope.warm_up()` 失败 | 返回 `ResolveError`；不会自动消费并关闭 scope，调用者仍须负责 `dispose_async()` |
-| 取消查询或 warm_up 的等待 | 注销等待订阅，已接受的初始化继续；取消尚未返回的 build 时，未交付 root 的 Drop 发起关闭 |
+| scope 创建初始化失败 | 返回 `ScopeBuildError { error, dispose_error }`；交付 scope 前先等待该 scope 关闭，保留初始化和可能的清理错误；root 保持可用 |
+| 取消查询的等待 | 注销等待订阅，已接受的初始化继续，由所属 owner 收纳 |
+| 取消尚未返回的 build / create_scope | 未交付 owner 的 Drop 发起关闭，已接受任务继续排空并清理；取消者没有等到清理完成 |
 | 取消一次字段 `get()` 后再次获取 | 若请求已提交，接续同一请求，不为 Transient 重复创建；已交付的成功或失败结果固定缓存 |
 | owner 已开始关闭才首次获取 | 不再接受新的延迟请求；已经被接受的请求继续排空，已有字段缓存仍可读取，但 cleanup 后业务资源是否可用由业务决定 |
 
@@ -833,8 +915,8 @@ lazy 句柄**。当前实现会明确拒绝，且不污染该字段缓存；构�
 限制仍适用。准确判断和派生任务限制见下文[构造期间的等待限制](#构造期间的等待限制到底检查什么)。
 
 前面的表描述公开行为。接下来解释这些行为如何由共享计划、字段状态、订阅和 lease
-共同实现。预热选择可对照 [Runtime::warm_up](src/runtime/handle.rs)、
-[公开 build / scope 入口](src/facade.rs)及[初始化策略测试](tests/unit/runtime/initialization.rs)；
+共同实现。初始化入口的选择与失败处理见[公开 build / scope 入口](src/facade.rs)，
+调度请求见[Runtime](src/runtime/handle.rs)，回归见[初始化策略测试](tests/unit/runtime/initialization.rs)；
 真实声明的组合回归见[服务级 lazy 契约](../cargo-nestrs/tests/provider_lazy_contracts.rs)。
 
 #### 为什么需要四个类型，而不是在字段里保存一个 Future
@@ -995,7 +1077,7 @@ root/scope 接受工作直到关闭。它们不能绑在同一个 future 上。�
 | 机制 | 保存或传递的内容 | 为什么使用它 |
 | --- | --- | --- |
 | `mpsc::unbounded_channel` | `Register`、`Resolve`、`ResolveLazy`、`CancelQuery`、`Close` 命令 | 让所有请求经过同一个状态修改入口；同步方法和 `Drop` 可以直接提交 |
-| `oneshot` | 一次普通查询的 `Resolution`，或一次显式关闭的结果 | 调用者只需要一个结果，等待端与初始化任务分开持有 |
+| `oneshot` | scope 登记确认、一次普通查询的 `Resolution`，或一次显式关闭的结果 | 调用者只需要一个结果，等待端与初始化任务分开持有 |
 | `watch` | lazy occurrence 尚未完成的 `None`，及完成后的 `Some(Resolution)` | 接收端保存在 lazy 槽位中，一次 `get()` 被取消后，下一次仍能接续同一请求 |
 | `JoinSet` | 构造和 cleanup worker 的完成事件或 `JoinError` | 由协调器集中回收 worker；panic 也能关联回具体 provider/owner |
 
@@ -1003,8 +1085,8 @@ root/scope 接受工作直到关闭。它们不能绑在同一个 future 上。�
 不是不断推送服务状态的流；每个请求发布一次结果，利用的是它可以保存最近结果、
 接收端可以克隆的性质。lazy 槽位另有类型化结果缓存，详见第 6 节的延迟输入和第 8 节的所有权说明。
 
-选择无界命令队列与同步接口有关：`create_scope()` 要发送 `Register`，取消查询的
-`Drop` 要发送 `CancelQuery`，owner 的 `Drop` 要发送 `Close`，这些路径不能等待
+选择无界命令队列仍受同步析构路径约束：scope 创建时发送 `Register`，取消查询的
+`Drop` 要发送 `CancelQuery`，owner 的 `Drop` 要发送 `Close`；后两条路径不能等待
 “队列空出一个位置”。有界队列当然可以设计，但需要为队列满时的注册、退订和关闭
 分别设计可靠提交规则，不能只把 `unbounded_channel()` 换成有容量的 `channel()`。
 
@@ -1121,7 +1203,7 @@ Absent / Lazy。`remaining` 只统计未完成的 Immediate 槽位；worker 最�
 
 ### 沿订单服务走一次首次查询
 
-继续使用第 3 节的例子，假设 root 使用默认 Lazy 且没有服务级预热覆盖，两个实例
+继续使用第 3 节的例子，假设 root 和 scope 都使用默认 Lazy 且没有服务级预热覆盖，两个实例
 都尚未构造。第一次在 scope 中查询 `CheckoutService` 时会发生以下过程：
 
 ```mermaid
@@ -1298,11 +1380,11 @@ core 使用应用当前的 Tokio runtime，不创建嵌套 runtime。当前线�
 变成协调器可统计的独立构造。构造中首次等待尚未交付的 lazy 输入会被拒绝，避免
 用完全部名额后每个 worker 都反过来等待新构造；具体检查见 `ActivationContext`。
 
-`Runtime::warm_up` 先为所有选中的预热根创建查询，再逐一等待结果。虽然等待代码
+创建过程先为所有选中的初始化入口提交查询，再逐一等待结果。虽然等待代码
 写成循环，初始化请求已全部提交，所以独立分支可以同时构造。在结果等待阶段，
-它保留第一个错误并继续等待其余结果。如果提交阶段本身失败，或整个预热 future
-被取消，保存的请求凭证一同退订；此前已接受的初始化任务继续排空，没有另外一套
-预热调度器。
+创建流程保留第一个错误并继续等待其余结果。如果提交阶段本身失败，或创建 future
+被取消，保存的请求凭证一同退订；此前已接受的初始化任务继续排空。未交付 owner
+同时进入关闭流程；初始化复用普通解析请求，没有独立的预热命令或调度器。
 
 ### 当前通信模型的成本与边界
 
@@ -1615,15 +1697,16 @@ concrete 在其所属 crate 内投影，消费方只需命名可访问的请求�
 | 情况 | 行为 |
 | --- | --- |
 | 图结构非法 | 最终 binary / test 的 `cargo nestrs check/build` 编译失败；无需启动应用或服务构造 |
-| 未经 Nestrs 工具链生成计划 | `build` / `build_with_options` 返回 `BuildError::CompilerPlanUnavailable` |
+| 未经 Nestrs 工具链生成计划 | `build(None)` / `build(Some(...))` 均返回 `BuildError::CompilerPlanUnavailable` |
 | 缺少当前 Tokio runtime | 返回 `BuildError::RuntimeUnavailable` |
 | 启动预热失败（包含 Lazy 下 `#[lazy(false)]` 的 Singleton） | 关闭尚未交付的 root，处理已接受任务并清理成功实例，再返回 `BuildError::Initialization { error, dispose_error }` |
+| scope 创建初始化失败（包含 Lazy 下 `#[lazy(false)]` 的 Scoped） | 关闭尚未交付的 scope，再返回 `ScopeBuildError { error, dispose_error }`；已存在的 root 与其他 scope 不受关闭影响 |
 | 查询、生命周期或构造失败 | 返回 `ResolveError`；初始化诊断保留 provider、key、源码与依赖路径 |
 | cleanup 或关闭期间跟踪到的实例析构 panic | 记录失败、继续清理其他实例，最终聚合为 `DisposeError` |
 
 Singleton / Scoped 的初始化失败缓存到所属 owner 关闭，后续查询不会自动重试。Transient 的失败只属于本次 occurrence，下次请求可以创建新的 occurrence；一个 `LazyInjection` 字段固定持有同一次 occurrence，因此该字段反复 `get()` 不会重试失败。普通前置依赖失败时，消费者不会开始构造；延迟目标失败发生在消费者已构造之后，由调用 `get()` 的业务代码处理。其他请求可能使用的成功共享实例不会被连带清理。
 
-factory 返回 `Result<T, E>` 时要求 `E: Debug`，同步和异步 adapter 都保存错误诊断文本，不承诺保留业务错误完整的 `Error::source` 链。constructor / factory panic 通过受跟踪的 worker 结果进入初始化错误，协调器继续运行。`BuildError::Initialization` 保留公开的 `ResolveError` 及可选 `DisposeError`；关闭诊断可通过 `DisposeError::failures()` 逐项读取。
+factory 返回 `Result<T, E>` 时要求 `E: Debug`，同步和异步 adapter 都保存错误诊断文本，不承诺保留业务错误完整的 `Error::source` 链。constructor / factory panic 通过受跟踪的 worker 结果进入初始化错误，协调器继续运行。`BuildError::Initialization` 和 `ScopeBuildError` 均保留公开的 `ResolveError` 及可选 `DisposeError`；关闭诊断可通过 `DisposeError::failures()` 逐项读取。
 
 错误路径也有专门的数据结构，而不是每经过一层消费者就拼接一份长字符串。
 [error.rs](src/error.rs) 中的 `ResolveError` 共享一个 `ResolveFailure`，其中原始
@@ -1657,7 +1740,7 @@ panic，正常回收该二级载荷。若二级载荷仍是任意用户类型，
 
 查询 future 被丢弃，只取消等待。协调器已经接受的初始化继续执行，成功实例仍由 owner 收纳。关闭等待被取消，也不会取消已经启动的关闭流程。
 
-普通查询和预热的 future 被丢弃后会提交退订命令，协调器移除失效等待订阅，不需要等慢工厂完成才释放。消费者因其他
+普通查询与创建期初始化的等待被丢弃后会提交退订命令，协调器移除失效等待订阅，不需要等慢工厂完成才释放。消费者因其他
 依赖失败后，也会注销对未完成依赖的等待记录。`LazyInjection::get()` 的接收端由
 字段持有，取消一次等待后仍可接续同一次初始化。
 
@@ -1673,8 +1756,8 @@ Building 缓存里的一个 TaskId。第一个查询取消时，只移除它的�
 | 取消的位置 | 当前实现保留的工作 |
 | --- | --- |
 | 查询 future 尚未被 poll | async 函数主体尚未执行，没有仅凭创建 future 提交 Resolve |
-| 查询 / `scope.warm_up()` 已提交请求 | 丢弃等待凭证，发送退订；接受的构造继续；warm_up 的取消本身不消费 scope |
-| `build()` 正在预热 | 构建函数内部尚未交付的 ServiceProvider 被 Drop，发出关闭请求；取消者没有等到 cleanup 完成 |
+| 查询已提交请求 | 丢弃等待凭证，发送退订；接受的构造继续，由已有 owner 收纳 |
+| `build(None)` / `create_scope(None)` 正在初始化 | 创建函数内部尚未交付的 owner 被 Drop，发出关闭请求；已接受任务继续排空并清理，取消者没有等到 cleanup 完成 |
 | `dispose_async(self)` 等待中 | 关闭请求继续，owner 的 Drop 也负责幂等兜底；future 被丢弃不撤销关闭 |
 
 `dispose_async(self)` 与普通查询还有一个所有权区别：它的 future 从创建时就拥有
@@ -1687,7 +1770,7 @@ Building 缓存里的一个 TaskId。第一个查询取消时，只移除它的�
 来保活构造输入。父任务因某条边失败而退役时，只注销其余输入槽位的反向订阅，
 已经接受的子任务仍独立排空。
 
-[请求退订测试](tests/unit/runtime/requests.rs)覆盖取消预热时尚未轮到 await 的请求；
+[请求退订测试](tests/unit/runtime/requests.rs)覆盖取消创建期初始化时尚未轮到 await 的请求；
 [协调器订阅测试](tests/unit/runtime/subscriptions.rs)检查取消、完成的不同顺序不影响
 健康等待者，持续 Pending 的共享子任务也不会积累历史失败父节点。
 
@@ -1816,7 +1899,7 @@ DisposeError；异常载荷回收仍受本节开头说明的有界策略限制�
 下面是职责划分；内部模块不是业务公开 API。建议分四遍阅读，每一遍只回答一个问题：
 
 1. **容器由什么组成？** 先看 `lib.rs` 的公开导出，再看 `facade.rs` 的三个门面结构、
-   `build_from_plan` 和 `graph/mod.rs` 的数据结构。此时把计划当成已经验证好的输入，
+   `ServiceProvider::build` 和 `graph/mod.rs` 的数据结构。此时把计划当成已经验证好的输入，
    先理解每次 build 创建什么、scope 共享什么。
 2. **一次查询怎样完成？** 从 `ServiceProviderRef::query` 进入 `Runtime::resolve`，
    再依次读协调器的 `accept_resolution`、`ensure_task`、`expand`、`launch_ready`、

@@ -24,7 +24,7 @@ struct Unused<T> {
 
 #[tokio::main]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     provider.get_required_service::<Concrete>().await.unwrap();
     assert_eq!(automatic_assertions::explicit_count(), 0);
     // This latent projection is available for downstream users. Its presence

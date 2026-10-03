@@ -109,7 +109,7 @@ mod macro_items {
 
 #[tokio::test(flavor = "current_thread")]
 async fn factory_registration_items_preserve_business_constants() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let first = provider
         .get_required_service::<factory_items::First>()
         .await
@@ -134,7 +134,7 @@ async fn factory_registration_items_preserve_business_constants() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn conditional_carriers_preserve_business_type_identity() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let first = provider
         .get_required_service::<carrier_items::First>()
         .await
@@ -165,7 +165,7 @@ async fn conditional_carriers_preserve_business_type_identity() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn repeated_macro_expansions_preserve_cfg_and_raw_business_names() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let service = provider
         .get_required_service::<macro_items::Service>()
         .await

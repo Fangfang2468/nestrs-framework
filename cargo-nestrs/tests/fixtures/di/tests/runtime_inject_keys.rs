@@ -88,7 +88,7 @@ async fn async_quote(
 
 #[tokio::test]
 async fn literal_keys_preserve_payment_routes_in_fields_and_factory_parameters() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let (checkout, sync, asynchronous) = tokio::join!(
         provider.get_required_service::<Checkout>(),
         provider.get_required_service::<SyncQuote>(),

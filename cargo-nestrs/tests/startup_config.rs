@@ -40,21 +40,23 @@ impl Fixture {
                 "[package]\nname = 'startup-shared'\nversion = '0.0.0'\nedition = '2024'\n\
                  [dependencies]\nnestrs-core = {{ path = {core} }}\n\
                  tokio = {{ version = '1.53.1', features = ['rt', 'macros', 'sync', 'time'] }}\n\
-                 [nestrs-cli]\ninitialization = 'eager'\nmax-concurrent-activations = 7\n"
+                 [nestrs-cli]\ninitialization = 'eager'\nscope-initialization = 'eager'\nmax-concurrent-activations = 7\n"
             ),
         )
         .unwrap();
         fs::write(root.join("shared/src/lib.rs"), SHARED_SOURCE).unwrap();
         let fixture = Self(root);
-        for (package, eager, limit) in [("lazy-app", false, 1), ("eager-app", true, 2)] {
-            fixture.manifest(package, Some((eager, limit)));
+        for (package, eager, scope_eager, limit) in
+            [("lazy-app", false, true, 1), ("eager-app", true, false, 2)]
+        {
+            fixture.manifest(package, Some((eager, scope_eager, limit)));
             fs::write(
                 fixture.0.join(package).join("src/main.rs"),
                 format!(
                     "{APPLICATION_SOURCE}\n\
                      #[tokio::test(flavor = \"current_thread\")]\n\
                      async fn test_entry_uses_its_own_package_defaults() {{\n\
-                     startup_shared::verify({eager}, {limit}, None).await;\n}}\n"
+                     startup_shared::verify({eager}, {scope_eager}, {limit}, None).await;\n}}\n"
                 ),
             )
             .unwrap();
@@ -62,11 +64,12 @@ impl Fixture {
         fixture
     }
 
-    fn manifest(&self, package: &str, config: Option<(bool, usize)>) {
-        let config = config.map_or_else(String::new, |(eager, limit)| {
+    fn manifest(&self, package: &str, config: Option<(bool, bool, usize)>) {
+        let config = config.map_or_else(String::new, |(eager, scope_eager, limit)| {
             format!(
-                "\n[nestrs-cli]\ninitialization = '{}'\nmax-concurrent-activations = {limit}\n",
+                "\n[nestrs-cli]\ninitialization = '{}'\nscope-initialization = '{}'\nmax-concurrent-activations = {limit}\n",
                 if eager { "eager" } else { "lazy" },
+                if scope_eager { "eager" } else { "lazy" },
             )
         });
         self.manifest_text(package, &config);
@@ -172,12 +175,24 @@ fn package_defaults_are_frozen_per_entry_and_explicit_options_override_them() {
     let eager = fixture.build("eager-app", "build-eager");
 
     // 两个 binary 共享含有 build 调用的同一个 rlib，但使用各自入口的配置。
-    // shared 自身配置为 eager / 7，不能渗透到 lazy / 1 或 eager / 2 的宿主。
-    fixture.execute(&lazy, &["lazy", "1"], "run-lazy");
-    fixture.execute(&eager, &["eager", "2"], "run-eager");
-    fixture.execute(&lazy, &["eager", "2", "eager", "2"], "override-eager");
-    fixture.execute(&eager, &["lazy", "1", "lazy", "1"], "override-lazy");
-    fixture.execute(&eager, &["lazy", "32", "defaults"], "override-defaults");
+    // shared 的 root/scope 均为 eager、并发为 7，不能渗透到宿主的独立策略。
+    fixture.execute(&lazy, &["lazy", "eager", "1"], "run-lazy");
+    fixture.execute(&eager, &["eager", "lazy", "2"], "run-eager");
+    fixture.execute(
+        &lazy,
+        &["eager", "lazy", "2", "eager", "lazy", "2"],
+        "override-eager",
+    );
+    fixture.execute(
+        &eager,
+        &["lazy", "eager", "1", "lazy", "eager", "1"],
+        "override-lazy",
+    );
+    fixture.execute(
+        &eager,
+        &["lazy", "lazy", "32", "defaults"],
+        "override-defaults",
+    );
 
     // 真正的 test 入口也必须带上所属 package 的配置，不能沿用上次 binary。
     assert_success(&fixture.cli(
@@ -190,13 +205,16 @@ fn package_defaults_are_frozen_per_entry_and_explicit_options_override_them() {
         "doctest-entry",
     ));
 
-    // 只改 Cargo.toml，源码和 target 不变。两次都验证实际构造行为，以捕获缓存未失效。
-    fixture.manifest("lazy-app", Some((true, 2)));
+    // 只改 scope 策略，再改 root 策略和并发；源码及 target 不变，验证缓存失效。
+    fixture.manifest("lazy-app", Some((false, false, 1)));
     let changed = fixture.build("lazy-app", "rebuild-config-only");
-    fixture.execute(&changed, &["eager", "2"], "run-changed-config");
+    fixture.execute(&changed, &["lazy", "lazy", "1"], "run-changed-config");
+    fixture.manifest("lazy-app", Some((true, true, 2)));
+    let changed = fixture.build("lazy-app", "rebuild-all-config");
+    fixture.execute(&changed, &["eager", "eager", "2"], "run-changed-all-config");
     fixture.manifest("lazy-app", None);
     let removed = fixture.build("lazy-app", "rebuild-config-removed");
-    fixture.execute(&removed, &["lazy", "32"], "run-removed-config");
+    fixture.execute(&removed, &["lazy", "lazy", "32"], "run-removed-config");
 
     // 已构建产物可独立分发。移走所有 fixture manifest 后，从无 manifest 的目录执行。
     let exported = fixture
@@ -210,7 +228,7 @@ fn package_defaults_are_frozen_per_entry_and_explicit_options_override_them() {
         fs::rename(manifest, manifest.with_extension("saved")).unwrap();
     }
     let output = Command::new(&exported)
-        .args(["eager", "2"])
+        .args(["eager", "lazy", "2"])
         .current_dir(fixture.0.join("export"))
         .output();
     // 无论子进程是否成功，恢复 fixture，便于继续复现问题。
@@ -286,6 +304,16 @@ fn graph_and_ide_accept_configuration_and_check_rejects_invalid_values() {
         ),
         ("mode", "initialization = 'sometimes'", "initialization"),
         (
+            "scope-mode",
+            "scope-initialization = 'sometimes'",
+            "scope-initialization",
+        ),
+        (
+            "scope-type",
+            "scope-initialization = true",
+            "scope-initialization",
+        ),
+        (
             "unknown",
             "max_concurrent_activations = 2",
             "max_concurrent_activations",
@@ -307,13 +335,14 @@ const APPLICATION_SOURCE: &str = r#"
 async fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let eager = args[0] == "eager";
-    let limit: usize = args[1].parse().unwrap();
-    let explicit = match args.get(2).map(String::as_str) {
+    let scope_eager = args[1] == "eager";
+    let limit: usize = args[2].parse().unwrap();
+    let explicit = match args.get(3).map(String::as_str) {
         None => None,
         Some("defaults") => Some(startup_shared::default_options()),
-        Some(mode) => Some(startup_shared::options(mode == "eager", args[3].parse().unwrap())),
+        Some(mode) => Some(startup_shared::options(mode == "eager", args[4] == "eager", args[5].parse().unwrap())),
     };
-    startup_shared::verify(eager, limit, explicit).await;
+    startup_shared::verify(eager, scope_eager, limit, explicit).await;
     println!("startup configuration verified");
 }
 "#;
@@ -323,14 +352,15 @@ const SHARED_SOURCE: &str = r#"
 //! ```
 //! #[tokio::main(flavor = "current_thread")]
 //! async fn main() {
-//!     startup_shared::verify(true, 7, None).await;
+//!     startup_shared::verify(true, true, 7, None).await;
 //! }
 //! ```
 use std::sync::atomic::{AtomicUsize, Ordering};
 use nestrs::factory;
-use nestrs_core::{InitializationMode, ServiceProvider, ServiceProviderOptions};
+use nestrs_core::{InitializationMode, ServiceProvider, ServiceProviderOptions, ServiceScopeOptions};
 use tokio::sync::{Notify, Semaphore};
 
+static SCOPED: AtomicUsize = AtomicUsize::new(0);
 static STARTED: AtomicUsize = AtomicUsize::new(0);
 static FINISHED: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
@@ -338,6 +368,7 @@ static PEAK: AtomicUsize = AtomicUsize::new(0);
 static EVENTS: Notify = Notify::const_new();
 static GATE: Semaphore = Semaphore::const_new(0);
 
+struct Scoped;
 struct First;
 struct Second;
 struct Third;
@@ -356,6 +387,9 @@ async fn construct() {
     EVENTS.notify_one();
 }
 
+#[factory(lifetime = Scoped)]
+fn scoped() -> Scoped { SCOPED.fetch_add(1, Ordering::SeqCst); Scoped }
+
 #[factory(lifetime = Singleton)]
 async fn first() -> First { construct().await; First }
 #[factory(lifetime = Singleton)]
@@ -365,9 +399,10 @@ async fn third() -> Third { construct().await; Third }
 
 pub fn default_options() -> ServiceProviderOptions { ServiceProviderOptions::default() }
 
-pub fn options(eager: bool, limit: usize) -> ServiceProviderOptions {
+pub fn options(eager: bool, scope_eager: bool, limit: usize) -> ServiceProviderOptions {
     ServiceProviderOptions {
         initialization: if eager { InitializationMode::Eager } else { InitializationMode::Lazy },
+        scope_initialization: if scope_eager { InitializationMode::Eager } else { InitializationMode::Lazy },
         max_concurrent_activations: std::num::NonZeroUsize::new(limit).unwrap(),
     }
 }
@@ -380,17 +415,15 @@ async fn wait_count(counter: &AtomicUsize, expected: usize) {
     }
 }
 
-pub async fn verify(eager: bool, limit: usize, explicit: Option<ServiceProviderOptions>) {
+pub async fn verify(eager: bool, scope_eager: bool, limit: usize, explicit: Option<ServiceProviderOptions>) {
     let defaults = ServiceProviderOptions::default();
     assert_eq!(defaults.initialization, InitializationMode::Lazy);
+    assert_eq!(defaults.scope_initialization, InitializationMode::Lazy);
     assert_eq!(defaults.max_concurrent_activations.get(), 32);
 
     let activate = async {
         // build 刻意位于共享库中，配置必须来自最终入口而非当前函数所属 package。
-        let provider = match explicit {
-            Some(options) => ServiceProvider::build_with_options(options).await,
-            None => ServiceProvider::build().await,
-        }.unwrap();
+        let provider = ServiceProvider::build(explicit).await.unwrap();
         assert_eq!(STARTED.load(Ordering::SeqCst), if eager { 3 } else { 0 });
         let (first, second, third) = tokio::join!(
             provider.get_required_service::<First>(),
@@ -398,6 +431,25 @@ pub async fn verify(eager: bool, limit: usize, explicit: Option<ServiceProviderO
             provider.get_required_service::<Third>(),
         );
         first.unwrap(); second.unwrap(); third.unwrap();
+        // 根初始化不能创建 Scoped；创建时应用所属入口的独立 scope 默认值。
+        assert_eq!(SCOPED.load(Ordering::SeqCst), 0);
+        let scope = provider.create_scope(None).await.unwrap();
+        assert_eq!(SCOPED.load(Ordering::SeqCst), usize::from(scope_eager));
+        scope.service_provider().get_required_service::<Scoped>().await.unwrap();
+        scope.service_provider().get_required_service::<Scoped>().await.unwrap();
+        assert_eq!(SCOPED.load(Ordering::SeqCst), 1);
+        scope.dispose_async().await.unwrap();
+
+        // 单个 scope 显式覆盖，后续普通创建仍使用 root 保存的 scope 默认值。
+        let scope = provider.create_scope(Some(ServiceScopeOptions {
+            initialization: if scope_eager { InitializationMode::Lazy } else { InitializationMode::Eager },
+        })).await.unwrap();
+        assert_eq!(SCOPED.load(Ordering::SeqCst), 1 + usize::from(!scope_eager));
+        scope.service_provider().get_required_service::<Scoped>().await.unwrap();
+        scope.dispose_async().await.unwrap();
+        let scope = provider.create_scope(None).await.unwrap();
+        assert_eq!(SCOPED.load(Ordering::SeqCst), 2 + usize::from(scope_eager));
+        scope.dispose_async().await.unwrap();
         provider.dispose_async().await.unwrap();
     };
     let release = async {

@@ -119,10 +119,10 @@ impl<T: Send + Sync + 'static> Run<ServiceProvider> for InvalidRunner<T> {
 
 #[tokio::main]
 async fn main() {
-    let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
+    let provider = ServiceProvider::build(Some(ServiceProviderOptions {
         initialization: InitializationMode::Eager,
         ..Default::default()
-    })
+    }))
     .await
     .unwrap();
     Runner::<DirectTag>(PhantomData).run(&provider);

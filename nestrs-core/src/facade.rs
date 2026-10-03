@@ -8,9 +8,9 @@
 use std::sync::Arc;
 
 use crate::{
-    InitializationMode, ServiceKey, ServiceLifetime, ServiceProviderOptions,
+    InitializationMode, ServiceKey, ServiceProviderOptions, ServiceScopeOptions,
     activation::{InputSlot, ProjectionTarget},
-    error::{BuildError, DisposeError, ResolveError},
+    error::{BuildError, DisposeError, ResolveError, ScopeBuildError},
     graph::{ValidatedGraph, plan::CompiledApplication},
     runtime::{Owner, Runtime},
     service::{ServiceIdentifier, ServiceType},
@@ -32,63 +32,40 @@ pub struct ServiceProvider {
     // 即使 dispose_async 的 future 未完成就被丢弃，持有的 owner 也会负责发起关闭。
     /// 本次操作所属的实际 root 或 scope。
     owner: Arc<Owner>,
+
+    /// 当前容器的 scope 创建默认值，独立于 root 初始化策略。
+    scope_initialization: InitializationMode,
 }
 
 impl ServiceProvider {
-    /// 使用入口 package 的 Cargo.toml 中由工具链固化的启动配置建立容器。
-    /// 未配置的字段采用 Lazy 与 32 个构造名额；运行时不读取 Cargo.toml。
-    pub async fn build() -> Result<Self, BuildError> {
-        Self::build_from_plan(None).await
-    }
-
-    /// 显式选项完整覆盖项目全局配置；服务声明的 `#[lazy]` 覆盖继续生效。
-    /// 服务图已由工具链验证；这里只创建运行期状态并完成选中的 Singleton 预热。
-    pub async fn build_with_options(options: ServiceProviderOptions) -> Result<Self, BuildError> {
-        Self::build_from_plan(Some(options)).await
-    }
-
-    /// 两个入口共享不可变程序计划；每个 build 仍创建独立 owner、缓存、失败与关闭状态。
-    /// 首次 load 只接合真实 typed adapter，后续 build 不再收集描述或分析依赖图。
-    async fn build_from_plan(
-        overrides: Option<ServiceProviderOptions>,
-    ) -> Result<Self, BuildError> {
+    /// 建立独立容器，完成选中的 Singleton 初始化后交付。
+    ///
+    /// `None` 使用工具链固化的入口项目配置；未配置时 root / scope 均为 Lazy，并发为 32。
+    /// `Some(options)` 完整覆盖项目默认值，服务声明的 `#[lazy]` 策略仍然优先。
+    /// `Some(Default::default())` 明确选择库基线，不等同于继承项目配置的 `None`。
+    /// 各次创建共享不可变计划，但运行时、缓存、实例与关闭状态独立；运行时不读取 TOML。
+    pub async fn build(options: Option<ServiceProviderOptions>) -> Result<Self, BuildError> {
         // 普通 Cargo 不会生成应用计划。必须明确提示工具链缺失，不能把未经过
         // Nestrs 编译的应用伪装成一个合法的空容器。隔离单元测试仍可装载空计划。
         if !cfg!(any(nestrs_compiler, test)) {
             return Err(BuildError::CompilerPlanUnavailable);
         }
         let application = CompiledApplication::load();
-        let options = overrides.unwrap_or_else(|| application.options.clone());
+        let options = options.unwrap_or_else(|| application.options.clone());
         let graph = application.graph.clone();
         tokio::runtime::Handle::try_current().map_err(|_| BuildError::RuntimeUnavailable)?;
-        let (runtime, owner) =
-            Runtime::start(graph.clone(), options.max_concurrent_activations.get());
-        let provider = Self {
+        let (runtime, owner) = Runtime::start(
+            graph.clone(),
+            options.max_concurrent_activations.get(),
+            options.initialization,
+        )
+        .await?;
+        Ok(Self {
             graph,
             runtime,
             owner,
-        };
-
-        // Lazy 全局默认也可能存在 `#[lazy(false)]` Singleton，必须统一选择预热入口。
-        // 选择策略保存在图节点上；不同 root 可使用不同默认值而共享同一不可变计划。
-        if let Err(error) = provider
-            .runtime
-            .warm_up(
-                &provider.owner,
-                ServiceLifetime::Singleton,
-                options.initialization,
-            )
-            .await
-        {
-            // 容器尚未交付给调用者。预热失败时仍等待已经接受的工作与清理，
-            // 同时保留初始化错误和清理错误，不能把部分成功实例直接遗弃。
-            let dispose_error = provider.runtime.close(&provider.owner).await.err();
-            return Err(BuildError::Initialization {
-                error,
-                dispose_error,
-            });
-        }
-        Ok(provider)
+            scope_initialization: options.scope_initialization,
+        })
     }
 
     /// 获取默认 key 的必选服务。工具链从真实方法调用收集闭合查询类型，查询本身
@@ -131,12 +108,24 @@ impl ServiceProvider {
         }
     }
 
-    /// 同步建立独立 Scoped owner，不执行任何服务构造。
-    pub fn create_scope(&self) -> ServiceScope<'_> {
-        ServiceScope {
+    /// 建立独立 scope，完成选中的 Scoped 初始化后交付。
+    ///
+    /// `None` 使用容器保存的 scope 默认策略；`Some(options)` 只覆盖本次创建。
+    /// `Some(Default::default())` 明确选择 Lazy，不读取容器的 scope 默认值。
+    /// 服务级 `#[lazy(false)]` 在 Lazy 下仍生效；所有 scope 共享 root 的构造额度。
+    /// 失败先关闭，取消由未交付 owner 发起关闭，不交付部分初始化的 scope。
+    pub async fn create_scope(
+        &self,
+        options: Option<ServiceScopeOptions>,
+    ) -> Result<ServiceScope<'_>, ScopeBuildError> {
+        let options = options.unwrap_or(ServiceScopeOptions {
+            initialization: self.scope_initialization,
+        });
+        let owner = self.runtime.create_scope(options.initialization).await?;
+        Ok(ServiceScope {
             provider: self,
-            owner: self.runtime.create_scope(),
-        }
+            owner,
+        })
     }
 
     /// 消费 owner，等待已接受构造、scope 关闭及本 owner 的所有 cleanup。
@@ -164,19 +153,6 @@ impl ServiceScope<'_> {
             runtime: &self.provider.runtime,
             owner: &self.owner,
         }
-    }
-
-    /// 主动预热当前 scope：默认选择 Scoped 根，服务级 `#[lazy]` 可排除独立入口。
-    /// 普通依赖仍会构造必要目标；全局 Lazy 不取消这次显式预热，创建 scope 本身不构造。
-    pub async fn warm_up(&self) -> Result<(), ResolveError> {
-        self.provider
-            .runtime
-            .warm_up(
-                &self.owner,
-                ServiceLifetime::Scoped,
-                InitializationMode::Eager,
-            )
-            .await
     }
 
     /// 消费当前 scope，等待已接受任务及本 scope 的串行 cleanup 完成。

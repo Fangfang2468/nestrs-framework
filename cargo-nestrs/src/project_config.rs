@@ -13,15 +13,19 @@ pub struct DiConfig {
     /// 是否在容器构建时预热 Singleton 及其必要依赖。
     pub eager: bool,
 
+    /// 是否在作用域创建完成前初始化 Scoped 及其必要依赖；独立于 root 策略。
+    pub scope_eager: bool,
+
     /// 同一个 root 及全部 scope 共享的构造任务上限，始终大于零。
     pub max_concurrent_activations: usize,
 }
 
 impl Default for DiConfig {
-    /// 保持库级 Lazy / 32 基线；入口 manifest 可分别覆盖这两个字段。
+    /// root 与 scope 均按需初始化，构造并发保持 32；入口可分别覆盖。
     fn default() -> Self {
         Self {
             eager: false,
+            scope_eager: false,
             max_concurrent_activations: 32,
         }
     }
@@ -34,7 +38,7 @@ pub fn read_manifest(path: &Path) -> Result<DiConfig, String> {
     parse_manifest(&text).map_err(|error| format!("项目配置 {} 无效：{error}", path.display()))
 }
 
-/// 只解析 `[nestrs-cli]`，未配置的字段使用 Lazy / 32。
+/// 只解析 `[nestrs-cli]`，未配置的初始化策略使用 Lazy，并发使用 32。
 pub fn parse_manifest(text: &str) -> Result<DiConfig, String> {
     let manifest = text
         .parse::<Table>()
@@ -48,22 +52,31 @@ pub fn parse_manifest(text: &str) -> Result<DiConfig, String> {
 
     // 配置键严格检查，避免拼写错误被当成默认值而静默改变启动行为。
     for key in table.keys() {
-        if key != "initialization" && key != "max-concurrent-activations" {
+        if !matches!(
+            key.as_str(),
+            "initialization" | "scope-initialization" | "max-concurrent-activations"
+        ) {
             return Err(format!(
-                "未知 nestrs-cli 配置项 nestrs-cli.{key}；支持 initialization 和 max-concurrent-activations"
+                "未知 nestrs-cli 配置项 nestrs-cli.{key}；支持 initialization、scope-initialization 和 max-concurrent-activations"
             ));
         }
     }
 
     let mut config = DiConfig::default();
-    if let Some(value) = table.get("initialization") {
-        config.eager = match value.as_str() {
+    for (key, eager) in [
+        ("initialization", &mut config.eager),
+        ("scope-initialization", &mut config.scope_eager),
+    ] {
+        let Some(value) = table.get(key) else {
+            continue;
+        };
+        *eager = match value.as_str() {
             Some("lazy") => false,
             Some("eager") => true,
             _ => {
-                return Err(
-                    "nestrs-cli.initialization 必须是字符串 \"lazy\" 或 \"eager\"".to_owned(),
-                );
+                return Err(format!(
+                    "nestrs-cli.{key} 必须是字符串 \"lazy\" 或 \"eager\""
+                ));
             }
         };
     }

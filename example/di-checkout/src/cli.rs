@@ -93,11 +93,12 @@ fn command() -> Command {
                 .global(true)
                 .action(ArgAction::SetTrue)
                 .help("启动时预热 Singleton；默认 Lazy"),
-            Arg::new("warm-up-scopes")
-                .long("warm-up-scopes")
+            Arg::new("scope-initialization")
+                .long("scope-initialization")
                 .global(true)
-                .action(ArgAction::SetTrue)
-                .help("处理每笔订单前预热其 scope"),
+                .default_value("lazy")
+                .value_parser(["lazy", "eager"])
+                .help("创建请求作用域时采用的初始化策略；默认 lazy"),
             Arg::new("max-concurrency")
                 .long("max-concurrency")
                 .global(true)
@@ -131,7 +132,14 @@ fn invocation(matches: &ArgMatches) -> Invocation {
         } else {
             InitializationMode::Lazy
         },
-        warm_up_scopes: matches.get_flag("warm-up-scopes"),
+        scope_initialization: match matches
+            .get_one::<String>("scope-initialization")
+            .unwrap()
+            .as_str()
+        {
+            "eager" => InitializationMode::Eager,
+            _ => InitializationMode::Lazy,
+        },
         max_concurrent_activations: *matches.get_one::<NonZeroUsize>("max-concurrency").unwrap(),
     };
     let command = match matches.subcommand().unwrap() {

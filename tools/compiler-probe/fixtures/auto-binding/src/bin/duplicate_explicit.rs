@@ -25,7 +25,7 @@ fn side_effect() -> SideEffect {
 
 #[tokio::main]
 async fn main() {
-    let panic = tokio::spawn(ServiceProvider::build())
+    let panic = tokio::spawn(ServiceProvider::build(None))
         .await
         .err()
         .expect("duplicate explicit bindings must still fail graph validation");

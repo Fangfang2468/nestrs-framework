@@ -11,7 +11,7 @@ type Alternate = fallback_provider::Service;
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     assert_ne!(TypeId::of::<Preferred>(), TypeId::of::<Alternate>());
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let catalog = provider
         .get_required_service::<PublicCatalog>()
         .await

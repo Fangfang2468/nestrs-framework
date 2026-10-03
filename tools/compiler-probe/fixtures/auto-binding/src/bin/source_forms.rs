@@ -112,7 +112,7 @@ impl<const CAPACITY: usize> BufferPort<CAPACITY> for Buffer<CAPACITY> {
 
 #[tokio::main]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     generated::assert_projection(&provider).await;
 
     let repository = provider

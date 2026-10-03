@@ -122,7 +122,7 @@ async fn run(
             let ready = ready.clone();
             let release = release.clone();
             jobs.spawn(async move {
-                let mut scope = root.scope();
+                let mut scope = root.scope().await;
                 let mut checksum = 0;
                 for _ in 0..per_scope {
                     checksum += scope.query(scenario).await;

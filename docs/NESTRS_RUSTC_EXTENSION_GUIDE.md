@@ -460,7 +460,7 @@ helper 反复扩大泛型实参时，即使最终选中的叶子实现不查询�
 
 Lazy 边仍在完整图里参与结构验证和关闭约束，只是不作为消费者立即激活的前置任务。Optional 可以允许缺席，不能隐藏候选歧义、环或生命周期错误。这些都是 Nestrs 的框架语义。
 
-最终 binary/test 在 check/build 时验证完整注册图，不以用户是否执行 `ServiceProvider::build()` 为前提。编译成功说明类型和受支持的 DI 结构成立；数据库是否能连上、factory 是否成功，仍属于运行期问题。
+最终 binary/test 在 check/build 时验证完整注册图，不以用户是否执行 `ServiceProvider::build(None)` 为前提。编译成功说明类型和受支持的 DI 结构成立；数据库是否能连上、factory 是否成功，仍属于运行期问题。
 
 ### 10.2 为什么生成一个特殊 MIR 入口
 
@@ -518,7 +518,7 @@ flowchart LR
 
 Class 取得拥有 lease 的令牌；Factory 的普通参数借用真实 `FactoryLeaseFrame`，保活 lease 从同一份输入派生并随 factory future 存活。lazy 参数按值交付弱 owner 能力，交付时不请求目标。它们复用 core 的同一个 Coordinator，不增加第二套缓存或状态机。输入数组、lease 列表、实例存储与异步 future 仍可能分配；“移除逐参数装箱”不等于容器零分配。
 
-当前入口 `__nestrs_reflect_v2` 配套 `graph::plan::plan_set_options_v2`。driver 在引用 core 的最终 check/build 中核对该 sink 的存在与完整 unsafe Rust 签名，**没有 provider 的空图也检查**，不等链接才发现旧 core。core、driver、bridge 需要配套重编译；CLI 的 driver/bridge 指纹隔离旧缓存。未经工具链生成计划的生产应用调用两个 build 入口会返回 `BuildError::CompilerPlanUnavailable`，不会静默构造空容器。
+当前入口 `__nestrs_reflect_v2` 配套 `graph::plan::plan_set_options_v3`，options sink 分别接收 root 和 scope 的初始化默认值及共享构造上限。新增 scope 配置使 sink 升级为 v3；执行入口仍为 v2，JSON 格式 version 仍为 1，不把三者混为同一个版本。driver 在引用 core 的最终 check/build 中核对该 sink 的存在与完整 unsafe Rust 签名，**没有 provider 的空图也检查**，不等链接才发现旧 core。core、driver、bridge 需要配套重编译；CLI 的 driver/bridge 指纹隔离旧缓存。未经工具链生成计划的生产应用调用 build（传 None 或 Some）均会返回 `BuildError::CompilerPlanUnavailable`，不会静默构造空容器。
 
 ### 10.5 在哪里审阅生成计划
 
@@ -540,7 +540,7 @@ find target/nestrs -name '*checkout*.nestrs-reflect.json'
 | --- | --- |
 | `format`、`version`、`entry` | 格式 `nestrs-reflect`、JSON schema `1`、执行入口 `__nestrs_reflect_v2` |
 | `crate`、`target` | 当前最终入口和编译目标 |
-| `initialization`、`maxConcurrentActivations` | 入口 package 固化的启动默认值 |
+| `initialization`、`scopeInitialization`、`maxConcurrentActivations` | 入口 package 固化的启动默认值 |
 | `nodes` | provider、生命周期、初始化策略、adapter 来源与输入槽位 |
 | `projections`、`routes` | 实际使用的投影及已经确定的 type/key 查询目标 |
 | `order`、`dependents` | 依赖优先顺序与反向依赖索引 |

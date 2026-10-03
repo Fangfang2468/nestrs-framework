@@ -38,14 +38,15 @@ fn assert_saved_orders(store: &dyn OrderStore, expected: &[&Order]) {
 }
 
 async fn exercise_checkout(initialization: InitializationMode) {
-    let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
+    let provider = ServiceProvider::build(Some(ServiceProviderOptions {
         initialization,
+        scope_initialization: initialization,
         ..Default::default()
-    })
+    }))
     .await
     .expect("example graph should build");
-    let first_scope = provider.create_scope();
-    let second_scope = provider.create_scope();
+    let first_scope = provider.create_scope(None).await.unwrap();
+    let second_scope = provider.create_scope(None).await.unwrap();
     let (first, second) = tokio::join!(
         first_scope
             .service_provider()
@@ -246,18 +247,17 @@ async fn eager_checkout_preserves_business_and_di_contracts() {
 
 #[tokio::test]
 async fn request_boundary_audits_actual_outcomes_and_preserves_shared_state() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let success = crate::application::handle_checkout(
         &provider,
         request("AuditCustomer", "KEYBOARD", 1, PaymentMethod::Wallet),
-        true,
     )
     .await
     .unwrap();
     assert!(success.result.unwrap().contains("AuditCustomer"));
     let mut declined = request("RejectedCustomer", "KEYBOARD", 2, PaymentMethod::Card);
     declined.payment_token = "declined".into();
-    let failure = crate::application::handle_checkout(&provider, declined, false)
+    let failure = crate::application::handle_checkout(&provider, declined)
         .await
         .unwrap();
     assert!(matches!(

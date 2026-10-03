@@ -141,7 +141,9 @@ mod escaped_adapter {
             dependents: vec![vec![1], vec![]],
             routes: Default::default(),
         });
-        let (runtime, owner) = Runtime::start(graph, 1);
+        let (runtime, owner) = Runtime::start(graph, 1, crate::InitializationMode::Lazy)
+            .await
+            .unwrap();
         // 丢弃查询额外取得的 lease，让保活只依赖 journal 和逃逸的输入令牌，
         // 对应门面返回由 owner 支撑的引用时的真实所有权关系。
         drop(runtime.resolve(&owner, consumer_id).await.unwrap());

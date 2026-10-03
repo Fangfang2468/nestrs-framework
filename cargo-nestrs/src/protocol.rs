@@ -351,7 +351,7 @@ impl PlanSink {
     /// 返回双方约定的内部符号名；名称匹配之外仍需认证真实来源。
     pub(crate) const fn name(self) -> &'static str {
         match self {
-            Self::Options => "plan_set_options_v2",
+            Self::Options => "plan_set_options_v3",
             Self::Binding => "plan_push_binding",
             Self::Provider => "plan_push_provider",
             Self::Input => "plan_set_input",

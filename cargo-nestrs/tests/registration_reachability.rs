@@ -148,7 +148,7 @@ fn private_state_and_first_downstream_generic_roots_survive_codegen_without_beco
         r#"#![forbid(unsafe_code)]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let provider = nestrs_core::ServiceProvider::build().await.unwrap();
+    let provider = nestrs_core::ServiceProvider::build(None).await.unwrap();
     let first = provider.get_required_service::<dyn upstream::Record>().await.unwrap();
     let second = provider.get_required_service::<dyn upstream::Record>().await.unwrap();
     assert_eq!(first.serial(), (10, 40));

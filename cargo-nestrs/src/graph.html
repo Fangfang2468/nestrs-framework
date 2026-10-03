@@ -103,10 +103,12 @@
   function initializationDetail(node) {
     const policy = initializationPolicy(node);
     if (node.lifetime === "Transient") return "Transient 按每次消费独立构造，初始化标记不增加独立预热实例。";
-    if (policy === "lazy") return "不作为" + (node.lifetime === "Scoped" ? "scope.warm_up()" : "启动") + "的预热根；普通依赖需要它时仍会构造。要延后某个字段的依赖获取，需要在该字段上声明延迟注入。";
-    if (node.lifetime === "Scoped") return "在 scope.warm_up() 时作为预热根；create_scope() 本身不构造服务。";
-    if (policy === "eager") return "在容器构建时主动初始化，覆盖全局 Lazy 设置；所需普通依赖同时按计划构造。";
-    return "由当前容器的初始化配置决定是否作为启动预热根；普通依赖需要它时仍会构造。";
+    if (policy === "lazy") return "不作为" + (node.lifetime === "Scoped" ? "scope 创建" : "root 创建") + "时的初始化入口；普通依赖需要它时仍会构造。要延后某个字段的依赖获取，需要在该字段上声明延迟注入。";
+    if (node.lifetime === "Scoped") return policy === "eager"
+      ? "在 create_scope(options).await 返回前主动初始化，覆盖本次 scope 的 Lazy 设置；所需普通依赖同时按计划构造。"
+      : "由本次 scope 的初始化配置决定是否在 create_scope(options).await 返回前主动构造；root 的初始化模式不改变 scope 默认值，普通依赖需要它时仍会构造。";
+    if (policy === "eager") return "在容器构建时主动初始化，覆盖 root 的 Lazy 设置；所需普通依赖同时按计划构造。";
+    return "由当前 root 的初始化配置决定是否在 build(options).await 返回前主动构造；普通依赖需要它时仍会构造。";
   }
   let data;
   try {

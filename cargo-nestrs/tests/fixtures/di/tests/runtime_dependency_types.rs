@@ -94,7 +94,7 @@ impl DormantPort for Dormant<u32> {}
 
 #[tokio::test]
 async fn aliases_factory_only_types_and_substituted_parameters_resolve() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let consumer = provider.get_required_service::<Consumer>().await.unwrap();
     assert_eq!(consumer.factory.0, 42);
     assert_eq!(consumer.named.0, 17);

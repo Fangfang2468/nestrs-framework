@@ -49,7 +49,7 @@ impl<T> Run for Start<T> {
 
 #[tokio::main]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert_eq!(<Start<u8> as Run>::QUERY(&provider).await, 11);
     assert_eq!(<QueryRunner<u8> as Run>::QUERY(&provider).await, 37);
     provider.dispose_async().await.unwrap();

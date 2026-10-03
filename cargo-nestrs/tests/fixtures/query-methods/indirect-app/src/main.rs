@@ -3,7 +3,7 @@ use query_library::{Repository, ServiceProvider};
 struct OnlyApplication;
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert_eq!(query_library::constructions(), 0);
     let _ = provider
         .get_required_service::<Repository<OnlyApplication>>()

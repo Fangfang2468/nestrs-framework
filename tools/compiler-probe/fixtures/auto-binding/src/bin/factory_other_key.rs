@@ -39,7 +39,7 @@ fn factory_repository() -> Repository<User> {
 
 #[tokio::main]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert_eq!(automatic_assertions::explicit_count(), 0);
     automatic_assertions::assert_count::<dyn Port>(1);
     let default = provider

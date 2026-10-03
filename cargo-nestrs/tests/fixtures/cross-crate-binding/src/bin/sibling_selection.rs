@@ -6,8 +6,8 @@ use sibling_consumer::Dispatch;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
-    let scope = provider.create_scope();
+    let provider = ServiceProvider::build(None).await.unwrap();
+    let scope = provider.create_scope(None).await.unwrap();
     let dispatch = scope
         .service_provider()
         .get_required_service::<Dispatch>()

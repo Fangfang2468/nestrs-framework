@@ -1,4 +1,4 @@
-//! 查询等待端的所有权回归：RAII 退订覆盖取消、完成竞争和预热中的全部请求。
+//! 创建与查询等待端的所有权回归：登记确认、取消关闭以及全部初始化请求的 RAII 退订。
 
 use ahash::AHashMap;
 use std::{
@@ -17,6 +17,89 @@ use crate::{
     service::{ServiceIdentifier, ServiceKey, ServiceSource, ServiceType},
 };
 use tokio::sync::mpsc;
+
+#[tokio::test]
+async fn lazy_scope_waits_for_registration_before_delivery() {
+    let (runtime, _root, mut requests) = fixture();
+    let mut creating = Box::pin(runtime.create_scope(InitializationMode::Lazy));
+    poll_fn(|cx| {
+        assert!(creating.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    let Command::Register { data, ready } = requests.try_recv().unwrap() else {
+        panic!("必须先登记 scope")
+    };
+    assert_ne!(data.id, ROOT);
+    assert!(requests.try_recv().is_err());
+    poll_fn(|cx| {
+        assert!(creating.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    ready.send(Ok(())).unwrap();
+    let scope = creating.await.unwrap();
+    assert!(Arc::ptr_eq(&scope.data, &data));
+    assert!(
+        requests.try_recv().is_err(),
+        "Lazy 创建不提交普通 Scoped 初始化"
+    );
+    drop(scope);
+    let Command::Close {
+        owner,
+        waiter: None,
+    } = requests.try_recv().unwrap()
+    else {
+        panic!("交付后的 scope 仍使用相同关闭协议")
+    };
+    assert!(Arc::ptr_eq(&owner, &data));
+}
+
+#[tokio::test]
+async fn cancelling_scope_registration_closes_the_undelivered_owner() {
+    // 同时覆盖协调器尚未确认与已经确认、创建 future 尚未恢复这两个取消窗口。
+    for registered in [false, true] {
+        let (runtime, _root, mut requests) = fixture();
+        let mut creating = Box::pin(runtime.create_scope(InitializationMode::Eager));
+        poll_fn(|cx| {
+            assert!(creating.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        let Command::Register { data, ready } = requests.try_recv().unwrap() else {
+            panic!("必须先登记 scope")
+        };
+        if registered {
+            ready.send(Ok(())).unwrap();
+        }
+        drop(creating);
+        let Command::Close {
+            owner,
+            waiter: None,
+        } = requests.try_recv().unwrap()
+        else {
+            panic!("取消登记等待也必须关闭未交付的 scope")
+        };
+        assert!(Arc::ptr_eq(&owner, &data));
+        assert!(requests.try_recv().is_err(), "登记完成前不提交初始化请求");
+    }
+}
+
+#[tokio::test]
+async fn closed_root_rejects_lazy_scope_creation_without_hanging() {
+    let (fixture, _root, _requests) = fixture();
+    let (runtime, root) = Runtime::start(fixture.graph, 1, InitializationMode::Lazy)
+        .await
+        .unwrap();
+    runtime.close(&root).await.unwrap();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        runtime.create_scope(InitializationMode::Lazy),
+    )
+    .await
+    .expect("已关闭 root 必须及时拒绝新 scope");
+    assert!(result.is_err());
+}
 
 fn fixture() -> (Runtime, Arc<Owner>, mpsc::UnboundedReceiver<Command>) {
     let (commands, requests) = mpsc::unbounded_channel();
@@ -119,16 +202,16 @@ async fn an_observed_result_does_not_send_a_redundant_cancellation() {
 }
 
 #[tokio::test]
-async fn cancelling_warmup_unregisters_waited_and_not_yet_waited_requests() {
+async fn cancelling_creation_unregisters_queries_and_closes_the_undelivered_owner() {
     for first_completed in [false, true] {
         let (runtime, owner, mut requests) = fixture();
-        let mut warmup = Box::pin(runtime.warm_up(
-            &owner,
+        let mut creating = Box::pin(runtime.initialize_owner(
+            owner,
             ServiceLifetime::Singleton,
             InitializationMode::Eager,
         ));
         poll_fn(|cx| {
-            assert!(warmup.as_mut().poll(cx).is_pending());
+            assert!(creating.as_mut().poll(cx).is_pending());
             Poll::Ready(())
         })
         .await;
@@ -161,21 +244,27 @@ async fn cancelling_warmup_unregisters_waited_and_not_yet_waited_requests() {
                     .send(Err(ResolveError::new("first finished".into())))
                     .is_ok()
             );
-            // 失败不能跳过其他已提交初始化；现在 warmup 应等待第二个结果。
+            // 失败不能跳过其他已提交初始化；现在创建过程应等待第二个结果。
             poll_fn(|cx| {
-                assert!(warmup.as_mut().poll(cx).is_pending());
+                assert!(creating.as_mut().poll(cx).is_pending());
                 Poll::Ready(())
             })
             .await;
         }
-        drop(warmup);
+        drop(creating);
         let mut cancelled = Vec::new();
+        let mut closed = Vec::new();
         while let Ok(command) = requests.try_recv() {
-            let Command::CancelQuery(query) = command else {
-                panic!("只应发送退订命令")
-            };
-            cancelled.push(query);
+            match command {
+                Command::CancelQuery(query) => cancelled.push(query),
+                Command::Close {
+                    owner,
+                    waiter: None,
+                } => closed.push(owner.id),
+                _ => panic!("取消创建应退订请求并关闭未交付 owner"),
+            }
         }
+        assert_eq!(closed, [ROOT]);
         cancelled.sort_unstable();
         assert_eq!(
             cancelled,

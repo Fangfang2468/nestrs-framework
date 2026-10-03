@@ -136,7 +136,7 @@ mod ordinary {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let root = ServiceProvider::build().await.unwrap();
+    let root = ServiceProvider::build(None).await.unwrap();
     r#mod::verify(&root).await;
     ordinary::verify(&root).await;
     root.dispose_async().await.unwrap();

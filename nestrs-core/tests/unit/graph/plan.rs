@@ -2,7 +2,7 @@
 
 use super::{
     ABSENT, CompiledApplication, PlanAssembly, plan_push_binding, plan_push_dependent,
-    plan_push_order, plan_push_trait_route, plan_set_input, plan_set_options_v2,
+    plan_push_order, plan_push_trait_route, plan_set_input, plan_set_options_v3,
 };
 use crate::activation::adapter::{ActivationAdapter, Constructor, InputAdapter, ProjectionAdapter};
 use crate::{
@@ -101,7 +101,7 @@ fn compiled_indices_load_exact_routes_all_slots_and_typed_adapters_without_const
     let output = (&mut assembly as *mut PlanAssembly).cast();
     // SAFETY: output 唯一指向本测试中的装配器，所有调用同步完成，没有保存或逃逸借用。
     unsafe {
-        plan_set_options_v2(output, true, 7);
+        plan_set_options_v3(output, true, false, 7);
         plan_push_binding(output, binding());
         push_transient(output, adapter::<Consumer>(inputs()), "");
         push_transient(output, adapter::<Dependency>(vec![]), "primary");
@@ -120,6 +120,10 @@ fn compiled_indices_load_exact_routes_all_slots_and_typed_adapters_without_const
         InitializationMode::Eager
     );
     assert_eq!(application.options.max_concurrent_activations.get(), 7);
+    assert_eq!(
+        application.options.scope_initialization,
+        InitializationMode::Lazy
+    );
     let graph = &application.graph;
     assert_eq!(graph.nodes.len(), 2);
     assert_eq!(graph.topological_order, [1, 0]);
@@ -209,10 +213,10 @@ fn provider_initialization_overrides_survive_plan_loading_without_global_folding
         let mut assembly = PlanAssembly::default();
         let output = (&mut assembly as *mut PlanAssembly).cast();
         // 描述回调只装载三态策略；即使当前入口默认值相同，也不能折叠掉继承状态，
-        // 因为未来的 build_with_options 可以让另一个 root 使用不同默认值。
+        // 因为未来的 build(Some(options)) 可以让另一个 root 使用不同默认值。
         // SAFETY: output 是当前唯一装配器，每个无输入 provider 有唯一 key 和有效编号。
         unsafe {
-            plan_set_options_v2(output, default_eager, 3);
+            plan_set_options_v3(output, default_eager, !default_eager, 3);
             for (index, lazy) in [None, Some(true), Some(false)].into_iter().enumerate() {
                 let initialization = match lazy {
                     None => 0,
@@ -236,6 +240,14 @@ fn provider_initialization_overrides_survive_plan_loading_without_global_folding
             }
         }
         let plan = assembly.finish();
+        assert_eq!(
+            plan.options.initialization == InitializationMode::Eager,
+            default_eager
+        );
+        assert_eq!(
+            plan.options.scope_initialization == InitializationMode::Eager,
+            !default_eager
+        );
         assert_eq!(plan.graph.nodes.len(), 3);
         let modes: Vec<_> = plan
             .graph
@@ -333,11 +345,22 @@ async fn lazy_metadata_is_shared_across_occurrences_and_survives_owner_and_graph
         .clone();
     let weak_plan = Arc::downgrade(&plan);
     assert_eq!(Arc::strong_count(&plan), 2);
-    let (first_runtime, first_root) = crate::runtime::Runtime::start(application.graph.clone(), 2);
+    let (first_runtime, first_root) =
+        crate::runtime::Runtime::start(application.graph.clone(), 2, InitializationMode::Lazy)
+            .await
+            .unwrap();
     let (second_runtime, second_root) =
-        crate::runtime::Runtime::start(application.graph.clone(), 2);
-    let first_scope = first_runtime.create_scope();
-    let second_scope = first_runtime.create_scope();
+        crate::runtime::Runtime::start(application.graph.clone(), 2, InitializationMode::Lazy)
+            .await
+            .unwrap();
+    let first_scope = first_runtime
+        .create_scope(InitializationMode::Lazy)
+        .await
+        .unwrap();
+    let second_scope = first_runtime
+        .create_scope(InitializationMode::Lazy)
+        .await
+        .unwrap();
     let consumers = [
         first_runtime.resolve(&first_root, 0).await.unwrap(),
         first_runtime.resolve(&first_root, 0).await.unwrap(),
@@ -442,9 +465,14 @@ async fn sharing_compiled_plan_does_not_share_root_instances_failures_or_closing
     }
     let application = assembly.finish();
     assert_eq!(CREATED.load(Ordering::SeqCst), 0);
-    let (first_runtime, first_root) = crate::runtime::Runtime::start(application.graph.clone(), 2);
+    let (first_runtime, first_root) =
+        crate::runtime::Runtime::start(application.graph.clone(), 2, InitializationMode::Lazy)
+            .await
+            .unwrap();
     let (second_runtime, second_root) =
-        crate::runtime::Runtime::start(application.graph.clone(), 2);
+        crate::runtime::Runtime::start(application.graph.clone(), 2, InitializationMode::Lazy)
+            .await
+            .unwrap();
     let first = first_runtime.resolve(&first_root, 0).await.unwrap();
     let first_again = first_runtime.resolve(&first_root, 0).await.unwrap();
     let second = second_runtime.resolve(&second_root, 0).await.unwrap();

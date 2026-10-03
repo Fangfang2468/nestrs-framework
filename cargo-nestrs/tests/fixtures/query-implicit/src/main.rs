@@ -51,10 +51,10 @@ async fn main() {
         unrelated_growth::<Growing<u8>>();
     }
     assert_eq!(library::builds(), 0);
-    let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
+    let provider = ServiceProvider::build(Some(ServiceProviderOptions {
         initialization: InitializationMode::Eager,
         ..Default::default()
-    })
+    }))
     .await
     .unwrap();
     // 六条deref路径、十八种drop类型（含不透明与关联字段）、两端各两个死分支。

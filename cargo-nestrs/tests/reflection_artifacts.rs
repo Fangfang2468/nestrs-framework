@@ -12,7 +12,7 @@ fn generated_manifest_records_selected_inputs_and_never_evaluates_business_initi
     fs::create_dir_all(directory.join("src")).unwrap();
     let core = serde_json::to_string(&workspace.join("nestrs-core").to_string_lossy()).unwrap();
     fs::write(directory.join("Cargo.toml"), format!(
-        "[package]\nname = \"reflection-contract\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[workspace]\n[dependencies]\nnestrs-core = {{ path = {core} }}\n"
+        "[package]\nname = \"reflection-contract\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[workspace]\n[dependencies]\nnestrs-core = {{ path = {core} }}\n[nestrs-cli]\ninitialization = 'eager'\nscope-initialization = 'lazy'\n"
     )).unwrap();
     fs::write(
         directory.join("src/main.rs"),
@@ -93,6 +93,8 @@ fn main() { panic!("must not execute main") }
     let plan = plans[0];
     assert_eq!(plan["format"], "nestrs-reflect");
     assert_eq!(plan["entry"], "__nestrs_reflect_v2");
+    assert_eq!(plan["initialization"], "eager");
+    assert_eq!(plan["scopeInitialization"], "lazy");
     let nodes = plan["nodes"].as_array().unwrap();
     assert_eq!(
         nodes.len(),

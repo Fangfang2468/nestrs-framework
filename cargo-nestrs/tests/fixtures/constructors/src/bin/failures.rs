@@ -44,7 +44,7 @@ impl Retry {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert_eq!(ATTEMPTS.load(Ordering::SeqCst), 0);
     let first = provider
         .get_required_service::<Broken>()

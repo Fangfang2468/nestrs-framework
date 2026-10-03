@@ -62,7 +62,7 @@ type RequestedCache = dyn CachePort<Entity = User> + Send + Sync;
 
 #[tokio::main]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let repository = provider
         .get_required_service::<dyn RepositoryPort>()
         .await

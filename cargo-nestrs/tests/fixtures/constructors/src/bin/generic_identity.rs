@@ -25,7 +25,7 @@ impl<Left: Send + Sync + 'static, Right: Send + Sync + 'static, const M: usize>
 }
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let root = nestrs_core::ServiceProvider::build().await.unwrap();
+    let root = nestrs_core::ServiceProvider::build(None).await.unwrap();
     let value = root
         .get_required_service::<Service<First, Second, 3>>()
         .await

@@ -110,7 +110,7 @@ async fn trait_only_queries_materialize_closed_bind_targets_and_preserve_factory
     }
     assert_eq!(graph.nodes.len(), 4);
 
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let repository = provider.get_required_service::<dyn Port>().await.unwrap();
     assert_eq!(repository.value(), 41);
     let alias = provider

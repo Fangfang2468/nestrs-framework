@@ -10,7 +10,7 @@
 | 文档 | 回答的问题 |
 | --- | --- |
 | [服务声明与查询](NESTRS_MACROS.md) | injectable、constructor、factory、注入、key、trait、泛型、lazy 和跨 crate 怎么用？ |
-| [core 设计与架构](../nestrs-core/README.md) | 冻结计划如何装配？构造输入、实例所有权、并发、取消与关闭如何协作？ |
+| [core 设计与架构](../nestrs-core/README.md) | root / scope 如何按配置创建与初始化？冻结计划、构造输入、实例所有权、并发、取消与关闭如何协作？ |
 | [Cargo 工具链](NESTRS_CARGO_TOOLCHAIN.md) | 如何构建、检查、运行、测试、导图？配置、缓存、平台和回归边界是什么？ |
 | [IDE 接入](NESTRS_IDE.md) | 如何配置原版 rust-analyzer？项目模型、保存检查和 constructor 补全如何工作？ |
 | [rustc 扩展与集成](NESTRS_RUSTC_EXTENSION_GUIDE.md) | 宏、HIR、Ty/DefId、MIR 和跨 crate 摘要怎样生成执行计划？reflect 产物是什么？ |

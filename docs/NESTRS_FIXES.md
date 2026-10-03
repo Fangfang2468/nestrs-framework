@@ -16,7 +16,7 @@
 
 原始日志、任务起点快照、精确差异及工具哈希保存在各轮 `target/` 目录，不随仓库分发。
 本文正文和正式源码、测试链接保留必要说明，使清理 `target/` 后仍能理解修复。
-记录编号 R01～R10 是本文的时间线索引，不是原报告中会重复使用的 F1/P2 编号，
+记录编号 R01～R12 是本文的时间线索引，不是原报告中会重复使用的 F1/P2 编号，
 也不是 Git 提交号。各轮基线均包含当时已有未提交工作，没有用 Git HEAD 代替实际快照。
 
 ## 修复与复核时间线
@@ -33,6 +33,8 @@
 | 2026-10-02 / R08 | 父接口投影归一化、实际查询预算、小投影 | 普通外部 helper 与不同 impl 的增长身份仍有遗漏 |
 | 2026-10-02 / R09 | 外部原生 MIR、关联类型相关性、真实实例增长身份 | 元组 Clone 编译器适配代码未进入实际 MIR 路径 |
 | 2026-10-03 / R10 | Clone shim 的真实实例 MIR | 第五轮独立复核未发现新增可复现缺陷，范围限当时 Linux 快照 |
+| 2026-10-03 / R11 | 统一 root / scope 创建初始化，移除独立 warm_up API | 属于明确授权的 API 调整；此前功能和性能结论不自动覆盖本次实现 |
+| 2026-10-03 / R12 | build / create_scope 各收敛为接受 Option 的单一入口 | 保留 R11 的初始化契约；None 继承默认，Some 完整覆盖，两者不能混同 |
 
 这些发现来自逐步扩充的输入组合。后续新缺陷不意味着前一轮的原始修复失效；每轮都应
 同时保留原触发复测和新增失败证据，不能用已有测试全绿替代边界核查。
@@ -409,3 +411,123 @@ Windows/其他 target 没有此次结果，LSP 验证不覆盖所有编辑器 UI
 
 今后新增修复应继续在本文追加详细记录，并在对应唯一指南更新当前行为；原始命令、
 候选失败、工具哈希和临时核查材料留在 `target/`，避免再建立重复的阶段主文档。
+
+
+## R11：统一 scope 创建初始化与移除独立预热 API
+
+本节记录这一阶段当时的接口与验收；后续 R12 将默认／显式配置合并为 Option 参数，
+删除两个 with_options 方法。这里保留当时写法，现行调用请看 R12 与 core README。
+
+**背景与原行为。** 旧版 `create_scope()` 是同步方法，只建立 owner；即使 Scoped
+服务标记 `#[lazy(false)]`，也要等查询或显式 `scope.warm_up().await` 才会构造。
+独立预热以 Eager 作为未标注 Scoped 的默认策略，失败后返回 `ResolveError`，已交付
+scope 的关闭仍由调用者负责。它与 root 的 build 配置、创建期初始化及失败清理契约不同。
+维护者明确选择统一创建行为，删除公开及内部独立预热入口；这是有兼容性影响的 API
+设计调整，不将旧版行为重新解释为一直存在的功能缺陷。
+
+**处理方式。** `create_scope().await` 返回 `Result<ServiceScope<'_>, ScopeBuildError>`。
+root 与 scope 的初始化策略独立、缺省均为 Lazy。`ServiceProviderOptions` 增加
+`scope_initialization`；入口 manifest 的 `[nestrs-cli]` 增加 `scope-initialization`。
+`create_scope_with_options(ServiceScopeOptions { initialization })` 可覆盖单次创建，
+不修改容器默认值，也不增加 scope 独立的构造额度。Singleton 在 build、Scoped 在
+scope 创建时应用同一服务级三态策略：未标注继承本次默认，true 跳过自主初始化入口，
+false 即使默认 Lazy 也初始化。Transient 仍只按实际消费构造。
+
+`Runtime::warm_up` 与公开 `ServiceScope::warm_up` 移除。
+[Runtime](../nestrs-core/src/runtime/handle.rs) 的 `start` / `create_scope` 只在创建期
+调用私有 `initialize_owner`；它持有尚未交付的 owner，不能对已交付 owner 再单独
+初始化。Lazy scope 也等待协调器确认登记，避免交付已被关闭中的 runtime 拒绝的
+scope。初始化仍复用查询请求、真实依赖展开、缓存和中央协调器，没有另一套预热命令
+或构造调度器。服务图、字段级 lazy、每 root 构造并发上限和强 lease 契约保持一致。
+
+**失败与取消。** scope 创建失败先等待本 scope 排空和关闭，再返回
+`ScopeBuildError { error, dispose_error }`；它保留 `ResolveError` 与可能的
+`DisposeError`，不会关闭仍由应用持有的 root 或其他 scope。创建 future 被取消时，
+未交付 owner 的 Drop 发起幂等关闭，已接受任务继续排空清理；取消者没有等到清理
+结束，也不能据此保证 Tokio runtime 已退出后的异步 cleanup。Singleton 依赖属于
+root，scope 失败不撤销 root 的共享构造或失败缓存。
+
+**编译期配置协议。** options sink 升级为 `plan_set_options_v3`，分别携带 root / scope
+默认值；driver 核对存在性与完整签名，空图也拒绝旧 core。reflect 执行入口仍为
+`__nestrs_reflect_v2`，反射 JSON 格式仍为 version 1，新增 `scopeInitialization`
+配置字段。三个版本各有用途，不将本次 options sink 的变化描述成整个执行 ABI 或
+JSON 同时升级。工具、core 和私有 bridge 需要配套重建。
+
+**迁移与回归位置。** 同步调用改为 `.create_scope().await?`；原独立预热调用删除，
+需要相同行为时明确选择 scope Eager。完整 options 字面量补上 `scope_initialization`。
+结账示例用 `--scope-initialization lazy|eager` 替代 `--warm-up-scopes`。当前用法统一见
+[core README](../nestrs-core/README.md#6-生命周期与预热)，不在本文再保存一份现行教程。
+
+真实 driver 的[scope 初始化与失败清理契约](../cargo-nestrs/tests/fixtures/di/tests/runtime_scope_initialization.rs)
+覆盖创建失败、成功实例清理、cleanup 失败保留和创建取消后的排空。
+运行期策略和创建失败/取消由[初始化测试](../nestrs-core/tests/unit/runtime/initialization.rs)、
+[请求取消测试](../nestrs-core/tests/unit/runtime/requests.rs)及
+[门面测试](../nestrs-core/tests/unit/facade_api.rs)负责。真实项目配置与单次覆盖见
+[启动配置契约](../cargo-nestrs/tests/startup_config.rs)，声明级覆盖与跨 crate 场景见
+[provider lazy 契约](../cargo-nestrs/tests/provider_lazy_contracts.rs)；
+[ABI 契约](../cargo-nestrs/tests/registry_abi.rs)与
+[反射产物契约](../cargo-nestrs/tests/reflection_artifacts.rs)检查同步演进。
+HTML 图只解释当前创建策略，不执行初始化；[浏览器回归](../tools/verify-graph-page.cjs)
+检查 Scoped 的 Lazy / Eager / 继承提示，以及字段延迟与服务策略的区别。
+
+**本轮实际验证。** 固定 Rust 1.98.0 的 Linux x86_64 环境下，普通 core / 工具测试
+384 项、真实工具链 workspace 测试 394 项、DI runtime / UI 的 38 个外层测试均通过；
+UI harness 包含 68 个子案例。完整 compiler-driver 契约按目标去重后复核通过 305 项，
+其中包括承载 12 个隔离 core 案例的一个外层测试；类型预算另覆盖 Debug / Release
+共 64 个子场景。25 条图导出命令与当前新导出页面的 11 个浏览器场景
+均符合预期；普通与 compiler-driver 严格 Clippy、工作区及修改文件格式检查通过。
+示例、跨 crate 调用迁移及四次基准构建、20 个短场景运行也通过，后者仅作功能检查。
+这些集合存在重叠，不能相加；259 个仓库显式忽略的文档测试不计入通过数量。
+
+compiler-driver 首轮的 provider-lazy 图测试曾出现一次目标目录创建 `ENOENT`。
+原测试串行复跑和全新目标目录下的并发复跑均通过，目录监测未发现对应目录被删除
+或移动；首次失败原因尚未确认，没有据此修改生产逻辑或跳过断言。原日志与复验
+记录保留在本轮证据目录，不将复验通过改写为首次运行全绿。
+
+本次没有重新测量性能或 2 GiB / 2 核容量；此前数字继续保留原日期与基线。
+验证命令、日志和本次实际执行范围记录在 `target/scope-creation-20261003/`，
+文档链接检查另存于 `target/scope-initialization-20261003/`；不把旧版完整矩阵或历史
+平台结果当成本次自动通过证明。
+
+
+## R12：以 Option 参数收敛容器与 scope 创建入口
+
+**背景。** R11 已统一创建期初始化，但对默认配置与显式选项分别提供了 `build` /
+`build_with_options`、`create_scope` / `create_scope_with_options`。维护者进一步要求
+各类创建只保留一个入口，通过可选参数表达配置来源。本轮保留 R11 的独立 root /
+scope 模式、服务级覆盖、初始化失败关闭、取消排空和共享构造上限。
+
+**当前接口。** [公开门面](../nestrs-core/src/facade.rs)只保留
+`ServiceProvider::build(options: Option<ServiceProviderOptions>)` 与
+`provider.create_scope(options: Option<ServiceScopeOptions>)`。两个 with_options
+方法直接移除，不提供兼容转发；返回类型仍分别为 `Result<ServiceProvider, BuildError>`
+和 `Result<ServiceScope<'_>, ScopeBuildError>`，均须等待。
+
+None 采用既有默认：build 使用最终入口 package 的编译配置，scope 使用当前 root
+保存的 `scope_initialization`。Some 完整使用显式选项，不与项目配置逐字段合并；
+scope 的 Some 只影响这一次创建。`Some(Default::default())` 明确选择库的 Lazy
+基线，不等价于 None；root 的完整库基线还包含 scope Lazy 与 32 个构造名额。
+服务级 `#[lazy]` / `#[lazy(false)]` 仍优先，API 收敛不改变冻结计划或字段延迟机制。
+
+**迁移。** `build().await` 改为 `build(None).await`，`create_scope().await` 改为
+`create_scope(None).await`；两个旧 with_options 调用分别改为 `build(Some(options))`
+和 `create_scope(Some(options))`。作用域生命周期、错误来源、取消与关闭语义沿用 R11。
+本轮没有再次修改 options sink v3、reflect 入口 v2 或 JSON schema 1。
+
+**回归入口与记录。** [公开门面契约](../nestrs-core/tests/unit/facade_api.rs)、
+[生产构建契约](../nestrs-core/tests/compiler_plan_required.rs)及
+[真实启动配置契约](../cargo-nestrs/tests/startup_config.rs)分别覆盖新签名、普通 Cargo
+与工具链行为、项目默认和显式覆盖；真实 scope 初始化契约继续验证失败及取消。
+源码、文档、示例、生成测试程序和基准工具调用同步迁移，但未重新测量历史性能。
+本轮原始证据位于 `target/option-creation-api-20261003/`，不把 R11 的通过数量归到
+这次接口收敛。当前用法统一见[core 初始化说明](../nestrs-core/README.md#6-生命周期与预热)。
+
+**本轮实际验证。** 固定 Rust 1.98.0 的 Linux x86_64 上，普通 core / 工具测试
+384 项、真实工具链 workspace 测试 394 项通过；直接受影响的配置、ABI、反射、查询及
+rustdoc 契约共 16 项通过，DI runtime / UI 38 个外层测试通过，包含 68 个 UI 子案例。
+5 个有调用迁移的隔离 core 工程实际执行 8 个契约测试并通过；未重复执行未改动的
+其余隔离工程及完整 Clone / 类型预算矩阵。示例、跨 crate、宏工具链和基准代码迁移
+检查通过；基准仅作短场景功能运行，不产生性能结论。匹配工具重建、两套严格 Clippy、
+格式及差异空白检查通过；当前 HTML 模板的 11 个浏览器场景、12 份 Markdown 的
+471 条链接与锚点检查通过。测试集合有重叠，259 个显式忽略的文档测试不计入通过数；
+未重新验证 Windows、跨 target 或完整 LSP。

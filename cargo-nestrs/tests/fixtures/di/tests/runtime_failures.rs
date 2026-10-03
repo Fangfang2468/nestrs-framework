@@ -53,7 +53,7 @@ struct Good;
 
 #[tokio::test]
 async fn initialization_errors_are_cached_and_do_not_close_other_services() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     provider.get_required_service::<Good>().await.unwrap();
     let first = provider
         .get_service::<Failed>()
@@ -89,7 +89,7 @@ async fn initialization_errors_are_cached_and_do_not_close_other_services() {
         .to_string();
     assert!(panic.contains("factory panic sentinel"));
     for _ in 0..2 {
-        let scope = provider.create_scope();
+        let scope = provider.create_scope(None).await.unwrap();
         for _ in 0..2 {
             assert!(
                 scope
@@ -108,10 +108,11 @@ async fn initialization_errors_are_cached_and_do_not_close_other_services() {
     assert_eq!(GOOD_CLEANUPS.load(Ordering::SeqCst), 1);
 
     // Eager starts every singleton request before reporting failure, then cleans all successes.
-    let eager = ServiceProvider::build_with_options(ServiceProviderOptions {
+    let eager = ServiceProvider::build(Some(ServiceProviderOptions {
         initialization: InitializationMode::Eager,
         max_concurrent_activations: NonZeroUsize::new(4).unwrap(),
-    })
+        ..Default::default()
+    }))
     .await;
     assert!(eager.is_err());
     assert_eq!(GOOD_CLEANUPS.load(Ordering::SeqCst), 2);

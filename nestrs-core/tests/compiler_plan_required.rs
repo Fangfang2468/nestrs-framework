@@ -7,13 +7,14 @@ use nestrs_core::{BuildError, ServiceProvider, ServiceProviderOptions};
 const HAS_TOOLCHAIN_PLAN: bool = option_env!("NESTRS_TOOLCHAIN_ID").is_some();
 
 #[tokio::test]
-async fn build_entries_enforce_the_plan_contract_for_the_current_compiler() {
+async fn build_option_branches_enforce_the_plan_contract_for_the_current_compiler() {
     for result in [
-        ServiceProvider::build().await,
-        ServiceProvider::build_with_options(ServiceProviderOptions::default()).await,
+        ServiceProvider::build(None).await,
+        ServiceProvider::build(Some(ServiceProviderOptions::default())).await,
     ] {
         if HAS_TOOLCHAIN_PLAN {
-            let provider = result.expect("Nestrs 工具链编译后两个 build 入口都应装载有效计划");
+            let provider =
+                result.expect("Nestrs 工具链编译后 build 的 None / Some 分支都应装载有效计划");
             provider.dispose_async().await.unwrap();
             continue;
         }
@@ -32,7 +33,7 @@ fn startup_errors_distinguish_missing_plan_from_missing_runtime() {
         task::{Context, Poll, Waker},
     };
 
-    let mut future = std::pin::pin!(ServiceProvider::build());
+    let mut future = std::pin::pin!(ServiceProvider::build(None));
     let mut context = Context::from_waker(Waker::noop());
     let result = future.as_mut().poll(&mut context);
     if HAS_TOOLCHAIN_PLAN {

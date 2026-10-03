@@ -381,11 +381,11 @@ async function main() {
       await selectNode(page, "2");
       assert.match(await page.locator("#inspector-content").innerText(), /普通依赖需要它时仍会构造/);
       await selectNode(page, "4");
-      assert.match(await page.locator("#inspector-content").innerText(), /覆盖全局 Lazy/);
+      assert.match(await page.locator("#inspector-content").innerText(), /覆盖 root 的 Lazy/);
       await selectNode(page, "0");
-      assert.match(await page.locator("#inspector-content").innerText(), /scope\.warm_up\(\)/);
+      assert.match(await page.locator("#inspector-content").innerText(), /不作为scope 创建时的初始化入口/);
       await selectNode(page, "1");
-      assert.match(await page.locator("#inspector-content").innerText(), /create_scope\(\) 本身不构造/);
+      assert.match(await page.locator("#inspector-content").innerText(), /create_scope\(options\)\.await 返回前主动初始化，覆盖本次 scope 的 Lazy/);
       await selectNode(page, "3");
       assert.match(await page.locator("#inspector-content").innerText(), /不增加独立预热实例/);
       const textOverflow = await page.locator(".node-initialization").evaluateAll((labels) => labels.filter((label) => {
@@ -405,6 +405,9 @@ async function main() {
       assert((await state(page)).nodes.filter((node) => node.kind === "provider").every((node) => node.initialization === "inherit"));
       await selectNode(page, "2");
       assert.match(await page.locator("#inspector-content").innerText(), /继承配置/);
+      await selectNode(page, "0");
+      assert.match(await page.locator("#inspector-content").innerText(), /由本次 scope 的初始化配置决定/);
+      assert.match(await page.locator("#inspector-content").innerText(), /root 的初始化模式不改变 scope 默认值/);
       const project = projectGraph(graph);
       project.entries[1].graph.nodes[2].initialization = "lazy";
       project.entries[1].graph.nodes[4].initialization = "inherit";

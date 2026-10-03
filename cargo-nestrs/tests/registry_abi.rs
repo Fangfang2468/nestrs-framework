@@ -49,7 +49,7 @@ fn run(directory: &Path, arguments: &[&str], log_name: &str) -> Output {
 }
 
 #[test]
-fn check_rejects_an_older_core_protocol_even_without_service_declarations() {
+fn check_rejects_incompatible_core_options_protocol_even_without_service_declarations() {
     fn copy_sources(source: &Path, target: &Path) {
         fs::create_dir_all(target).unwrap();
         for entry in fs::read_dir(source).unwrap() {
@@ -72,16 +72,13 @@ fn check_rejects_an_older_core_protocol_even_without_service_declarations() {
         core.join("Cargo.toml"),
     )
     .unwrap();
-    // Model a mismatched installation using real core source and an older sink
-    // name. No declarations are needed to load the core dependency in rustc.
+    // 用真实 core 分别验证旧 sink 名称、旧参数数量和错误字段类型；空图也须握手。
+    // 类型变动时同步适配函数体，确保错误来自 driver 协议检查而非 core 编译失败。
     let plan_path = core.join("src/graph/plan.rs");
     let source = fs::read_to_string(&plan_path).unwrap();
-    assert!(source.contains("plan_set_options_v2"));
-    fs::write(
-        &plan_path,
-        source.replace("plan_set_options_v2", "plan_set_options"),
-    )
-    .unwrap();
+    let start = source.find("pub unsafe fn plan_set_options_v3(").unwrap();
+    let end = start + source[start..].find("\n}\n").unwrap() + 2;
+    let sink = &source[start..end];
     let original: toml::Value =
         toml::from_str(&fs::read_to_string(workspace().join("Cargo.toml")).unwrap()).unwrap();
     let mut manifest: toml::Value = toml::from_str(
@@ -115,18 +112,55 @@ resolver = "3"
     )
     .unwrap();
 
-    let output = run(&directory, &["check", "--offline"], "old-protocol");
-    let diagnostic = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !output.status.success(),
-        "check accepted an incompatible core"
-    );
-    assert!(diagnostic.contains("内部协议版本不匹配"), "{diagnostic}");
-    assert!(diagnostic.contains("plan_set_options_v2"), "{diagnostic}");
-    assert!(
-        !diagnostic.contains("internal compiler error"),
-        "{diagnostic}"
-    );
+    for (case, replacement, expected) in [
+        (
+            "old-v2-name",
+            sink.replace("plan_set_options_v3", "plan_set_options_v2")
+                .replace("    scope_eager: bool,\n", "")
+                .replace(
+                    ".set_options(eager, scope_eager, concurrency)",
+                    ".set_options(eager, false, concurrency)",
+                ),
+            "内部协议版本不匹配",
+        ),
+        (
+            "old-arity",
+            sink.replace("    scope_eager: bool,\n", "").replace(
+                ".set_options(eager, scope_eager, concurrency)",
+                ".set_options(eager, false, concurrency)",
+            ),
+            "内部协议签名不匹配",
+        ),
+        (
+            "wrong-scope-type",
+            sink.replace("scope_eager: bool", "scope_eager: usize")
+                .replace(
+                    ".set_options(eager, scope_eager, concurrency)",
+                    ".set_options(eager, scope_eager != 0, concurrency)",
+                ),
+            "内部协议签名不匹配",
+        ),
+    ] {
+        assert_ne!(sink, replacement);
+        let mut changed = source.clone();
+        changed.replace_range(start..end, &replacement);
+        fs::write(&plan_path, changed).unwrap();
+        let output = run(&directory, &["check", "--offline"], case);
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "{case}: check accepted an incompatible core"
+        );
+        assert!(diagnostic.contains(expected), "{case}: {diagnostic}");
+        assert!(
+            diagnostic.contains("plan_set_options_v3"),
+            "{case}: {diagnostic}"
+        );
+        assert!(
+            !diagnostic.contains("internal compiler error"),
+            "{case}: {diagnostic}"
+        );
+    }
 }
 
 #[test]
@@ -157,7 +191,7 @@ impl Port for Service { fn value(&self) -> u32 { self.value } }
 struct Consumer { #[inject] port: dyn Port }
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let concrete = provider.get_required_service::<Service>().await.unwrap();
     let projected = provider.get_required_service::<dyn Port>().await.unwrap();
     let consumer = provider.get_required_service::<Consumer>().await.unwrap();
@@ -377,7 +411,7 @@ fn ordinary_user_function() {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     ordinary_user_function();
-    let provider = nestrs_core::ServiceProvider::build().await.unwrap();
+    let provider = nestrs_core::ServiceProvider::build(None).await.unwrap();
     assert!(provider.get_service::<Pretend>().await.unwrap().is_none());
     provider.dispose_async().await.unwrap();
     println!("user marker spelling did not register a service");
@@ -474,7 +508,8 @@ fn main() {
     let mut options = nestrs_core::ServiceProviderOptions::default();
     options.initialization = nestrs_core::InitializationMode::Eager;
     options.max_concurrent_activations = std::num::NonZeroUsize::new(3).unwrap();
-    let nestrs_core::ServiceProviderOptions { initialization, max_concurrent_activations } = options;
+    let nestrs_core::ServiceProviderOptions { initialization, scope_initialization, max_concurrent_activations } = options;
+    assert_eq!(scope_initialization, nestrs_core::InitializationMode::Lazy);
     assert_eq!(initialization, nestrs_core::InitializationMode::Eager);
     assert_eq!(max_concurrent_activations.get(), 3);
 }
@@ -539,7 +574,7 @@ impl Answer for PrivateAnswer { fn value(&self) -> u32 { 73 } }
         r#"#![forbid(unsafe_code)]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let provider = nestrs_core::ServiceProvider::build().await.unwrap();
+    let provider = nestrs_core::ServiceProvider::build(None).await.unwrap();
     let answer = provider.get_required_service::<dyn upstream::Answer>().await.unwrap();
     assert_eq!(answer.value(), 73);
     provider.dispose_async().await.unwrap();
@@ -619,7 +654,7 @@ struct Service { #[value(37)] value: usize }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let provider = nestrs_core::ServiceProvider::build().await.unwrap();
+    let provider = nestrs_core::ServiceProvider::build(None).await.unwrap();
     assert_eq!(provider.get_required_service::<Service>().await.unwrap().value, 37);
     provider.dispose_async().await.unwrap();
     println!("CLI bridge retains its identity beside a same-named dependency");

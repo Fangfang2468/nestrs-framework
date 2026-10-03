@@ -28,7 +28,7 @@ struct OptionalConsumer {
 
 #[tokio::main]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     provider.get_required_service::<Closed>().await.unwrap();
     let consumer = provider
         .get_required_service::<OptionalConsumer>()

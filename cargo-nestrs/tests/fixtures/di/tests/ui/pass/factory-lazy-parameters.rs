@@ -20,7 +20,7 @@ fn create(#[lazy] dependency: Dependency, #[nestrs::lazy] optional: Option<Missi
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let provider = nestrs_core::ServiceProvider::build().await.unwrap();
+    let provider = nestrs_core::ServiceProvider::build(None).await.unwrap();
     let service = provider.get_required_service::<Service>().await.unwrap();
     assert!(service.optional.is_none());
     service.dependency.get().await.unwrap();

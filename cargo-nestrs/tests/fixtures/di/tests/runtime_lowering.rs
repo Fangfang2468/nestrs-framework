@@ -78,7 +78,7 @@ fn accepts_optional_token(_: &Option<Injection<external::Database>>) {}
 
 #[tokio::test]
 async fn declaration_lowering_preserves_expansion_context_and_factory_borrows() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert_eq!(external::CONSTRUCTIONS.load(Ordering::SeqCst), 0);
 
     let database = provider

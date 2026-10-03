@@ -217,7 +217,7 @@ mod raw_constructor {
 
 #[tokio::test]
 async fn class_bindings_preserve_business_constants_in_all_constructor_modes() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert_eq!(
         provider
             .get_required_service::<constructor_error::Success>()
@@ -313,7 +313,7 @@ async fn class_bindings_preserve_business_constants_in_all_constructor_modes() {
 
 #[tokio::test]
 async fn raw_identifiers_preserve_business_references_for_types_factories_and_constructors() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let dependency = provider
         .get_required_service::<raw_injectable::r#type>()
         .await

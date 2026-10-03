@@ -555,11 +555,11 @@ async fn settle(provider: &ServiceProvider) {
 }
 async fn run(scenario: &str, batches: usize, batch_size: usize) {
     assert!(batches <= 128 && batches > 0 && batch_size > 0);
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     settle(&provider).await;
     // Warm all allocations, selected routes, graph OnceLock, root singletons, and a bounded owner lifecycle.
     for _ in 0..8 {
-        let scope = provider.create_scope();
+        let scope = provider.create_scope(None).await.unwrap();
         for _ in 0..batch_size {
             black_box(query(scope.service_provider(), scenario).await);
         }
@@ -573,7 +573,7 @@ async fn run(scenario: &str, batches: usize, batch_size: usize) {
     let dropped_start = DROPPED.load(Ordering::Relaxed);
     let mut result = Measurement::default();
     for checkpoint in checkpoints.iter_mut().take(batches) {
-        let scope = provider.create_scope();
+        let scope = provider.create_scope(None).await.unwrap();
         black_box(
             scope
                 .service_provider()

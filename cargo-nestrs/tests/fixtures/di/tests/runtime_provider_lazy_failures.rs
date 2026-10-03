@@ -55,7 +55,7 @@ fn deferred_failure() -> Result<DeferredFailure, &'static str> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn forced_startup_failure_and_cancelled_build_finish_cleanup_without_retrying() {
-    let failure = ServiceProvider::build()
+    let failure = ServiceProvider::build(None)
         .await
         .err()
         .expect("全局 Lazy 也必须等待 #[lazy(false)] 服务");
@@ -69,7 +69,7 @@ async fn forced_startup_failure_and_cancelled_build_finish_cleanup_without_retry
     FAIL.store(false, Ordering::SeqCst);
     BLOCK.store(true, Ordering::SeqCst);
     CLEANUP.lock().unwrap().clear();
-    let mut build = Box::pin(ServiceProvider::build());
+    let mut build = Box::pin(ServiceProvider::build(None));
     tokio::time::timeout(Duration::from_secs(5), async {
         tokio::select! {
             permit = STARTED.acquire() => permit.unwrap().forget(),
@@ -90,7 +90,7 @@ async fn forced_startup_failure_and_cancelled_build_finish_cleanup_without_retry
 
     // 新 root 有独立实例状态。延迟 Singleton 的失败仍缓存到该 root 关闭。
     BLOCK.store(false, Ordering::SeqCst);
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let first = provider
         .get_required_service::<DeferredFailure>()
         .await

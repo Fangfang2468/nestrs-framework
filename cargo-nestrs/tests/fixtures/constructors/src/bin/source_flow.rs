@@ -209,7 +209,7 @@ fn injected(_: &Injection<Dependency>) {}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let root = ServiceProvider::build().await.unwrap();
+    let root = ServiceProvider::build(None).await.unwrap();
     let conditional = root.get_required_service::<Conditional>().await.unwrap();
     assert_eq!(conditional.value, 7);
     #[cfg(feature = "alternate")]

@@ -42,17 +42,18 @@ cargo nestrs run -p nestrs-di-example -- place-order --help
 
 ```bash
 cargo nestrs run -p nestrs-di-example -- sample --eager
-cargo nestrs run -p nestrs-di-example -- sample --warm-up-scopes
+cargo nestrs run -p nestrs-di-example -- sample --scope-initialization eager
 cargo nestrs run -p nestrs-di-example -- sample --max-concurrency 1
-cargo nestrs run -p nestrs-di-example -- sample --eager --warm-up-scopes --max-concurrency 1
+cargo nestrs run -p nestrs-di-example -- sample --eager --scope-initialization eager --max-concurrency 1
 ```
 
-本例默认 Lazy、**4** 个构造名额、**4** 个 Tokio worker。`--max-concurrency` 必须为
+本例 root / scope 均默认 Lazy、**4** 个构造名额、**4** 个 Tokio worker。`--max-concurrency` 必须为
 正整数，控制容器的构造任务数量，不限制已经创建的服务处理多少业务请求。
-`--eager` 预热 Singleton 及其必要依赖；`--warm-up-scopes` 在每笔请求开始时预热
-该 scope 的 Scoped 服务，均不会改变服务的生命周期。
+`--eager` 在 root 创建时初始化 Singleton 及其必要依赖；`--scope-initialization`
+接受 `lazy` 或 `eager`，控制每笔请求的 scope 创建行为。Eager 会等待选中的 Scoped
+服务初始化成功才交付 scope；这两个选项独立，均不会改变服务的生命周期。
 
-应用调用 `ServiceProvider::build_with_options` 显式传入这些参数，因此不采用
+应用调用 `ServiceProvider::build(Some(options))` 显式传入这些参数，因此不采用
 Cargo.toml `[nestrs-cli]` 的启动默认值。core 自身的缺省构造上限是 32；本例为了
 观察行为单独选择 4。更完整的配置规则见[工具链说明](../../docs/NESTRS_CARGO_TOOLCHAIN.md)。
 
@@ -124,7 +125,7 @@ CheckoutService 同时依赖两种支付渠道，所以 Lazy 首次构造它也�
 `PaymentMethod` 只决定本次调用哪个已注入渠道。formatter 参数带 `#[lazy]`，
 `format_receipt` 内部才调用 `self.formatter.get().await?`；只有成功订单生成收据，
 四笔样例共创建两个格式器，拒付与缺货不会创建它。它是 Transient，不被 Eager 或
-scope warm-up 单独预热；如果目标改为 Singleton/Scoped，其自主预热需要另外通过
+scope 创建时单独初始化；如果目标改为 Singleton/Scoped，其自主预热需要另外通过
 服务级 `#[lazy]` 控制。延迟依赖仍参与编译期完整图验证和关闭顺序。
 
 库存预留在短 Mutex 临界区完成，支付等待期间不持锁。未提交的 `Reservation` 在
@@ -167,11 +168,14 @@ Bash / WSL 中可启用本地支付初始化故障：
 ```bash
 NESTRS_EXAMPLE_FAIL_PAYMENT=1 cargo nestrs run -p nestrs-di-example -- sample
 NESTRS_EXAMPLE_FAIL_PAYMENT=1 cargo nestrs run -p nestrs-di-example -- sample --eager
+NESTRS_EXAMPLE_FAIL_PAYMENT=1 cargo nestrs run -p nestrs-di-example -- sample --scope-initialization eager
 ```
 
 这个开关使 card factory 返回初始化错误，不是正常的 declined 业务拒付。程序应打印
 带服务来源的错误并非零退出。Lazy 下错误发生在请求激活，应用关闭已创建的 scope
-和 root；Eager 下错误发生在 build，build 关闭尚未交付的 provider，此时未开始请求。
+和 root；root Eager 下错误发生在 build，build 关闭尚未交付的 provider，此时未开始请求。
+root Lazy / scope Eager 下，失败发生在 `create_scope(options).await`；创建流程先清理
+尚未交付的 scope，再返回 `ScopeBuildError`，应用随后仍负责关闭 root。
 
 编译失败的 DI 关系请看[错误示例索引](../di-errors/README.md)；不把非法注册加入
 这个业务 package。框架的生命周期、部分失败图和编译器协议负例另由

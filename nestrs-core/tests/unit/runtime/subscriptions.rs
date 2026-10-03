@@ -141,7 +141,10 @@ async fn cancelled_queries_retire_while_the_shared_activation_is_still_pending()
             vec![],
         )]));
         let scope = OwnerData::new(1, commands.downgrade());
-        coordinator.handle_command(Command::Register(scope));
+        coordinator.handle_command(Command::Register {
+            data: scope,
+            ready: oneshot::channel().0,
+        });
         let (waiter, survivor) = oneshot::channel();
         coordinator.accept_resolution(1, 0, (0, waiter));
         let owner = if lifetime == ServiceLifetime::Singleton {

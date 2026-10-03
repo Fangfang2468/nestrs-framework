@@ -21,7 +21,7 @@ fn configuration() -> Configuration {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let provider = nestrs_core::ServiceProvider::build().await.unwrap();
+    let provider = nestrs_core::ServiceProvider::build(None).await.unwrap();
     let consumer = provider.get_required_service::<Consumer>().await.unwrap();
     let database = provider.get_required_service::<Database>().await.unwrap();
     let _: &Configuration = provider

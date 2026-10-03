@@ -108,9 +108,14 @@ impl PlanAssembly {
     }
 
     /// 从已验证标量装配入口默认设置，并拒绝零构造并发数。
-    fn set_options(&mut self, eager: bool, concurrency: usize) {
+    fn set_options(&mut self, eager: bool, scope_eager: bool, concurrency: usize) {
         let options = ServiceProviderOptions {
             initialization: if eager {
+                InitializationMode::Eager
+            } else {
+                InitializationMode::Lazy
+            },
+            scope_initialization: if scope_eager {
                 InitializationMode::Eager
             } else {
                 InitializationMode::Lazy
@@ -375,9 +380,14 @@ unsafe extern "Rust" {
 ///
 /// # Safety
 /// output 必须满足本模块的编译器装配协议。
-pub unsafe fn plan_set_options_v2(output: *mut (), eager: bool, concurrency: usize) {
+pub unsafe fn plan_set_options_v3(
+    output: *mut (),
+    eager: bool,
+    scope_eager: bool,
+    concurrency: usize,
+) {
     // SAFETY: 入口同步调用，且 output 仍然唯一指向当前装配器。
-    unsafe { PlanAssembly::from_output(output) }.set_options(eager, concurrency);
+    unsafe { PlanAssembly::from_output(output) }.set_options(eager, scope_eager, concurrency);
 }
 
 /// 按编译器已经确定的顺序装载投影地址；这里的下标就是后续 sink 的 binding 编号。

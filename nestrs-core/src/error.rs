@@ -33,6 +33,20 @@ pub enum BuildError {
     },
 }
 
+/// scope 创建失败；返回前已等待未交付 owner 排空及清理。
+///
+/// 保留原始初始化失败和可选的清理失败，不把部分初始化的 scope 交给调用者。
+#[derive(Debug, thiserror::Error)]
+#[error("服务作用域初始化失败: {error}; 关闭结果: {dispose_error:?}")]
+pub struct ScopeBuildError {
+    /// 创建 scope 时发生的注册或服务初始化错误。
+    #[source]
+    pub error: ResolveError,
+
+    /// 关闭未交付 scope 时发生的可选清理错误。
+    pub dispose_error: Option<DisposeError>,
+}
+
 /// 共享原始错误详情和一条消费者路径，避免传播时复制深链文本。
 struct ResolveFailure {
     /// 同一故障所有路径共享的详情，向上追加路径时不复制文本。

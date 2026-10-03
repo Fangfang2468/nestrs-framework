@@ -187,7 +187,7 @@ mod explicit_binding {
 
 #[tokio::test]
 async fn business_expressions_and_type_names_keep_their_original_resolution() {
-    let root = ServiceProvider::build().await.unwrap();
+    let root = ServiceProvider::build(None).await.unwrap();
     let service = root
         .get_required_service::<expressions::Service>()
         .await
@@ -249,7 +249,7 @@ async fn business_expressions_and_type_names_keep_their_original_resolution() {
 
 #[tokio::test]
 async fn constructor_business_members_and_generated_helpers_have_distinct_identities() {
-    let root = ServiceProvider::build().await.unwrap();
+    let root = ServiceProvider::build(None).await.unwrap();
     let service = root
         .get_required_service::<constructors::Service>()
         .await
@@ -294,7 +294,7 @@ async fn constructor_business_members_and_generated_helpers_have_distinct_identi
 
 #[tokio::test]
 async fn factory_cleanup_and_explicit_projection_preserve_business_names() {
-    let root = ServiceProvider::build().await.unwrap();
+    let root = ServiceProvider::build(None).await.unwrap();
     assert_eq!(
         root.get_required_service::<factory_and_cleanup::Product>()
             .await

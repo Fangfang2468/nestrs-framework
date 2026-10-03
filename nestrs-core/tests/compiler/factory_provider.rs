@@ -306,7 +306,7 @@ async fn factory_invokers_construct_all_supported_return_shapes_and_report_failu
             Constructor::Factory(FactoryInvoker::Async(_))
         ));
     }
-    let provider = crate::ServiceProvider::build().await.unwrap();
+    let provider = crate::ServiceProvider::build(None).await.unwrap();
     provider
         .get_required_service::<DirectService>()
         .await

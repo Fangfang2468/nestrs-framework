@@ -47,7 +47,7 @@ async fn make(#[inject] port: dyn Port) -> FactoryPort {
 }
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let consumer = provider.get_required_service::<Consumer>().await.unwrap();
     assert_eq!(consumer.port.number(), 7);
     assert_eq!(

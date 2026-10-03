@@ -84,10 +84,10 @@ impl projected::Map for InvalidMap {
 
 #[tokio::main]
 async fn main() {
-    let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
+    let provider = ServiceProvider::build(Some(ServiceProviderOptions {
         initialization: InitializationMode::Eager,
         ..Default::default()
-    })
+    }))
     .await
     .unwrap();
     assert_eq!(LOCAL_BUILDS.load(Ordering::SeqCst), 3);

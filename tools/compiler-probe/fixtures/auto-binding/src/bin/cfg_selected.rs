@@ -36,7 +36,7 @@ impl Port for AlternateService {
 async fn main() {
     assert_eq!(automatic_assertions::explicit_count(), 0);
     automatic_assertions::assert_count::<dyn Port>(1);
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let service = provider.get_required_service::<dyn Port>().await.unwrap();
     assert_eq!(
         service.selected(),

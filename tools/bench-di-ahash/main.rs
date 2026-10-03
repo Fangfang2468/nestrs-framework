@@ -185,9 +185,9 @@ async fn transient_batches(provider: &ServiceProvider, iterations: usize) -> (u1
     while remaining != 0 {
         // 一批最多 2,048 个实例，scope 收纳它们的 lease；批间完整关闭后再开始。
         let count = remaining.min(512);
-        let scope = provider.create_scope();
-        // create_scope 只投递注册命令。先完成一次无关 Singleton 查询，确认
-        // 协调器已处理 scope 注册，避免把异步注册工作混入计时区间。
+        let scope = provider.create_scope(None).await.unwrap();
+        // scope 创建按默认 Lazy 策略完成。先准备无关 Singleton，避免
+        // 将它的首次初始化与服务查询基准的计时区间混在一起。
         black_box(
             scope
                 .service_provider()
@@ -205,7 +205,7 @@ async fn transient_batches(provider: &ServiceProvider, iterations: usize) -> (u1
 }
 
 async fn measure(options: &Options) -> (u128, usize) {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let result = match options.scenario {
         Scenario::WarmSingleton => {
             singleton_loop(&provider, options.warmup).await;
@@ -220,7 +220,7 @@ async fn measure(options: &Options) -> (u128, usize) {
             (start.elapsed().as_nanos(), checksum)
         }
         Scenario::ScopedCache => {
-            let scope = provider.create_scope();
+            let scope = provider.create_scope(None).await.unwrap();
             scoped_loop(scope.service_provider(), options.warmup).await;
             let start = Instant::now();
             let checksum = scoped_loop(scope.service_provider(), options.iterations).await;

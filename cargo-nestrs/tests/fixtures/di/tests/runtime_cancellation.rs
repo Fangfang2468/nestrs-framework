@@ -65,7 +65,7 @@ struct BadCleanup;
 
 #[tokio::test]
 async fn cancellation_keeps_accepted_work_and_close_running() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let mut query = Box::pin(provider.get_required_service::<Consumer>());
     tokio::select! {
         _ = STARTED.acquire() => {},
@@ -108,13 +108,13 @@ async fn cancellation_keeps_accepted_work_and_close_running() {
 
     // Ordinary Drop only sends Close, yet an active runtime completes cleanup.
     RELEASE.add_permits(1);
-    let implicit = ServiceProvider::build().await.unwrap();
+    let implicit = ServiceProvider::build(None).await.unwrap();
     implicit.get_required_service::<Dependency>().await.unwrap();
     drop(implicit);
     DEPENDENCY_CLOSED.acquire().await.unwrap().forget();
 
     RELEASE.add_permits(1);
-    let panics = ServiceProvider::build().await.unwrap();
+    let panics = ServiceProvider::build(None).await.unwrap();
     panics.get_required_service::<Dependency>().await.unwrap();
     panics.get_required_service::<BadCleanup>().await.unwrap();
     let error = panics.dispose_async().await.unwrap_err();

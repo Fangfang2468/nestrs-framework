@@ -160,7 +160,7 @@ fn generated_value() -> usize {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let service = provider.get_required_service::<Service>().await.unwrap();
     assert_eq!(service.describe(), "generated-by-build-script");
     assert_eq!(service.external.number, 23);

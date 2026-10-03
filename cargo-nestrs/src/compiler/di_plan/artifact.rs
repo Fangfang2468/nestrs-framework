@@ -251,6 +251,7 @@ fn write_reflection<'tcx>(tcx: TyCtxt<'tcx>, plan: &Compiled<'tcx>) -> Result<()
         "crate": tcx.crate_name(LOCAL_CRATE).as_str(),
         "target": tcx.sess.opts.target_triple.to_string(),
         "initialization": if options.eager {"eager"} else {"lazy"},
+        "scopeInitialization": if options.scope_eager {"eager"} else {"lazy"},
         "maxConcurrentActivations": options.max_concurrent_activations,
         "nodes": nodes,
         "projections": projections,

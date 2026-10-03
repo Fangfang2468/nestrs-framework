@@ -71,8 +71,8 @@ struct Handler {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = ServiceProvider::build().await?;
-    let scope = provider.create_scope();
+    let provider = ServiceProvider::build(None).await?;
+    let scope = provider.create_scope(None).await?;
     let _handler = scope
         .service_provider()
         .get_required_service::<Handler>()

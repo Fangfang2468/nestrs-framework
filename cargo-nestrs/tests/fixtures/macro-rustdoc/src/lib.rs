@@ -8,7 +8,7 @@
 //! use nestrs_macro_rustdoc::{Configuration, Connection};
 //! fn main() {
 //!     tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
-//!         let provider = ServiceProvider::build().await.unwrap();
+//!         let provider = ServiceProvider::build(None).await.unwrap();
 //!         assert_eq!(provider.get_required_service::<Configuration>().await.unwrap().port, 5432);
 //!         assert_eq!(provider.get_required_service::<Connection>().await.unwrap().0, 5432);
 //!         provider.dispose_async().await.unwrap();
@@ -36,7 +36,7 @@
 //! }
 //! fn main() {
 //!     tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
-//!         let provider = ServiceProvider::build().await.unwrap();
+//!         let provider = ServiceProvider::build(None).await.unwrap();
 //!         assert_eq!(provider.get_required_service::<Server>().await.unwrap().0, 81);
 //!         assert_eq!(provider.get_required_service::<dyn Endpoint>().await.unwrap().port(), 81);
 //!         provider.dispose_async().await.unwrap();
@@ -57,7 +57,7 @@
 //! struct User;
 //! fn main() {
 //!     tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
-//!         let provider = ServiceProvider::build().await.unwrap();
+//!         let provider = ServiceProvider::build(None).await.unwrap();
 //!         assert_eq!(provider.get_required_service::<Repository<User>>().await.unwrap().count, 7);
 //!         provider.dispose_async().await.unwrap();
 //!         println!("snippet closed generic example completed");

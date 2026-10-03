@@ -63,7 +63,7 @@ fn indexed_repository() -> IndexedRepository<User> {
 
 #[tokio::main]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert_eq!(automatic_assertions::explicit_count(), 0);
     // A concrete producer may export its projection without creating a demand
     // from the generic blueprints superseded by these exact type/key factories.

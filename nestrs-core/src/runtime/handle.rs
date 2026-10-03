@@ -10,7 +10,7 @@ use super::{
 };
 use crate::{
     InitializationMode,
-    error::{DisposeError, ResolveError},
+    error::{BuildError, DisposeError, ResolveError, ScopeBuildError},
     graph::ValidatedGraph,
     lifetime::ServiceLifetime,
 };
@@ -39,8 +39,12 @@ pub(crate) struct Runtime {
 }
 
 impl Runtime {
-    /// 建立 root、命令通道和中央协调任务，设置共享构造上限。
-    pub(crate) fn start(graph: Arc<ValidatedGraph>, max: usize) -> (Arc<Self>, Arc<Owner>) {
+    /// 建立中央协调器并完成 root 初始化；失败先关闭尚未交付的 owner。
+    pub(crate) async fn start(
+        graph: Arc<ValidatedGraph>,
+        max: usize,
+        initialization: InitializationMode,
+    ) -> Result<(Arc<Self>, Arc<Owner>), BuildError> {
         assert!(max > 0, "activation concurrency must be nonzero");
         let (commands, receiver) = mpsc::unbounded_channel();
         let root = OwnerData::new(ROOT, commands.downgrade());
@@ -55,22 +59,104 @@ impl Runtime {
             next_query: AtomicU64::new(0),
         });
         tokio::spawn(Coordinator::new(graph, root, receiver, max).run());
-        (runtime, owner)
+        let owner = runtime
+            .initialize_owner(owner, ServiceLifetime::Singleton, initialization)
+            .await
+            .map_err(|(error, dispose_error)| BuildError::Initialization {
+                error,
+                dispose_error,
+            })?;
+        Ok((runtime, owner))
     }
 
-    /// 创建独立 Scoped owner 并提交注册命令，不构造服务。
-    pub(crate) fn create_scope(&self) -> Arc<Owner> {
+    /// 创建并登记新的 scope，完成配置要求的初始化后才交付 owner。
+    pub(crate) async fn create_scope(
+        &self,
+        initialization: InitializationMode,
+    ) -> Result<Arc<Owner>, ScopeBuildError> {
         let data = OwnerData::new(
             self.next_owner.fetch_add(1, Ordering::Relaxed),
             self.commands.downgrade(),
         );
-        if self.commands.send(Command::Register(data.clone())).is_err() {
-            data.complete_close(Err(DisposeError::coordinator_stopped()));
-        }
-        Arc::new(Owner {
+        let owner = Arc::new(Owner {
             data,
             commands: self.commands.clone(),
-        })
+        });
+        let (ready, registered) = oneshot::channel();
+        // Lazy 空 scope 也等待登记确认，不能向调用者交付协调器已拒绝的 owner。
+        let result = if self
+            .commands
+            .send(Command::Register {
+                data: owner.data.clone(),
+                ready,
+            })
+            .is_err()
+        {
+            Err(ResolveError::closed())
+        } else {
+            registered
+                .await
+                .unwrap_or_else(|_| Err(ResolveError::closed()))
+        };
+        if let Err(error) = result {
+            let dispose_error = self.close(&owner).await.err();
+            return Err(ScopeBuildError {
+                error,
+                dispose_error,
+            });
+        }
+        self.initialize_owner(owner, ServiceLifetime::Scoped, initialization)
+            .await
+            .map_err(|(error, dispose_error)| ScopeBuildError {
+                error,
+                dispose_error,
+            })
+    }
+
+    /// 仅在创建路径中消费未交付 owner；完成初始化或关闭后才结束本次创建。
+    ///
+    /// 没有针对已交付 owner 的重新预热入口。持有 owner 也保证取消创建 future 时，
+    /// Drop 会在请求退订后发送关闭，已接受的初始化继续排空并清理。
+    async fn initialize_owner(
+        &self,
+        owner: Arc<Owner>,
+        lifetime: ServiceLifetime,
+        default_initialization: InitializationMode,
+    ) -> Result<Arc<Owner>, (ResolveError, Option<DisposeError>)> {
+        let result = async {
+            if owner.is_closed() {
+                return Err(ResolveError::closed());
+            }
+
+            // 先提交全部选中请求，让独立分支共享 root 的 worker 额度并行推进。
+            // 服务级 lazy 仅排除自主入口，普通依赖仍由原有激活图展开。
+            let mut receivers = Vec::new();
+            for &provider in &self.graph.topological_order {
+                let node = &self.graph.nodes[provider];
+                let lazy = node
+                    .common
+                    .lazy
+                    .unwrap_or(default_initialization == InitializationMode::Lazy);
+                if node.common.lifetime == lifetime && !lazy {
+                    receivers.push(self.request_resolution(&owner, provider)?);
+                }
+            }
+            let mut first_error = None;
+            for receiver in receivers {
+                if let Err(error) = receiver.wait().await {
+                    first_error.get_or_insert(error);
+                }
+            }
+            first_error.map_or(Ok(()), Err)
+        }
+        .await;
+        match result {
+            Ok(()) => Ok(owner),
+            Err(error) => {
+                let dispose_error = self.close(&owner).await.err();
+                Err((error, dispose_error))
+            }
+        }
     }
 
     /// 提交一次普通解析请求，并等待其缓存或构造结果。
@@ -105,41 +191,6 @@ impl Runtime {
         })
     }
 
-    /// 按生命周期和服务级覆盖选择预热入口，先提交全部请求再等待结果。
-    pub(crate) async fn warm_up(
-        &self,
-        owner: &Owner,
-        lifetime: ServiceLifetime,
-        default_initialization: InitializationMode,
-    ) -> Result<(), ResolveError> {
-        if owner.is_closed() {
-            return Err(ResolveError::closed());
-        }
-
-        // 服务级策略只筛选独立预热入口。即使目标声明 lazy，它作为普通依赖被需要时，
-        // 协调器仍会按原图构造；此处不删除节点、不改边，也不改变缓存和 occurrence。
-        // 先提交全部选中的请求再等待，独立分支因此能同时启动；失败不放弃其他已接受任务。
-        let mut receivers = Vec::new();
-        for &provider in &self.graph.topological_order {
-            let node = &self.graph.nodes[provider];
-            let lazy = node
-                .common
-                .lazy
-                .unwrap_or(default_initialization == InitializationMode::Lazy);
-            if node.common.lifetime == lifetime && lifetime != ServiceLifetime::Transient && !lazy {
-                receivers.push(self.request_resolution(owner, provider)?);
-            }
-        }
-        let mut first_error = None;
-        for receiver in receivers {
-            let result = receiver.wait().await;
-            if let Err(error) = result {
-                first_error.get_or_insert(error);
-            }
-        }
-        first_error.map_or(Ok(()), Err)
-    }
-
     /// 提交幂等关闭请求并等待最终结果；已完成关闭时直接复用结果。
     pub(crate) async fn close(&self, owner: &Owner) -> Result<(), DisposeError> {
         if let Some(result) = owner.data.completed_close() {
@@ -167,7 +218,7 @@ impl Runtime {
 
 /// 普通查询的订阅所有权。取消只注销等待者，绝不取消已经接受的构造任务。
 ///
-/// 预热也保存此凭证，因此取消预热时，正在等待及尚未轮到等待的全部请求都会退订。
+/// 创建时的初始化也保存此凭证，取消创建会退订正在等待及尚未轮到等待的全部请求。
 /// Resolve 与退订使用同一个通道按顺序发送；若完成先到，晚到的退订是无害的空操作。
 struct ResolutionRequest<'runtime> {
     /// 当前普通查询的订阅编号。
@@ -203,8 +254,14 @@ impl Drop for ResolutionRequest<'_> {
 
 /// 协调器接收的 owner 与查询动作。Close 幂等，等待端可以不存在或被取消。
 pub(super) enum Command {
-    /// 登记新 scope 的共享 owner 数据，不触发服务构造。
-    Register(Arc<OwnerData>),
+    /// 登记新 scope 的共享 owner 数据，确认 root 仍接受 scope 后允许继续初始化。
+    Register {
+        /// 未交付 scope 的共享状态；调用方取消时仍由 Owner::drop 提交关闭。
+        data: Arc<OwnerData>,
+
+        /// 登记结果，避免 Lazy 空 scope 在 root 已关闭时被错误交付。
+        ready: oneshot::Sender<Result<(), ResolveError>>,
+    },
 
     /// 提交普通查询及其可取消的一次性订阅。
     Resolve {

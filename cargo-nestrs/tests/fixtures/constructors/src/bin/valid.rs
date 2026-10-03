@@ -274,7 +274,7 @@ async fn main() {
         19
     );
     assert_eq!(OrdinaryBusinessService::__nestrs_constructor_activate(), 23);
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert!(!ASYNC_READY.load(Ordering::SeqCst));
     let checkout = provider.get_required_service::<Checkout>().await.unwrap();
     let lazy_options = provider
@@ -372,8 +372,8 @@ async fn main() {
     assert_eq!(external.value, 44);
     assert_eq!(external.clock.sequence(), 0);
 
-    let first = provider.create_scope();
-    let second = provider.create_scope();
+    let first = provider.create_scope(None).await.unwrap();
+    let second = provider.create_scope(None).await.unwrap();
     let request1 = first
         .service_provider()
         .get_required_service::<RequestService>()

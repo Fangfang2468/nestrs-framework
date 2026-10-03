@@ -95,7 +95,7 @@ impl Root {
             .get_or_init(|| Arc::new(Base { value: 17 }))
             .clone()
     }
-    pub fn scope(&self) -> Scope<'_> {
+    pub async fn scope(&self) -> Scope<'_> {
         Scope {
             root: self,
             mixed: Vec::new(),

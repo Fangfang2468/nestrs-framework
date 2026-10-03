@@ -74,7 +74,7 @@ impl<T: Send + Sync + 'static> Matrix<T> {
 
 #[tokio::main]
 async fn main() {
-    let root = ServiceProvider::build().await.unwrap();
+    let root = ServiceProvider::build(None).await.unwrap();
     let delayed = root
         .get_required_service::<LazyOnly<Dependency>>()
         .await

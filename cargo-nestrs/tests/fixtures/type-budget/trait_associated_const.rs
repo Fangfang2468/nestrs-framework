@@ -48,7 +48,7 @@ fn invoke<T: Run>(provider: &ServiceProvider) -> QueryFuture<'_> {
 
 #[tokio::main]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert_eq!(invoke::<Wide>(&provider).await, 11);
     assert_eq!(invoke::<QueryRunner<u8>>(&provider).await, 37);
     provider.dispose_async().await.unwrap();

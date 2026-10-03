@@ -13,7 +13,7 @@ async fn main() {
         inherited, 1,
         "reuse the exact upstream projection capability"
     );
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let concrete = provider
         .get_required_service::<PublicAlias>()
         .await

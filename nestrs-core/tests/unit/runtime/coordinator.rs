@@ -88,6 +88,25 @@ fn graph(nodes: Vec<CompiledNode>) -> Arc<ValidatedGraph> {
 
 static SHARED_SUCCESS_CALLS: AtomicUsize = AtomicUsize::new(0);
 
+#[tokio::test]
+async fn closing_root_rejects_registration_and_completes_the_empty_scope() {
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let root = super::OwnerData::new(super::ROOT, sender.downgrade());
+    let scope = super::OwnerData::new(1, sender.downgrade());
+    let mut coordinator = super::Coordinator::new(graph(vec![]), root.clone(), receiver, 1);
+    coordinator.begin_close(root, None);
+    let (ready, registered) = tokio::sync::oneshot::channel();
+    coordinator.handle_command(super::Command::Register {
+        data: scope.clone(),
+        ready,
+    });
+    assert!(registered.await.unwrap().is_err());
+    assert!(!coordinator.owners.contains_key(&scope.id));
+    assert_eq!(scope.status.load(Ordering::Acquire), CLOSED);
+    assert!(scope.completed_close().unwrap().is_ok());
+    coordinator.run().await;
+}
+
 fn counted_success(inputs: ConstructionInputs) -> Result<ErasedService, ConstructionError> {
     inputs.ensure_all_consumed()?;
     let value = SHARED_SUCCESS_CALLS.fetch_add(1, Ordering::SeqCst) as u32;
@@ -115,8 +134,14 @@ async fn completed_shared_success_retires_tasks_and_preserves_owner_cache() {
             receiver,
             4,
         );
-        coordinator.handle_command(super::Command::Register(first_scope.clone()));
-        coordinator.handle_command(super::Command::Register(second_scope.clone()));
+        coordinator.handle_command(super::Command::Register {
+            data: first_scope.clone(),
+            ready: tokio::sync::oneshot::channel().0,
+        });
+        coordinator.handle_command(super::Command::Register {
+            data: second_scope.clone(),
+            ready: tokio::sync::oneshot::channel().0,
+        });
         let mut queries = Vec::new();
         for (query, owner) in [1, 1, 2].into_iter().enumerate() {
             let (waiter, result) = tokio::sync::oneshot::channel();
@@ -218,7 +243,10 @@ async fn completed_shared_failure_retires_tasks_without_retrying_or_publishing()
             receiver,
             4,
         );
-        coordinator.handle_command(super::Command::Register(scope.clone()));
+        coordinator.handle_command(super::Command::Register {
+            data: scope.clone(),
+            ready: tokio::sync::oneshot::channel().0,
+        });
         let mut queries = Vec::new();
         for query in 0..3 {
             let (waiter, result) = tokio::sync::oneshot::channel();
@@ -449,7 +477,10 @@ fn deep_graph_activation_and_shutdown_do_not_use_a_recursive_rust_stack() {
                         )
                     })
                     .collect();
-                let (runtime, owner) = Runtime::start(graph(nodes), 8);
+                let (runtime, owner) =
+                    Runtime::start(graph(nodes), 8, crate::InitializationMode::Lazy)
+                        .await
+                        .unwrap();
                 let lease = tokio::time::timeout(
                     Duration::from_secs(20),
                     runtime.resolve(&owner, COUNT - 1),
@@ -518,9 +549,18 @@ async fn activation_limit_is_shared_by_concurrent_gets_and_all_scopes() {
             Vec::new(),
         )]),
         LIMIT,
-    );
-    let scope_a = runtime.create_scope();
-    let scope_b = runtime.create_scope();
+        crate::InitializationMode::Lazy,
+    )
+    .await
+    .unwrap();
+    let scope_a = runtime
+        .create_scope(crate::InitializationMode::Lazy)
+        .await
+        .unwrap();
+    let scope_b = runtime
+        .create_scope(crate::InitializationMode::Lazy)
+        .await
+        .unwrap();
     let owners = [owner.clone(), scope_a, scope_b];
     let mut requests = Vec::new();
     for index in 0..COUNT {
@@ -626,20 +666,10 @@ async fn a_ready_successor_does_not_wait_for_an_unrelated_slow_node() {
             }],
         ),
     ]);
-    let (runtime, owner) = Runtime::start(graph, 2);
-    let warming = {
-        let runtime = runtime.clone();
-        let owner = owner.clone();
-        tokio::spawn(async move {
-            runtime
-                .warm_up(
-                    &owner,
-                    ServiceLifetime::Singleton,
-                    crate::InitializationMode::Eager,
-                )
-                .await
-        })
-    };
+    let creating =
+        tokio::spawn(
+            async move { Runtime::start(graph, 2, crate::InitializationMode::Eager).await },
+        );
     let gates = LAYER_GATES.get().unwrap();
     tokio::time::timeout(Duration::from_secs(3), gates.slow_started.acquire())
         .await
@@ -651,16 +681,26 @@ async fn a_ready_successor_does_not_wait_for_an_unrelated_slow_node() {
         .expect("ready successors must be released before unrelated work finishes")
         .unwrap()
         .forget();
-    assert!(!warming.is_finished());
+    assert!(!creating.is_finished());
     gates.slow_release.add_permits(1);
-    warming.await.unwrap().unwrap();
+    let (runtime, owner) = creating.await.unwrap().unwrap();
     runtime.close(&owner).await.unwrap();
 }
 
 #[tokio::test]
 async fn closing_empty_scopes_and_root_needs_no_extra_event_to_complete() {
-    let (runtime, owner) = Runtime::start(graph(Vec::new()), 1);
-    let _scopes: Vec<_> = (0..8).map(|_| runtime.create_scope()).collect();
+    let (runtime, owner) = Runtime::start(graph(Vec::new()), 1, crate::InitializationMode::Lazy)
+        .await
+        .unwrap();
+    let mut scopes = Vec::new();
+    for _ in 0..8 {
+        scopes.push(
+            runtime
+                .create_scope(crate::InitializationMode::Lazy)
+                .await
+                .unwrap(),
+        );
+    }
     tokio::time::timeout(Duration::from_secs(1), runtime.close(&owner))
         .await
         .expect("root should close immediately after its last empty scope")
@@ -713,13 +753,7 @@ async fn synchronous_ready_nodes_can_execute_in_parallel_on_tokio_workers() {
             )
         })
         .collect();
-    let (runtime, owner) = Runtime::start(graph(nodes), 2);
-    runtime
-        .warm_up(
-            &owner,
-            ServiceLifetime::Singleton,
-            crate::InitializationMode::Eager,
-        )
+    let (runtime, owner) = Runtime::start(graph(nodes), 2, crate::InitializationMode::Eager)
         .await
         .unwrap();
     runtime.close(&owner).await.unwrap();

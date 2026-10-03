@@ -39,7 +39,7 @@ impl<T: Send + Sync + 'static> QueryRun for QueryRunner<T> {
 
 #[tokio::main]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert_eq!(<Start<u8> as Run>::run(&provider).await, 11);
     assert_eq!(<QueryRunner<u8> as QueryRun>::run(&provider).await, 37);
     provider.dispose_async().await.unwrap();

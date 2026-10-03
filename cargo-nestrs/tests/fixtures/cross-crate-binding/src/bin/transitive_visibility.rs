@@ -18,7 +18,7 @@ impl ExposedMarker for Service {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let service = provider.get_required_service::<Service>().await.unwrap();
     let exposed = provider
         .get_required_service::<dyn PublicCapability>()

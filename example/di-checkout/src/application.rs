@@ -2,7 +2,7 @@
 use std::num::NonZeroUsize;
 
 use nestrs_core::{
-    BuildError, DisposeError, InitializationMode, ResolveError, ServiceProvider,
+    BuildError, DisposeError, InitializationMode, ResolveError, ScopeBuildError, ServiceProvider,
     ServiceProviderOptions,
 };
 use thiserror::Error;
@@ -17,7 +17,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub(crate) struct RunOptions {
     pub initialization: InitializationMode,
-    pub warm_up_scopes: bool,
+    pub scope_initialization: InitializationMode,
     pub max_concurrent_activations: NonZeroUsize,
 }
 
@@ -25,7 +25,7 @@ impl Default for RunOptions {
     fn default() -> Self {
         Self {
             initialization: InitializationMode::Lazy,
-            warm_up_scopes: false,
+            scope_initialization: InitializationMode::Lazy,
             max_concurrent_activations: NonZeroUsize::new(4).unwrap(),
         }
     }
@@ -37,6 +37,8 @@ pub(crate) enum ApplicationError {
     Build(#[from] BuildError),
     #[error(transparent)]
     Resolve(#[from] ResolveError),
+    #[error(transparent)]
+    ScopeBuild(#[from] ScopeBuildError),
     #[error(transparent)]
     Dispose(#[from] DisposeError),
     #[error("应用操作失败：{operation}；同时关闭失败：{disposal}")]
@@ -67,14 +69,15 @@ pub(crate) async fn run(
     requests: Vec<CheckoutRequest>,
 ) -> AppResult<RunReport> {
     event(format!(
-        "[启动] {:?}；构造并发上限 {}；scope 预热 {}",
-        options.initialization, options.max_concurrent_activations, options.warm_up_scopes
+        "[启动] {:?}；构造并发上限 {}；scope 初始化 {:?}",
+        options.initialization, options.max_concurrent_activations, options.scope_initialization
     ));
     event("[启动] build 开始：加载编译计划并启动容器");
-    let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
+    let provider = ServiceProvider::build(Some(ServiceProviderOptions {
         initialization: options.initialization,
+        scope_initialization: options.scope_initialization,
         max_concurrent_activations: options.max_concurrent_activations,
-    })
+    }))
     .await?;
     match options.initialization {
         InitializationMode::Lazy => event("[启动] build 完成，Lazy 尚未实例化业务服务"),
@@ -82,7 +85,7 @@ pub(crate) async fn run(
     }
 
     // 先保存操作结果，再等待关闭，避免 ? 让错误路径跳过显式 disposal。
-    let outcome = process_orders(&provider, requests, options.warm_up_scopes).await;
+    let outcome = process_orders(&provider, requests).await;
     event("[关闭] 等待 root 的全部实例 cleanup");
     let close = provider.dispose_async().await;
     if close.is_ok() {
@@ -94,7 +97,6 @@ pub(crate) async fn run(
 async fn process_orders(
     provider: &ServiceProvider,
     requests: Vec<CheckoutRequest>,
-    warm_up: bool,
 ) -> AppResult<RunReport> {
     let mut responses = Vec::with_capacity(requests.len());
     let mut requests = requests.into_iter();
@@ -103,14 +105,14 @@ async fn process_orders(
     while let Some(first) = requests.next() {
         if let Some(second) = requests.next() {
             let (first, second) = tokio::join!(
-                handle_checkout(provider, first, warm_up),
-                handle_checkout(provider, second, warm_up),
+                handle_checkout(provider, first),
+                handle_checkout(provider, second),
             );
             // 两个请求都等待 scope 关闭后，才传播基础设施/容器错误。
             responses.push(first?);
             responses.push(second?);
         } else {
-            responses.push(handle_checkout(provider, first, warm_up).await?);
+            responses.push(handle_checkout(provider, first).await?);
         }
     }
     let orders = provider
@@ -134,15 +136,11 @@ async fn process_orders(
 pub(crate) async fn handle_checkout(
     provider: &ServiceProvider,
     request: CheckoutRequest,
-    warm_up: bool,
 ) -> AppResult<CheckoutResponse> {
     let customer = request.customer.clone();
-    let scope = provider.create_scope();
+    let scope = provider.create_scope(None).await?;
     event(format!("[请求 {customer}] 创建 scope"));
     let outcome = async {
-        if warm_up {
-            scope.warm_up().await?;
-        }
         let checkout = scope
             .service_provider()
             .get_required_service::<CheckoutService>()

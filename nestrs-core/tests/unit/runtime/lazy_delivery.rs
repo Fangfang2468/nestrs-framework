@@ -215,7 +215,9 @@ async fn worker_delivers_mixed_slots_for_classes_and_both_factory_kinds() {
             ),
             consumer,
         ]);
-        let (runtime, root) = Runtime::start(plan, 1);
+        let (runtime, root) = Runtime::start(plan, 1, crate::InitializationMode::Lazy)
+            .await
+            .unwrap();
         let lease = runtime.resolve(&root, 2).await.unwrap();
         let mixed = service::<Mixed>(&lease);
         assert_eq!(mixed.immediate, 73);
@@ -265,9 +267,18 @@ async fn worker_lazy_capability_follows_actual_owner_without_keeping_scopes_aliv
                 consumer,
             ]),
             1,
-        );
-        let first_scope = runtime.create_scope();
-        let second_scope = runtime.create_scope();
+            crate::InitializationMode::Lazy,
+        )
+        .await
+        .unwrap();
+        let first_scope = runtime
+            .create_scope(crate::InitializationMode::Lazy)
+            .await
+            .unwrap();
+        let second_scope = runtime
+            .create_scope(crate::InitializationMode::Lazy)
+            .await
+            .unwrap();
         let first = runtime.resolve(&first_scope, 1).await.unwrap();
         let second = runtime.resolve(&second_scope, 1).await.unwrap();
         assert_eq!(

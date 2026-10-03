@@ -108,7 +108,7 @@ mod generated {
 
 #[tokio::test]
 async fn configured_fields_construct_named_tuple_generic_and_empty_services() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let named = provider.get_required_service::<Named>().await.unwrap();
     assert_eq!(named.first.value, 37);
     assert_eq!(named.value, 12);

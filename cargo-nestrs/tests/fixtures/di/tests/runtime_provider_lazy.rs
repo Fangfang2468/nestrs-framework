@@ -1,7 +1,9 @@
 //! 服务声明级预热策略经真实工具链、闭合泛型、绑定与运行时门面的集成回归。
 //! 各用例共享声明，独立 root 的构造记录由测试锁隔离。
 use nestrs::{factory, injectable, lazy, primary};
-use nestrs_core::{InitializationMode, ServiceKey, ServiceProvider, ServiceProviderOptions};
+use nestrs_core::{
+    InitializationMode, ServiceKey, ServiceProvider, ServiceProviderOptions, ServiceScopeOptions,
+};
 use std::{marker::PhantomData, sync::Mutex};
 
 static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -155,10 +157,10 @@ async fn provider_overrides_select_roots_without_changing_field_or_lifetime_sema
     let _test = TEST_LOCK.lock().await;
     for mode in [InitializationMode::Lazy, InitializationMode::Eager] {
         CREATED.lock().unwrap().clear();
-        let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
+        let provider = ServiceProvider::build(Some(ServiceProviderOptions {
             initialization: mode,
             ..Default::default()
-        })
+        }))
         .await
         .unwrap();
         assert_eq!(
@@ -244,48 +246,94 @@ async fn provider_overrides_select_roots_without_changing_field_or_lifetime_sema
 }
 
 #[tokio::test]
-async fn explicit_scope_warmup_respects_overrides_and_scope_creation_stays_inert() {
+async fn scope_creation_applies_independent_defaults_overrides_and_service_policies() {
     let _test = TEST_LOCK.lock().await;
-    CREATED.lock().unwrap().clear();
-    let provider = ServiceProvider::build().await.unwrap();
-    let first = provider.create_scope();
-    let second = provider.create_scope();
-    for name in ["scoped-inherited", "scoped-forced", "scoped-deferred"] {
-        assert_eq!(count(name), 0);
-    }
-    first.warm_up().await.unwrap();
-    assert_eq!(count("scoped-inherited"), 1);
-    assert_eq!(count("scoped-forced"), 1);
-    assert_eq!(count("scoped-deferred"), 0);
-    first.warm_up().await.unwrap();
-    assert_eq!(count("scoped-forced"), 1, "预热重复调用复用同一 scope 缓存");
-    let first_service = first
-        .service_provider()
-        .get_required_service::<ScopedForced>()
-        .await
-        .unwrap();
-    let second_service = second
-        .service_provider()
-        .get_required_service::<ScopedForced>()
-        .await
-        .unwrap();
-    assert_ne!(first_service.id, second_service.id);
-    second.warm_up().await.unwrap();
-    assert_eq!(count("scoped-inherited"), 2);
-    assert_eq!(count("scoped-forced"), 2);
-    assert_eq!(count("scoped-deferred"), 0);
-    assert_eq!(
-        first
-            .service_provider()
-            .get_required_service::<ScopedDeferred>()
+    for root_mode in [InitializationMode::Lazy, InitializationMode::Eager] {
+        for scope_mode in [InitializationMode::Lazy, InitializationMode::Eager] {
+            CREATED.lock().unwrap().clear();
+            let provider = ServiceProvider::build(Some(ServiceProviderOptions {
+                initialization: root_mode,
+                scope_initialization: scope_mode,
+                ..Default::default()
+            }))
             .await
-            .unwrap()
-            .id,
-        0
-    );
-    assert_eq!(count("scoped-deferred"), 1);
-    assert_eq!(count("transient-forced"), 0);
-    first.dispose_async().await.unwrap();
-    second.dispose_async().await.unwrap();
-    provider.dispose_async().await.unwrap();
+            .unwrap();
+            for name in ["scoped-inherited", "scoped-forced", "scoped-deferred"] {
+                assert_eq!(count(name), 0, "build 不提前创建 Scoped 服务");
+            }
+
+            let first = provider.create_scope(None).await.unwrap();
+            assert_eq!(
+                count("scoped-inherited"),
+                usize::from(scope_mode == InitializationMode::Eager)
+            );
+            assert_eq!(
+                count("scoped-forced"),
+                1,
+                "服务级立即策略在 Lazy scope 下也生效"
+            );
+            assert_eq!(count("scoped-deferred"), 0);
+
+            let override_mode = match scope_mode {
+                InitializationMode::Lazy => InitializationMode::Eager,
+                InitializationMode::Eager => InitializationMode::Lazy,
+            };
+            let second = provider
+                .create_scope(Some(ServiceScopeOptions {
+                    initialization: override_mode,
+                }))
+                .await
+                .unwrap();
+            assert_eq!(
+                count("scoped-inherited"),
+                1,
+                "单次覆盖与容器默认分别作用于各自 scope"
+            );
+            assert_eq!(count("scoped-forced"), 2);
+            assert_eq!(count("scoped-deferred"), 0);
+
+            let first_service = first
+                .service_provider()
+                .get_required_service::<ScopedForced>()
+                .await
+                .unwrap();
+            let first_again = first
+                .service_provider()
+                .get_required_service::<ScopedForced>()
+                .await
+                .unwrap();
+            let second_service = second
+                .service_provider()
+                .get_required_service::<ScopedForced>()
+                .await
+                .unwrap();
+            assert!(std::ptr::eq(first_service, first_again));
+            assert_ne!(first_service.id, second_service.id);
+            assert_eq!(count("scoped-forced"), 2, "查询复用已初始化的 Scoped 实例");
+            assert_eq!(
+                first
+                    .service_provider()
+                    .get_required_service::<ScopedDeferred>()
+                    .await
+                    .unwrap()
+                    .id,
+                0
+            );
+            assert_eq!(count("scoped-deferred"), 1);
+            assert_eq!(count("transient-forced"), 0, "Transient 不成为自主初始化根");
+
+            // 单次覆盖不写回默认，后续普通创建仍使用 provider 的 scope 策略。
+            let third = provider.create_scope(None).await.unwrap();
+            assert_eq!(
+                count("scoped-inherited"),
+                1 + usize::from(scope_mode == InitializationMode::Eager)
+            );
+            assert_eq!(count("scoped-forced"), 3);
+            assert_eq!(count("scoped-deferred"), 1);
+            first.dispose_async().await.unwrap();
+            second.dispose_async().await.unwrap();
+            third.dispose_async().await.unwrap();
+            provider.dispose_async().await.unwrap();
+        }
+    }
 }

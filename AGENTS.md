@@ -104,7 +104,7 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   package。局部声明 marker、CompilerKey 与泛型 ProviderDefinition 留在生成代码；
   core 生产代码不定义 DependencyRequest、Delivery、ProviderSource 或候选注册模型。
   core 私有 activation::adapter 只保留执行能力，最终入口为 __nestrs_reflect_v2。
-  driver 在引用 core 的最终 check/build 中核对 plan_set_options_v2 及完整签名，空图
+  driver 在引用 core 的最终 check/build 中核对 plan_set_options_v3 及完整签名，空图
   也拒绝旧 core；工具与 core 同步重编译，缓存按 driver/bridge 指纹隔离。审阅 JSON
   的格式 version 仍为 1，独立于执行 ABI 版本。每个最终入口的 metadata 旁保存
   版本化 *.nestrs-reflect.json，来自同一已选执行计划，仅用于审阅，不是运行时输入或
@@ -142,7 +142,7 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
   选择候选、展开泛型或分析拓扑，也不调用用户构造。不能宣称零回调或零分配。
   core 不保留 GraphCompiler 或旧注册测试模型；执行测试直接提供冻结计划，
   只读快照位于 tests/support 并通过 cfg(test) 引入。图语义由工具侧生产模型与真实
-  driver 契约覆盖。未经过工具链的生产应用调用两个 build 入口返回
+  driver 契约覆盖。未经过工具链的生产应用调用 build（传 None 或 Some）均返回
   BuildError::CompilerPlanUnavailable，不静默生成空计划。
 * 编译器入口 ABI 是内部符号协议，不是业务可调用的 Rust API；driver 拒绝源码引用
   该入口，保留公开门面与真实 Injection 类型。
@@ -203,18 +203,27 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 * core 提供 get_required_service、get_service、get_required_keyed_service 和
   get_keyed_service 四个普通异步查询方法。旧查询宏及 src/query.rs 已移除，不恢复
   同名转发宏；查询根由工具链识别普通方法的真实调用，不提供单独 register!。
-* build/build_with_options、create_scope、service_provider、warm_up 和消费 owner
-  的 dispose_async 保留普通方法。引用绑定实际 root/scope owner 的借用期。
+* build(options: Option<ServiceProviderOptions>)、
+  create_scope(options: Option<ServiceScopeOptions>) 是唯一的两个公开异步创建入口，
+  不保留 build_with_options/create_scope_with_options 转发方法。根据策略完成初始化
+  后交付 owner；service_provider 与消费 owner 的 dispose_async
+  保留普通方法。移除公开 warm_up 和内部独立预热入口，不恢复创建后批量预热 API。
+  引用绑定实际 root/scope owner 的借用期。
 * 容器启动默认值由入口 package 的 Cargo.toml 顶层 `[nestrs-cli]` 设置：
-  `initialization = "lazy" | "eager"`、`max-concurrent-activations = 正整数`。
-  未设置字段仍为 Lazy / 32。工具编译时读取、校验并固化进当前 binary/test 入口，
+  `initialization = "lazy" | "eager"`、`scope-initialization = "lazy" | "eager"`、
+  `max-concurrent-activations = 正整数`。root 与 scope 模式独立、互不继承，均默认 Lazy，
+  并发默认 32。工具编译时读取、校验并固化进当前 binary/test 入口，
   manifest 参与编译依赖跟踪；core 运行时不读取 TOML，不继承依赖或 workspace 默认配置。
-  `build()` 使用项目默认值；`build_with_options` 完整显式覆盖；Options::default
-  保持库的 Lazy / 32 基线。Cargo 的自定义顶层节警告不等于 Nestrs 未读取配置。
-  这里覆盖的是全局默认；服务声明上的显式初始化策略仍优先。
+  `build(None)` 使用项目默认值；`build(Some(options))` 完整显式覆盖，不逐字段合并。
+  Options::default 保持库的 root Lazy / scope Lazy / 32 基线，Some(Default::default())
+  明确选择库基线，不等同 None。create_scope(None) 使用 root 保存的 scope_initialization；
+  create_scope(Some(ServiceScopeOptions { initialization })) 仅覆盖本次 scope，
+  ServiceScopeOptions::default 明确选择 Lazy。所有 scope 仍共享 root 构造上限。
+  Cargo 的自定义顶层节警告不等于 Nestrs 未读取配置。这里覆盖的是默认值；服务声明
+  上的显式初始化策略仍优先。
 * 服务结构体 / 工厂支持 `#[lazy]`、`#[lazy()]`、`#[lazy(true)]` 和 `#[lazy(false)]`。
-  未标记继承全局默认；true 不选作自主预热根，false 在全局 Lazy 下也预热 Singleton。
-  scope 创建仍不构造；显式 warm_up 默认预热 Scoped，但跳过 true，包含 false。
+  未标记继承所属 owner 默认；true 不选作自主初始化入口，false 在 Lazy 下也初始化。
+  build 选择 Singleton，create_scope 选择 Scoped；两者都等待选中服务成功后交付。
   Transient 不作为预热根。普通依赖仍可提前构造 lazy 目标，服务级标记不改字段包装。
   属性支持 injectable/factory 前后及 primary 组合；重复或非布尔参数拒绝。
   策略沿泛型蓝图与上游 metadata 进入最终计划，不改变完整图验证或取消/cleanup 语义。
@@ -240,13 +249,18 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 
 * 每 root 一个中央 Tokio 协调器，所有 scope/查询共享默认 32 个构造名额。
   依赖满足立即推进，没有整层屏障；worker 不递归 resolve。
-* Lazy 默认；Eager 按服务策略预热 Singleton 及必要依赖，scope.warm_up 按策略预热 Scoped。
-  Singleton 始终在 root 上下文构造；Transient 按每个消费槽位独立构造。
+* root 与 scope 默认均为 Lazy；各自 Eager 时分别选择 Singleton / Scoped，服务级
+  显式策略优先。初始化仅属于创建流程，Runtime::start / Runtime::create_scope
+  复用私有 initialize_owner；不提供对已交付 owner 的独立初始化操作。Singleton
+  始终在 root 上下文构造；Transient 按每个消费槽位独立构造。
+* root / scope 初始化失败先等待未交付 owner 关闭，分别返回 BuildError::Initialization
+  或 ScopeBuildError，均保留 ResolveError 与可选 DisposeError。取消创建 future
+  由未交付 owner Drop 发起关闭；已接受任务继续排空清理，不承诺取消者等待关闭完成。
 * Injection 和 ErasedServiceRef 持有强 lease；稳定实例地址、真实 factory frame
   和独立于 Tokio 的迭代 ReleaseDomain 维护内存安全。
 * Singleton/Scoped 失败缓存至 owner 关闭，Transient 失败只属于该 occurrence。
   factory Result 要求 E: Debug；构造 panic 进入 ResolveError。
-* 取消查询仅取消等待，接受的初始化继续。普通查询/预热的 QueryId 订阅及时退订，
+* 取消查询仅取消等待，接受的初始化继续。普通查询/创建初始化的 QueryId 订阅及时退订，
   提前失败的消费者按输入槽位注销对子任务的反向订阅；Lazy 保留可接续的 watch 接收端。
   关闭先排空接受的任务，再按 owner 的消费者先于依赖约束逐个完成 cleanup/释放；含延迟边时用冻结 DAG 重排 journal，
   可同时清理的实例优先逆发布时间，无延迟边保留原逆发布顺序。每 owner 至多一个

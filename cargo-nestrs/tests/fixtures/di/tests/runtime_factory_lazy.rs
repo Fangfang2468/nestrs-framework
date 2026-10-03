@@ -131,7 +131,7 @@ fn routes(
 async fn sync_async_and_explicit_future_factories_move_lazy_tokens_out_of_frames() {
     let _test = TEST_LOCK.lock().await;
     TARGETS.store(0, Ordering::SeqCst);
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let sync = provider
         .get_required_service::<SyncConsumer>()
         .await
@@ -216,15 +216,15 @@ async fn delayed_factory_parameters_keep_scope_and_per_slot_transient_identity()
     let _test = TEST_LOCK.lock().await;
     SCOPED.store(0, Ordering::SeqCst);
     TRANSIENT.store(0, Ordering::SeqCst);
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert!(
         provider
             .get_required_service::<RequiresScope>()
             .await
             .is_err()
     );
-    let left_scope = provider.create_scope();
-    let right_scope = provider.create_scope();
+    let left_scope = provider.create_scope(None).await.unwrap();
+    let right_scope = provider.create_scope(None).await.unwrap();
     let left = left_scope
         .service_provider()
         .get_required_service::<ScopedConsumer>()
@@ -275,10 +275,10 @@ async fn construction_probe(#[lazy] target: Occurrence) -> ConstructionProbe {
 #[tokio::test]
 async fn construction_phase_guard_does_not_poison_the_owned_lazy_parameter() {
     let _test = TEST_LOCK.lock().await;
-    let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
+    let provider = ServiceProvider::build(Some(ServiceProviderOptions {
         max_concurrent_activations: NonZeroUsize::new(1).unwrap(),
         ..Default::default()
-    })
+    }))
     .await
     .unwrap();
     let probe = tokio::time::timeout(
@@ -311,7 +311,7 @@ fn broken_consumer(#[lazy] target: Broken) -> BrokenConsumer {
 async fn lazy_parameter_failure_is_cached_per_token_not_per_transient_provider() {
     let _test = TEST_LOCK.lock().await;
     FAILED.store(0, Ordering::SeqCst);
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let consumer = provider
         .get_required_service::<BrokenConsumer>()
         .await
@@ -376,8 +376,8 @@ async fn cancelled_lazy_wait_and_disposal_drain_work_and_keep_escaped_tokens_saf
     let _test = TEST_LOCK.lock().await;
     ORDER.lock().unwrap().clear();
     DROPS.store(0, Ordering::SeqCst);
-    let provider = ServiceProvider::build().await.unwrap();
-    let scope = provider.create_scope();
+    let provider = ServiceProvider::build(None).await.unwrap();
+    let scope = provider.create_scope(None).await.unwrap();
     let consumer = scope
         .service_provider()
         .get_required_service::<ClosingConsumer>()
@@ -418,8 +418,8 @@ async fn cancelled_lazy_wait_and_disposal_drain_work_and_keep_escaped_tokens_saf
     drop(escaped);
     assert_eq!(DROPS.load(Ordering::SeqCst), 1);
 
-    let unused = ServiceProvider::build().await.unwrap();
-    let scope = unused.create_scope();
+    let unused = ServiceProvider::build(None).await.unwrap();
+    let scope = unused.create_scope(None).await.unwrap();
     scope
         .service_provider()
         .get_required_service::<ClosingConsumer>()

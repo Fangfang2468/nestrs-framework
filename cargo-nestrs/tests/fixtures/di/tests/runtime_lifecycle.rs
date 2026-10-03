@@ -122,11 +122,11 @@ struct KeyedCache<T> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn static_graph_full_lifecycle_and_frozen_routes() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert_eq!(DATABASES.load(Ordering::SeqCst), 0);
     assert_eq!(REQUESTS.load(Ordering::SeqCst), 0);
-    let scope1 = provider.create_scope();
-    let scope2 = provider.create_scope();
+    let scope1 = provider.create_scope(None).await.unwrap();
+    let scope2 = provider.create_scope(None).await.unwrap();
     assert_eq!(DATABASES.load(Ordering::SeqCst), 0);
     let (left, right) = tokio::join!(
         scope1.service_provider().get_required_service::<Database>(),
@@ -218,26 +218,36 @@ async fn static_graph_full_lifecycle_and_frozen_routes() {
         .get_required_keyed_service::<KeyedCache<User>>(ServiceKey::Named("named".into()))
         .await
         .unwrap();
-    scope1.warm_up().await.unwrap();
     assert_eq!(REQUESTS.load(Ordering::SeqCst), 2);
     scope1.dispose_async().await.unwrap();
     scope2.dispose_async().await.unwrap();
     provider.dispose_async().await.unwrap();
     assert_eq!(CLEANUPS.load(Ordering::SeqCst), 1);
 
-    let eager = ServiceProvider::build_with_options(ServiceProviderOptions {
+    let eager = ServiceProvider::build(Some(ServiceProviderOptions {
         initialization: InitializationMode::Eager,
+        scope_initialization: InitializationMode::Eager,
         ..Default::default()
-    })
+    }))
     .await
     .unwrap();
     assert_eq!(DATABASES.load(Ordering::SeqCst), 2);
     assert_eq!(REQUESTS.load(Ordering::SeqCst), 2);
     eager.get_required_service::<App>().await.unwrap();
     assert_eq!(DATABASES.load(Ordering::SeqCst), 2);
-    let scope = eager.create_scope();
-    scope.warm_up().await.unwrap();
+    let scope = eager.create_scope(None).await.unwrap();
     assert_eq!(REQUESTS.load(Ordering::SeqCst), 3);
+    let request = scope
+        .service_provider()
+        .get_required_service::<Request>()
+        .await
+        .unwrap();
+    assert_eq!(request.db, 1);
+    assert_eq!(
+        REQUESTS.load(Ordering::SeqCst),
+        3,
+        "查询复用创建 scope 时准备的实例"
+    );
     scope.dispose_async().await.unwrap();
     eager.dispose_async().await.unwrap();
     assert_eq!(CLEANUPS.load(Ordering::SeqCst), 2);

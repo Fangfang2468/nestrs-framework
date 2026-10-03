@@ -86,7 +86,7 @@ fn expects_immediate<T: ?Sized>(_: &Injection<T>) {}
 
 #[tokio::test(flavor = "current_thread")]
 async fn conditional_fields_and_unsized_aliases_preserve_lazy_input_semantics() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let configured = provider
         .get_required_service::<ConfiguredFields>()
         .await

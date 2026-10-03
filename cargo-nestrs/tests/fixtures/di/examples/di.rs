@@ -41,13 +41,13 @@ struct RequestHandler {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
+    let provider = ServiceProvider::build(Some(ServiceProviderOptions {
         initialization: InitializationMode::Eager,
+        scope_initialization: InitializationMode::Eager,
         max_concurrent_activations: NonZeroUsize::new(8).unwrap(),
-    })
+    }))
     .await?;
-    let scope = provider.create_scope();
-    scope.warm_up().await?;
+    let scope = provider.create_scope(None).await?;
     let handler = scope
         .service_provider()
         .get_required_service::<RequestHandler>()

@@ -209,7 +209,7 @@ struct Checkout {
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert_eq!(CONNECTIONS.load(Ordering::SeqCst), 0);
     warehouse::assert_identity(&provider).await;
 
@@ -254,8 +254,8 @@ async fn main() {
     );
     assert!(provider.get_service::<dyn SessionPort>().await.is_err());
 
-    let left = provider.create_scope();
-    let right = provider.create_scope();
+    let left = provider.create_scope(None).await.unwrap();
+    let right = provider.create_scope(None).await.unwrap();
     let left_session = left
         .service_provider()
         .get_required_service::<dyn SessionPort>()

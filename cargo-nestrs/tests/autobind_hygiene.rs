@@ -152,7 +152,7 @@ mod statics {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let root = ServiceProvider::build().await.unwrap();
+    let root = ServiceProvider::build(None).await.unwrap();
     constants::verify(&root).await;
     statics::verify(&root).await;
     root.dispose_async().await.unwrap();

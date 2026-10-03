@@ -11,7 +11,7 @@ tests/
 │   ├── activation/             # 稳定地址、注入令牌、强 lease、迭代释放
 │   │   └── construction/       # 完整输入验证、直接消费、类型化投影、工厂借用
 │   ├── graph/                  # 生产计划装配、冻结元数据与只读快照
-│   ├── runtime/                # 协调器、预热、订阅、缓存、并发、失败传播与关闭
+│   ├── runtime/                # 协调器、创建初始化、订阅、缓存、并发、失败传播与关闭
 │   ├── contracts.rs            # 真实类型身份与构造输入的安全契约
 │   ├── error.rs                # 共享失败记录、深路径显示与释放
 │   ├── panic_payload.rs        # panic 载荷回收、原始载荷传播与有界二次失败处理
@@ -48,7 +48,7 @@ cargo test -p nestrs-core --lib -- --list
 | 编译计划槽位、真实类型和目标端装配 | `unit/graph/plan.rs` |
 | 共享计划不共享 root 实例，服务级 lazy 只控制预热根 | `unit/runtime/initialization.rs` |
 | 共享缓存、全 root 构造上限、依赖就绪推进和深链激活 | `unit/runtime/coordinator.rs` |
-| 普通查询与预热取消、完成和退订竞争 | `unit/runtime/requests.rs`、`subscriptions.rs` |
+| scope 登记确认、创建与查询取消、完成和退订竞争 | `unit/runtime/requests.rs`、`subscriptions.rs` |
 | 延迟槽位取消接续、owner 关闭、runtime 退出、深链释放 | `unit/runtime/lazy.rs`、`lazy_delivery.rs` |
 | 稳定实例、发布后取址、令牌保活、输入回滚与真实 factory frame | `unit/activation/` 及其中的 `construction/` |
 | 输入形态和准确类型、失败后重试、缺席与消费状态 | `unit/activation/construction/inputs.rs` |
@@ -61,7 +61,7 @@ cargo test -p nestrs-core --lib -- --list
 | panic 载荷析构隔离、协调器存活、跨线程释放与回执归属 | `unit/panic_payload.rs`、`unit/runtime/panic_payloads.rs`、`unit/activation/instance.rs` |
 
 取消与失效订阅的回归分别位于 `unit/runtime/requests.rs` 和
-`unit/runtime/subscriptions.rs`。前者实际取消 `resolve` / `warm_up` future，验证
+`unit/runtime/subscriptions.rs`。前者实际取消 `resolve` / 创建期初始化 future，验证
 退订命令及完成竞争；后者在共享构造仍未结束时检查等待者和反向依赖记录，覆盖
 重复槽位、其他健康消费者及 12,000 层失败传播。不能仅凭最终关闭后任务表为空，
 判定慢初始化期间的失效订阅已经及时回收。
@@ -77,9 +77,9 @@ core 测试直接提供 `CompiledNode` / `ValidatedGraph`，或向真实 `PlanAs
 
 
 `compiler_plan_required.rs` 是有意保留的 Cargo 集成测试入口，链接不含 `cfg(test)`
-的真实 core 库。它证明普通 Cargo 构建的应用在两个 build 入口都会收到
+的真实 core 库。它证明普通 Cargo 构建的应用在 `build(None)` 与 `build(Some(...))` 两种配置路径都会收到
 `BuildError::CompilerPlanUnavailable`，且不会静默交付空容器。经 `cargo nestrs`
-编译时，同一组测试严格验证两个 build 入口都成功；没有 Tokio runtime 时必须返回
+编译时，同一组测试严格验证 build 的两种配置路径都成功；没有 Tokio runtime 时必须返回
 `BuildError::RuntimeUnavailable`。测试用 CLI 提供的编译期 `NESTRS_TOOLCHAIN_ID`
 区分这两种预期，不依赖只标记 core 本体的 `nestrs_compiler` cfg，也不跳过断言。
 

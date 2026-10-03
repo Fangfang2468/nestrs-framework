@@ -44,7 +44,7 @@ impl Example {
     /// use nestrs_macro_rustdoc::semantics::Example;
     /// fn main() {
     ///     tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
-    ///         let provider = ServiceProvider::build().await.unwrap();
+    ///         let provider = ServiceProvider::build(None).await.unwrap();
     ///         let example = provider.get_required_service::<Example>().await.unwrap();
     ///         assert_eq!(example.configured(&provider).await.unwrap(), 5432);
     ///         provider.dispose_async().await.unwrap();
@@ -69,7 +69,7 @@ impl Inspect for Example {
     /// use nestrs_macro_rustdoc::semantics::Inspect;
     /// fn main() {
     ///     tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
-    ///         let provider = ServiceProvider::build().await.unwrap();
+    ///         let provider = ServiceProvider::build(None).await.unwrap();
     ///         let example = provider.get_required_service::<dyn Inspect>().await.unwrap();
     ///         assert_eq!(example.inspect(), 5432);
     ///         provider.dispose_async().await.unwrap();

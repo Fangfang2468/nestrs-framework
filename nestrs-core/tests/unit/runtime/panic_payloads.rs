@@ -63,7 +63,9 @@ async fn constructor_payload_drop_panic_does_not_stop_unrelated_queries_or_close
             vec![],
         ),
     ]);
-    let (runtime, owner) = Runtime::start(graph, 1);
+    let (runtime, owner) = Runtime::start(graph, 1, crate::InitializationMode::Lazy)
+        .await
+        .unwrap();
     let failure = tokio::time::timeout(TIMEOUT, runtime.resolve(&owner, 0))
         .await
         .expect("构造失败必须完成查询")

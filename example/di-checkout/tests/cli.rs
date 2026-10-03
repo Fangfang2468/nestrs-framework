@@ -171,12 +171,13 @@ fn business_rejection_is_audited_rolls_back_stock_and_exits_unsuccessfully() {
 }
 
 #[test]
-fn eager_scope_warmup_and_serial_activation_preserve_sample_results() {
+fn eager_scope_creation_and_serial_activation_preserve_sample_results() {
     let output = command(env!("CARGO_BIN_EXE_checkout"))
         .args([
             "--eager",
             "sample",
-            "--warm-up-scopes",
+            "--scope-initialization",
+            "eager",
             "--max-concurrency",
             "1",
         ])
@@ -186,7 +187,7 @@ fn eager_scope_warmup_and_serial_activation_preserve_sample_results() {
     assert!(output.status.success(), "{diagnostic}");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("Eager；构造并发上限 1；scope 预热 true"),
+        stdout.contains("Eager；构造并发上限 1；scope 初始化 Eager"),
         "{diagnostic}"
     );
     assert!(
@@ -200,6 +201,7 @@ fn invalid_arguments_fail_before_building_the_container() {
     for args in [
         vec!["place-order"],
         vec!["sample", "--max-concurrency", "0"],
+        vec!["sample", "--scope-initialization", "invalid"],
         vec!["place-order", "--customer", "Alice", "--payment", "cash"],
     ] {
         let output = command(env!("CARGO_BIN_EXE_checkout"))

@@ -48,7 +48,7 @@ struct Consumer {
 
 #[tokio::main]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let concrete = provider.get_required_service::<Reader>().await.unwrap();
     let interface = provider
         .get_required_service::<dyn for<'a> TextPort<&'a str>>()

@@ -121,7 +121,7 @@ async fn fields_defer_the_complete_target_closure_and_preserve_routes() {
     let _test = TEST_LOCK.lock().await;
     REPORT_BACKENDS.store(0, Ordering::SeqCst);
     REPORTS.store(0, Ordering::SeqCst);
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let orders = provider
         .get_required_service::<OrderService>()
         .await
@@ -224,15 +224,15 @@ async fn lazy_fields_preserve_scope_and_transient_occurrence_identity() {
     let _test = TEST_LOCK.lock().await;
     SCOPED_TARGETS.store(0, Ordering::SeqCst);
     TRANSIENT_TARGETS.store(0, Ordering::SeqCst);
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert!(
         provider
             .get_required_service::<DeferredScopeRequirement>()
             .await
             .is_err()
     );
-    let first_scope = provider.create_scope();
-    let second_scope = provider.create_scope();
+    let first_scope = provider.create_scope(None).await.unwrap();
+    let second_scope = provider.create_scope(None).await.unwrap();
     let first = first_scope
         .service_provider()
         .get_required_service::<ScopedConsumer>()
@@ -331,7 +331,7 @@ async fn cancelled_waiters_do_not_duplicate_the_fixed_lazy_occurrence() {
     DELAY_CONSTRUCTIONS.store(0, Ordering::SeqCst);
     FAILED_CONSTRUCTIONS.store(0, Ordering::SeqCst);
     PANICKING_CONSTRUCTIONS.store(0, Ordering::SeqCst);
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let consumer = provider
         .get_required_service::<DelayedConsumer>()
         .await
@@ -446,7 +446,7 @@ async fn late_dependencies_cleanup_after_consumers_and_escaped_leases_remain_saf
     let _test = TEST_LOCK.lock().await;
     CLEANUP_ORDER.lock().unwrap().clear();
     LATE_DROPS.store(0, Ordering::SeqCst);
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let consumer = provider
         .get_required_service::<LateConsumer>()
         .await
@@ -467,7 +467,7 @@ async fn late_dependencies_cleanup_after_consumers_and_escaped_leases_remain_saf
     assert_eq!(LATE_DROPS.load(Ordering::SeqCst), 1);
 
     // 从未开始获取的句柄不能在 owner 已关闭后新建实例。
-    let unused = ServiceProvider::build().await.unwrap();
+    let unused = ServiceProvider::build(None).await.unwrap();
     unused.get_required_service::<LateConsumer>().await.unwrap();
     unused.dispose_async().await.unwrap();
     let escaped_unused = ESCAPED.lock().unwrap().take().unwrap();
@@ -475,7 +475,7 @@ async fn late_dependencies_cleanup_after_consumers_and_escaped_leases_remain_saf
     assert_eq!(LATE_DROPS.load(Ordering::SeqCst), 1);
 
     CLEANUP_ORDER.lock().unwrap().clear();
-    let panics = ServiceProvider::build().await.unwrap();
+    let panics = ServiceProvider::build(None).await.unwrap();
     panics
         .get_required_service::<BadCleanupConsumer>()
         .await
@@ -514,10 +514,10 @@ async fn construction_probe(guard: ConstructionGuard) -> ConstructionProbe {
 #[tokio::test]
 async fn unresolved_lazy_access_during_construction_fails_instead_of_deadlocking() {
     let _test = TEST_LOCK.lock().await;
-    let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
+    let provider = ServiceProvider::build(Some(ServiceProviderOptions {
         max_concurrent_activations: NonZeroUsize::new(1).unwrap(),
         ..Default::default()
-    })
+    }))
     .await
     .unwrap();
     let probe = tokio::time::timeout(
@@ -567,10 +567,10 @@ async fn eager_selection_is_independent_of_a_consumers_lazy_field() {
     let _test = TEST_LOCK.lock().await;
     EAGER_TARGETS.store(0, Ordering::SeqCst);
     EAGER_DEFERRED.store(0, Ordering::SeqCst);
-    let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
+    let provider = ServiceProvider::build(Some(ServiceProviderOptions {
         initialization: InitializationMode::Eager,
         ..Default::default()
-    })
+    }))
     .await
     .unwrap();
     assert_eq!(EAGER_TARGETS.load(Ordering::SeqCst), 1);
@@ -630,10 +630,14 @@ struct ClosingConsumer {
 #[tokio::test]
 async fn accepted_lazy_work_drains_after_both_query_and_disposal_are_cancelled() {
     let _test = TEST_LOCK.lock().await;
-    let provider = ServiceProvider::build().await.unwrap();
-    let scope = provider.create_scope();
-    // scope 预热会创建 Scoped 消费者，延迟的 Transient 仍保持未构造。
-    scope.warm_up().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
+    // Eager 创建 scope 会准备 Scoped 消费者，延迟的 Transient 仍保持未构造。
+    let scope = provider
+        .create_scope(Some(nestrs_core::ServiceScopeOptions {
+            initialization: InitializationMode::Eager,
+        }))
+        .await
+        .unwrap();
     assert_eq!(CLOSING_CONSTRUCTIONS.load(Ordering::SeqCst), 0);
     let consumer = scope
         .service_provider()

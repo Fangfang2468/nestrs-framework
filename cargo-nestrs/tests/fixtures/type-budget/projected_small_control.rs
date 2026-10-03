@@ -34,7 +34,7 @@ fn request<T: Family>(provider: &ServiceProvider) -> Pin<Box<dyn Future<Output =
 
 #[tokio::main]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert_eq!(request::<Wide>(&provider).await, 37);
     provider.dispose_async().await.unwrap();
 }

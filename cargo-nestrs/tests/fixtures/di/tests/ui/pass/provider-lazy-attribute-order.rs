@@ -93,7 +93,7 @@ fn product_5() -> Product5 {
 }
 #[tokio::main]
 async fn main() {
-    let provider = nestrs_core::ServiceProvider::build().await.unwrap();
+    let provider = nestrs_core::ServiceProvider::build(None).await.unwrap();
     assert_eq!(CREATED.load(Ordering::SeqCst), 12);
     provider.dispose_async().await.unwrap();
 }

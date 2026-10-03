@@ -20,18 +20,21 @@ fn absent_or_empty_config_uses_lazy_and_32() {
 #[test]
 fn both_initialization_modes_and_limits_are_supported() {
     for (name, eager) in [("lazy", false), ("eager", true)] {
-        for limit in [1, 32, 128] {
-            let config = parse_di(&format!(
-                "initialization = '{name}'\nmax-concurrent-activations = {limit}"
-            ))
-            .unwrap();
-            assert_eq!(
-                config,
-                DiConfig {
-                    eager,
-                    max_concurrent_activations: limit,
-                }
-            );
+        for (scope_name, scope_eager) in [("lazy", false), ("eager", true)] {
+            for limit in [1, 32, 128] {
+                let config = parse_di(&format!(
+                    "initialization = '{name}'\nscope-initialization = '{scope_name}'\nmax-concurrent-activations = {limit}"
+                ))
+                .unwrap();
+                assert_eq!(
+                    config,
+                    DiConfig {
+                        eager,
+                        scope_eager,
+                        max_concurrent_activations: limit,
+                    }
+                );
+            }
         }
     }
 }
@@ -42,6 +45,13 @@ fn individual_fields_keep_other_defaults() {
         parse_di("initialization = 'eager'").unwrap(),
         DiConfig {
             eager: true,
+            ..DiConfig::default()
+        }
+    );
+    assert_eq!(
+        parse_di("scope-initialization = 'eager'").unwrap(),
+        DiConfig {
+            scope_eager: true,
             ..DiConfig::default()
         }
     );
@@ -59,11 +69,13 @@ fn workspace_and_dependency_config_are_not_inherited() {
     let workspace = "\
 [workspace.nestrs-cli]
 initialization = 'eager'
+scope-initialization = 'eager'
 max-concurrent-activations = 5
 [dependencies.library]
 path = '../library'
 [dependencies.library.nestrs-cli]
 initialization = 'eager'
+scope-initialization = 'eager'
 ";
     assert_eq!(parse_manifest(workspace).unwrap(), DiConfig::default());
     assert_eq!(
@@ -83,6 +95,7 @@ fn unknown_cli_config_keys_are_rejected() {
     for key in [
         "max_concurrent_activations",
         "initialisation",
+        "scope_initialization",
         "future-option",
     ] {
         let error = parse_di(&format!("{key} = 10")).unwrap_err();
@@ -93,10 +106,12 @@ fn unknown_cli_config_keys_are_rejected() {
 
 #[test]
 fn initialization_requires_exact_string_enum() {
-    for value in ["'Lazy'", "'EAGER'", "'auto'", "''", "true", "0", "[]", "{}"] {
-        let error = parse_di(&format!("initialization = {value}")).unwrap_err();
-        assert!(error.contains("nestrs-cli.initialization"));
-        assert!(error.contains("\"lazy\" 或 \"eager\""));
+    for key in ["initialization", "scope-initialization"] {
+        for value in ["'Lazy'", "'EAGER'", "'auto'", "''", "true", "0", "[]", "{}"] {
+            let error = parse_di(&format!("{key} = {value}")).unwrap_err();
+            assert!(error.contains(&format!("nestrs-cli.{key}")));
+            assert!(error.contains("\"lazy\" 或 \"eager\""));
+        }
     }
 }
 

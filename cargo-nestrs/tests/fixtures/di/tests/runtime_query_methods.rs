@@ -92,7 +92,7 @@ async fn query_methods_collect_closed_roots_and_preserve_query_semantics() {
     let _ = never_executed;
     let provider_evaluations = AtomicUsize::new(0);
     let key_evaluations = AtomicUsize::new(0);
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert_eq!(REPOSITORIES.load(Ordering::SeqCst), 0);
     assert_eq!(provider_evaluations.load(Ordering::SeqCst), 0);
     assert_eq!(key_evaluations.load(Ordering::SeqCst), 0);
@@ -178,7 +178,7 @@ async fn query_methods_collect_closed_roots_and_preserve_query_semantics() {
             .contains("未注册")
     );
 
-    let scope = provider.create_scope();
+    let scope = provider.create_scope(None).await.unwrap();
     let scoped = scope
         .service_provider()
         .get_required_service::<Scoped<User>>()
@@ -199,10 +199,10 @@ async fn query_methods_collect_closed_roots_and_preserve_query_semantics() {
     scope.dispose_async().await.unwrap();
     provider.dispose_async().await.unwrap();
 
-    let eager = ServiceProvider::build_with_options(ServiceProviderOptions {
+    let eager = ServiceProvider::build(Some(ServiceProviderOptions {
         initialization: InitializationMode::Eager,
         ..Default::default()
-    })
+    }))
     .await
     .unwrap();
     // 编译器收集三个 Repository 闭合根，包括未调用函数中的查询。

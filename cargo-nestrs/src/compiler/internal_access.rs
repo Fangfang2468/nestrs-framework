@@ -251,10 +251,12 @@ fn generated_anchor(tcx: TyCtxt<'_>, definition: DefId) -> bool {
         && !signature.safety().is_safe()
         && !signature.c_variadic()
         && signature.output() == tcx.types.unit
-        && matches!(signature.inputs(), [pointer, eager, concurrency]
+        && matches!(signature.inputs(), [pointer, eager, scope_eager, concurrency]
             if matches!(pointer.kind(), ty::RawPtr(element, mutability)
                 if *element == tcx.types.unit && mutability.is_mut())
-                && *eager == tcx.types.bool && *concurrency == tcx.types.usize)
+                && *eager == tcx.types.bool
+                && *scope_eager == tcx.types.bool
+                && *concurrency == tcx.types.usize)
 }
 
 /// 按定义所属 crate 检查其是否来自当前 runtime。

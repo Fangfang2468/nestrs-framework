@@ -27,10 +27,10 @@ mod runtime;
 #[allow(dead_code)]
 mod service;
 
-pub use error::{BuildError, DisposeError, ResolveError};
+pub use error::{BuildError, DisposeError, ResolveError, ScopeBuildError};
 pub use facade::{ServiceProvider, ServiceProviderRef, ServiceScope};
 pub use lifetime::ServiceLifetime;
-pub use options::{InitializationMode, ServiceProviderOptions};
+pub use options::{InitializationMode, ServiceProviderOptions, ServiceScopeOptions};
 pub use service::ServiceKey;
 
 pub use activation::{Injection, LazyInjection};

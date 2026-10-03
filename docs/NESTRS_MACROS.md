@@ -123,8 +123,8 @@ impl OrderService {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = ServiceProvider::build().await?;
-    let scope = provider.create_scope();
+    let provider = ServiceProvider::build(None).await?;
+    let scope = provider.create_scope(None).await?;
 
     let orders = scope
         .service_provider()
@@ -174,18 +174,26 @@ cargo nestrs graph
 ```toml
 [nestrs-cli]
 initialization = "eager"
+scope-initialization = "lazy"
 max-concurrent-activations = 8
 ```
 
-`initialization` 接受 `"lazy"` 或 `"eager"`，未配置时为 Lazy；构造并发上限必须为
+`initialization` 控制 root，`scope-initialization` 控制随后创建的 scope；二者各自接受
+`"lazy"` 或 `"eager"`，缺省均为 Lazy，互不继承。构造并发上限必须为
 正整数，未配置时为 32，整个 root 及其所有 scope 共用此上限。配置由工具在编译时
 读取并写入当前 binary / test 的计划，运行时不读取 TOML，也不继承依赖库或 workspace
 的同名配置。这里使用顶层 `[nestrs-cli]`，不是 `[package.nestrs-cli]` 或 metadata 节；
 Cargo 可能提示未使用这个自定义节，Nestrs 仍会读取、校验它。
 
-`ServiceProvider::build()` 使用这些项目默认值。需要根据运行参数控制容器时，使用
-`ServiceProvider::build_with_options(ServiceProviderOptions { ... })`；显式选项完整覆盖
-项目默认值。`ServiceProviderOptions::default()` 自身仍是库的 Lazy / 32 基线。
+`ServiceProvider::build(None)` 使用这些项目默认值。需要根据运行参数控制容器时，使用
+`ServiceProvider::build(Some(ServiceProviderOptions { ... }))`；显式选项完整覆盖
+项目默认值。`ServiceProviderOptions::default()` 自身仍是库的 root Lazy / scope Lazy / 32 基线。
+`provider.create_scope(None).await?` 使用当前 root 的 `scope_initialization`；
+`create_scope(Some(ServiceScopeOptions { initialization: ... })).await?`
+只覆盖本次 scope。None 使用项目或容器默认；Some 完整显式覆盖，
+`Some(Default::default())` 明确选择库基线，不能当作 None。scope 创建也等待初始化
+完成并可能返回 `ScopeBuildError`；
+完整代码与失败清理见[core 初始化说明](../nestrs-core/README.md#6-生命周期与预热)。
 这些都是全局默认，服务声明上的 `#[lazy]` / `#[lazy(false)]` 策略仍优先，具体见
 [服务级预热策略](#34-用-lazy-控制某个服务是否自主预热)。
 
@@ -368,7 +376,7 @@ owner 开始关闭后，未初始化句柄拒绝新建目标。已成功取得�
 
 服务声明上的 `#[lazy]` 决定它是否成为预热根。例如项目默认 Eager，但报表客户端
 不需要在启动时连接远端，可以给工厂标注 `#[lazy]`；相反，即使项目默认 Lazy，
-启动必需的配置检查也可以用 `#[lazy(false)]` 要求在 `build().await` 返回前完成：
+启动必需的配置检查也可以用 `#[lazy(false)]` 要求在 `build(options).await` 返回前完成：
 
 ```rust
 use nestrs::{factory, injectable, lazy};
@@ -392,15 +400,17 @@ async fn report_client() -> ReportClient {
 `#[lazy()]` 在**服务声明**上与 `#[lazy]` 等价。一个声明最多写一个服务级 `lazy`，
 参数只能是单个布尔字面量，不能写字符串、表达式或 `lazy = true`。
 
-| 服务声明 | root 为 Lazy 时 | root 为 Eager 时 | 显式 `scope.warm_up()` |
-| --- | --- | --- | --- |
-| 不写 `lazy` | Singleton 按需构造 | Singleton 自主预热 | Scoped 自主预热 |
-| `#[lazy]` / `#[lazy(true)]` | 不作为自主预热根 | 不作为自主预热根 | 不作为自主预热根 |
-| `#[lazy(false)]` | Singleton 自主预热 | Singleton 自主预热 | Scoped 自主预热 |
+| 服务声明 | 所属 owner 为 Lazy 时 | 所属 owner 为 Eager 时 |
+| --- | --- | --- |
+| 不写 `lazy` | 按需构造 | 自主初始化 |
+| `#[lazy]` / `#[lazy(true)]` | 不作为自主初始化入口 | 不作为自主初始化入口 |
+| `#[lazy(false)]` | 自主初始化 | 自主初始化 |
 
-`create_scope()` 始终同步且不构造服务，包括标注 `#[lazy(false)]` 的 Scoped 服务。
-Transient 不作为预热根，任何标记都不改变“每次消费独立构造”的规则。
-`build_with_options` 覆盖 Cargo.toml 提供的**全局默认**，不会抹除服务上的显式策略。
+Singleton 使用 root 模式，在 `build(options).await` 返回前初始化；Scoped 使用本次 scope
+模式，在 `create_scope(options).await` 返回前初始化。
+即使 scope 默认 Lazy，`#[lazy(false)]` 的 Scoped 也会在创建时构造。root 为 Eager
+不改变 scope 的独立默认值。Transient 不作为初始化入口，任何标记都不改变“每次
+消费独立构造”的规则。公开的 `warm_up()` 已移除，预先初始化通过创建配置控制。
 
 这里的“按需”包含普通依赖：若一个自主预热的服务普通注入了 `ReportClient`，
 客户端仍会在该消费者构造前完成初始化。要让消费者先就绪、报表客户端留待业务分支，
@@ -408,9 +418,10 @@ Transient 不作为预热根，任何标记都不改变“每次消费独立构�
 服务级标记不生成代理，也不把普通 `Injection<T>` 改成 `LazyInjection<T>`。
 
 服务级延迟不绕过编译期完整图验证，未使用的服务仍检查缺失依赖、循环和生命周期冲突。
-启动时选中的服务构造失败返回 `BuildError::Initialization`，无论全局模式为 Lazy 还是
-Eager；已成功构造的实例会完成清理。查询时才发生的失败仍返回 `ResolveError`，原有
-缓存、取消等待和 cleanup 顺序不变。
+创建时选中的服务构造失败，root 返回 `BuildError::Initialization`，scope 返回
+`ScopeBuildError`，无论对应模式为 Lazy 还是 Eager；未交付 owner 已成功构造的实例会
+完成清理。查询时才发生的失败仍返回 `ResolveError`，原有缓存、取消等待和 cleanup
+顺序不变。
 
 ### 3.5 用 constructor 明确初始化业务状态
 
@@ -624,7 +635,7 @@ impl ReportExporter {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = ServiceProvider::build().await?;
+    let provider = ServiceProvider::build(None).await?;
     let exporter = provider.get_required_service::<ReportExporter>().await?;
     println!("{}", exporter.export().await?);
     provider.dispose_async().await?;
@@ -705,7 +716,7 @@ struct NotificationService {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = ServiceProvider::build().await?;
+    let provider = ServiceProvider::build(None).await?;
     let service = provider
         .get_required_service::<NotificationService>()
         .await?;
@@ -770,7 +781,7 @@ impl Notifier for SmsNotifier {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = ServiceProvider::build().await?;
+    let provider = ServiceProvider::build(None).await?;
     let notifier = provider.get_required_service::<dyn Notifier>().await?;
     assert_eq!(notifier.channel(), "mail");
     provider.dispose_async().await?;
@@ -838,8 +849,8 @@ assert!(orders.submit(1002).contains("1002"));
 最后一次使用服务后，再调用 `scope.dispose_async().await?` 和
 `provider.dispose_async().await?`。
 
-查询使用普通方法，不需要注册宏；`build`、`create_scope`、`service_provider`、
-`warm_up` 和 `dispose_async` 也都是普通方法。编译器识别这些查询方法的真实定义，
+查询使用普通方法，不需要注册宏；`build`、`create_scope`、
+`service_provider` 和 `dispose_async` 也都是普通方法。编译器识别这些查询方法的真实定义，
 运行时只选择冻结路由。
 
 ## 8. 泛型服务：从具体调用恢复闭合类型
@@ -862,7 +873,7 @@ struct Repository<T: Send + Sync + 'static> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = ServiceProvider::build().await?;
+    let provider = ServiceProvider::build(None).await?;
     let orders = provider
         .get_required_service::<Repository<Order>>()
         .await?;
@@ -1069,7 +1080,7 @@ use order_infrastructure as _;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = ServiceProvider::build().await?;
+    let provider = ServiceProvider::build(None).await?;
     let store = provider.get_required_service::<dyn OrderStore>().await?;
     assert_eq!(store.backend(), "postgres");
     provider.dispose_async().await?;
@@ -1117,15 +1128,18 @@ constructor 输入随上游 metadata 保留，而全局 `[nestrs-cli]` 默认值
 | --- | --- | --- |
 | `cargo nestrs check/build` | 宏、Rust 类型与借用；最终 binary / test 的全部注册依赖结构，包括缺失、重复、歧义、环和生命周期 | 修正类型约束，补齐 provider、key 或 primary，调整依赖关系 |
 | `cargo nestrs graph` | 执行选定入口的 Cargo check，从同一编译计划的 sidecar 生成 HTML | 根据编译诊断修正声明；不会运行目标程序 |
-| `ServiceProvider::build()` | 首次装配并共享已验证执行计划，建立独立容器状态；按声明策略与全局默认选择 Singleton 启动预热根 | 检查 Tokio 环境与初始化错误 |
-| 实际查询、启动预热或 scope 预热 | 运行工厂和创建实例，可能遇到外部资源故障 | 检查连接配置及初始化错误 |
+| `ServiceProvider::build(None)` | 首次装配并共享已验证执行计划，建立独立容器状态；按声明策略与全局默认选择 Singleton 启动预热根 | 检查 Tokio 环境与初始化错误 |
+| `provider.create_scope(None).await` | 按本次 scope 策略初始化 Scoped；失败时关闭未交付 scope 并返回 `ScopeBuildError` | 检查初始化与可能的清理错误 |
+| 实际查询、root / scope 创建时初始化 | 运行工厂和创建实例，可能遇到外部资源故障 | 检查连接配置及初始化错误 |
 
 图结构错误在最终入口编译时报告，Lazy 下未被使用的已注册服务也参与检查。单独
 编译 library 只贡献声明和查询摘要，由最终入口检查完整应用。工厂实际创建失败则
-返回初始化错误：查询失败表现为 `ResolveError`，启动预热失败表现为 `BuildError`，
-包括全局 Lazy 下显式 `#[lazy(false)]` 的预热任务。可选查询不会忽略这些错误。
+返回初始化错误：查询失败表现为 `ResolveError`，root 创建失败表现为
+`BuildError::Initialization`，scope 创建失败表现为 `ScopeBuildError`，后二者均保留
+初始化错误与可能的关闭错误。包括 Lazy 下显式 `#[lazy(false)]` 的初始化任务；
+可选查询不会忽略这些错误。
 
-`build()` 不重新收集服务声明或选择接口实现。首次装配仍调用工具生成的执行适配
+`build(None)` 不重新收集服务声明或选择接口实现。首次装配仍调用工具生成的执行适配
 回调，取得目标程序中的真实类型身份与构造、投影函数地址；这些回调不运行服务
 构造。后续 build 共享计划，但每个 root 的实例缓存与关闭状态独立。容器使用应用
 当前的 Tokio runtime；图验证成功也不能保证数据库等外部资源初始化成功。

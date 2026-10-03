@@ -19,7 +19,7 @@ struct Reader {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let text = provider
         .get_required_service::<dyn TextPort>()
         .await

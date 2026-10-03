@@ -55,10 +55,10 @@ async fn main() {
     assert_eq!(associated_consts::constructions(), 0);
     assert_eq!(upstream_consts::constructions(), 0);
     assert_eq!(forwarding_queries::constructions(), 0);
-    let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
+    let provider = ServiceProvider::build(Some(ServiceProviderOptions {
         initialization: InitializationMode::Eager,
         ..Default::default()
-    })
+    }))
     .await
     .unwrap();
     // 六个上游 static（含私有未调用项和数组）和五条不同的标准库转发路径。
@@ -227,7 +227,7 @@ async fn main() {
     let _ = query_library::associated_query::<Select>(&provider)
         .await
         .unwrap();
-    let scope = provider.create_scope();
+    let scope = provider.create_scope(None).await.unwrap();
     let same_user = scope
         .service_provider()
         .get_required_service::<Repository<User>>()

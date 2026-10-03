@@ -161,7 +161,9 @@ async fn lazy_edges_skip_activation_waits_but_order_cleanup_after_the_consumer()
         topological_order: vec![1, 0],
         routes: AHashMap::new(),
     });
-    let (runtime, owner) = super::super::Runtime::start(graph, 1);
+    let (runtime, owner) = super::super::Runtime::start(graph, 1, crate::InitializationMode::Lazy)
+        .await
+        .unwrap();
     let lease = runtime.resolve(&owner, 0).await.unwrap();
     assert_eq!(
         TARGET_BUILDS.load(Ordering::SeqCst),
@@ -489,7 +491,10 @@ fn ten_thousand_deferred_nodes_construct_close_and_release_on_small_stack() {
                     topological_order: (0..DEPTH).rev().collect(),
                     routes: AHashMap::new(),
                 });
-                let (container, owner) = super::super::Runtime::start(graph, 1);
+                let (container, owner) =
+                    super::super::Runtime::start(graph, 1, crate::InitializationMode::Lazy)
+                        .await
+                        .unwrap();
                 let lease = container.resolve(&owner, 0).await.unwrap();
                 // SAFETY: 当前 lease 保活准确类型的稳定实例，之后每一步由延迟字段的强 lease 保活。
                 let mut current = unsafe { lease.pointer::<Chain>().unwrap().as_ref() };
@@ -596,7 +601,7 @@ fn an_accepted_lazy_request_reports_runtime_exit_instead_of_waiting_forever() {
         .build()
         .unwrap();
     let (container, owner, lease) = runtime.block_on(async {
-        let (container, owner) = super::super::Runtime::start(graph, 1);
+        let (container, owner) = super::super::Runtime::start(graph, 1, crate::InitializationMode::Lazy).await.unwrap();
         let lease = container.resolve(&owner, 0).await.unwrap();
         // SAFETY: 外层 lease 保活准确的 Consumer；没有扩展借用，也没有移走服务值。
         let service = unsafe { lease.pointer::<Consumer>().unwrap().as_ref() };

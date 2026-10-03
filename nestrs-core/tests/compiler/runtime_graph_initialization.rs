@@ -40,7 +40,8 @@ async fn resource() -> Result<Resource, &'static str> {
 #[test]
 fn graph_snapshot_is_independent_of_runtime_and_external_initialization() {
     // Static diagnostics work before any Tokio runtime or container is created.
-    let graph = crate::graph::snapshot(&crate::graph::plan::CompiledApplication::load().graph).to_string();
+    let graph =
+        crate::graph::snapshot(&crate::graph::plan::CompiledApplication::load().graph).to_string();
     assert!(graph.contains("Resource"));
     assert_eq!(ATTEMPTS.load(Ordering::SeqCst), 0);
     assert_eq!(CONSTRUCTIONS.load(Ordering::SeqCst), 0);
@@ -52,14 +53,14 @@ fn graph_snapshot_is_independent_of_runtime_and_external_initialization() {
         .build()
         .unwrap();
     runtime.block_on(async {
-        let lazy = ServiceProvider::build().await.unwrap();
+        let lazy = ServiceProvider::build(None).await.unwrap();
         lazy.dispose_async().await.unwrap();
         assert_eq!(ATTEMPTS.load(Ordering::SeqCst), 0);
 
-        let eager = ServiceProvider::build_with_options(ServiceProviderOptions {
+        let eager = ServiceProvider::build(Some(ServiceProviderOptions {
             initialization: InitializationMode::Eager,
             ..Default::default()
-        })
+        }))
         .await
         .unwrap();
         assert_eq!(ATTEMPTS.load(Ordering::SeqCst), 1);
@@ -72,13 +73,14 @@ fn graph_snapshot_is_independent_of_runtime_and_external_initialization() {
         SHOULD_FAIL.store(true, Ordering::SeqCst);
         assert_eq!(
             graph,
-            crate::graph::snapshot(&crate::graph::plan::CompiledApplication::load().graph).to_string()
+            crate::graph::snapshot(&crate::graph::plan::CompiledApplication::load().graph)
+                .to_string()
         );
         assert_eq!(ATTEMPTS.load(Ordering::SeqCst), 1);
-        match ServiceProvider::build_with_options(ServiceProviderOptions {
+        match ServiceProvider::build(Some(ServiceProviderOptions {
             initialization: InitializationMode::Eager,
             ..Default::default()
-        })
+        }))
         .await
         {
             Err(BuildError::Initialization {
@@ -101,7 +103,8 @@ fn graph_snapshot_is_independent_of_runtime_and_external_initialization() {
         assert_eq!(DROPS.load(Ordering::SeqCst), 1);
         assert_eq!(
             graph,
-            crate::graph::snapshot(&crate::graph::plan::CompiledApplication::load().graph).to_string()
+            crate::graph::snapshot(&crate::graph::plan::CompiledApplication::load().graph)
+                .to_string()
         );
     });
 }

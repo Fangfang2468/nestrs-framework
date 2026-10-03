@@ -179,12 +179,14 @@ impl Coordinator {
     /// 在协调器内串行处理 owner 注册、查询、退订和关闭命令。
     fn handle_command(&mut self, command: Command) {
         match command {
-            Command::Register(data) => {
-                let mut state = OwnerState::new(data);
+            Command::Register { data, ready } => {
                 if self.owners[&ROOT].phase != OwnerPhase::Open {
-                    state.begin_close();
+                    data.complete_close(Ok(()));
+                    let _ = ready.send(Err(ResolveError::closed()));
+                } else {
+                    self.owners.insert(data.id, OwnerState::new(data));
+                    let _ = ready.send(Ok(()));
                 }
-                self.owners.insert(state.data.id, state);
             }
             Command::Resolve {
                 query,

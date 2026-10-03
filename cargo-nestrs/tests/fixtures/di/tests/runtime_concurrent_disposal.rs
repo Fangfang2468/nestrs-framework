@@ -52,9 +52,9 @@ impl Drop for Fast {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_scope_disposal_waits_for_its_own_destructors_and_preserves_dependency_order() {
-    let root = ServiceProvider::build().await.unwrap();
-    let first = root.create_scope();
-    let second = root.create_scope();
+    let root = ServiceProvider::build(None).await.unwrap();
+    let first = root.create_scope(None).await.unwrap();
+    let second = root.create_scope(None).await.unwrap();
     first
         .service_provider()
         .get_required_service::<Slow>()

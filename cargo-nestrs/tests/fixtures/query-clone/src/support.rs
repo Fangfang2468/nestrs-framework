@@ -50,10 +50,10 @@ impl<T: Send + Sync + 'static> Clone for Runner<'_, T> {
 }
 
 pub async fn build() -> ServiceProvider {
-    ServiceProvider::build_with_options(ServiceProviderOptions {
+    ServiceProvider::build(Some(ServiceProviderOptions {
         initialization: InitializationMode::Eager,
         ..Default::default()
-    })
+    }))
     .await
     .unwrap()
 }

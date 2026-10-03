@@ -34,7 +34,7 @@ struct Consumer {
 
 #[tokio::main]
 async fn main() {
-    let panic = tokio::spawn(ServiceProvider::build())
+    let panic = tokio::spawn(ServiceProvider::build(None))
         .await
         .err()
         .expect("two automatic candidates must fail graph validation");

@@ -9,10 +9,10 @@ struct Customer;
 async fn main() {
     for mode in [InitializationMode::Lazy, InitializationMode::Eager] {
         reset();
-        let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
+        let provider = ServiceProvider::build(Some(ServiceProviderOptions {
             initialization: mode,
             ..Default::default()
-        })
+        }))
         .await
         .unwrap();
         assert_eq!(counts(), (0, 1, 1), "上游策略必须覆盖最终入口的全局默认");

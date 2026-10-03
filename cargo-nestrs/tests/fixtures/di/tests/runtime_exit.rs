@@ -19,7 +19,7 @@ fn service_reference_outlives_the_tokio_runtime_until_its_owner_is_dropped() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap();
-    let provider = runtime.block_on(ServiceProvider::build()).unwrap();
+    let provider = runtime.block_on(ServiceProvider::build(None)).unwrap();
     let value = runtime
         .block_on(provider.get_required_service::<Value>())
         .unwrap();

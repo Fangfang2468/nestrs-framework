@@ -104,7 +104,7 @@ mod constant_collision {
 
 #[tokio::test]
 async fn generated_parameter_locals_preserve_hygiene_type_context_and_evaluation_order() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert!(EVENTS.lock().unwrap().is_empty());
     let automatic = provider.get_required_service::<Automatic>().await.unwrap();
     assert_eq!(automatic.first, 17);
@@ -296,7 +296,7 @@ mod factory_function_collision {
 
 #[tokio::test]
 async fn factory_input_tuples_preserve_caller_constants_and_function_names() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     factory_constant_collision::verify(&provider).await;
     factory_function_collision::verify(&provider).await;
     provider.dispose_async().await.unwrap();

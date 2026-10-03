@@ -20,17 +20,19 @@
 
 ## Cargo.toml 中的容器启动配置
 
-在应用 package 的 `Cargo.toml` 顶层加入以下配置，然后使用 `ServiceProvider::build().await`：
+在应用 package 的 `Cargo.toml` 顶层加入以下配置，然后使用 `ServiceProvider::build(None).await`：
 
 ```toml
 [nestrs-cli]
 initialization = "eager"
+scope-initialization = "lazy"
 max-concurrent-activations = 16
 ```
 
 | 配置键 | 取值 | 缺省值 |
 | --- | --- | --- |
 | `initialization` | 未显式覆盖服务策略时的默认行为：`"lazy"` 按需构造；`"eager"` 在 build 返回前预热 Singleton 及必要依赖 | `"lazy"` |
+| `scope-initialization` | 未显式覆盖服务策略时，`"lazy"` 按需构造；`"eager"` 在每次 create_scope 返回前初始化 Scoped 及必要依赖 | `"lazy"` |
 | `max-concurrent-activations` | 大于零且能由目标平台 `usize` 表示的整数；全 root / scope 共享的构造任务上限 | `32` |
 
 `[nestrs-cli]` 是 Nestrs 管理的自定义顶层配置节，不写成 `[package.nestrs-cli]` 或
@@ -47,16 +49,28 @@ workspace 或依赖库的设置。在依赖库中调用 core 的 build，仍按�
 也会使对应入口重新编译。运行产物不需要读取源码或 Cargo.toml，因此直接启动 binary
 与 `cargo nestrs run` 使用相同的设置；配置修改后必须重新构建。
 
-`ServiceProvider::build_with_options(options)` 保留并完整覆盖项目提供的全局默认配置。
-`ServiceProviderOptions::default()` 仍为 Lazy / 32，不隐式读取项目配置；因此
-`build_with_options(Default::default())` 表示显式选用库的基线。
+`ServiceProvider::build(Some(options))` 完整覆盖项目提供的默认配置；
+`ServiceProvider::build(None)` 使用入口项目固化的配置。
+`ServiceProviderOptions::default()` 仍为 root Lazy / scope Lazy / 32，不隐式读取项目配置；因此
+`build(Some(Default::default()))` 表示显式选用库的基线，不能与 `build(None)` 混同。
+
+root 和 scope 策略独立：只设置 `initialization = "eager"` 时，scope 默认仍为 Lazy。
+`provider.create_scope(None).await?` 采用当前 root 中的 scope 默认值；
+`create_scope(Some(ServiceScopeOptions { initialization: ... })).await?`
+只覆盖这一次 scope 的默认策略，不改变随后 scope 的配置或共享构造上限。
+`ServiceScopeOptions::default()` 为 Lazy；传入 `Some(Default::default())` 明确覆盖为
+Lazy，传入 `None` 则采用容器保存的 scope 默认，两者并不等价。
 
 这些设置只控制服务激活，不跳过全图校验，也不改变 scope 的隔离语义。
 服务声明上的 `#[lazy]` / `#[lazy(true)]` 不作为自主预热根；`#[lazy(false)]` 则使
-Singleton 即便在全局 Lazy 下也预热。声明策略优先于全局默认，`build_with_options`
-不会抹除它。普通注入依赖仍可提前构造 lazy 目标。完整规则见
+Singleton / Scoped 即便在所属 owner 为 Lazy 时也在创建前完成初始化。声明策略优先
+于本次默认值，向 `build` 或 `create_scope` 传入 Some 也不会抹除它。普通注入依赖仍可
+提前构造 lazy 目标。完整规则见
 [宏使用指南](NESTRS_MACROS.md#34-用-lazy-控制某个服务是否自主预热)。
-`create_scope()` 仍不构造服务，需要预热时显式调用 `scope.warm_up().await`。
+`create_scope` 与 build 都在选中服务初始化成功后才交付 owner；失败先等待关闭，
+分别返回 `ScopeBuildError` 与 `BuildError::Initialization`。公开的 `warm_up` 已移除，
+不再通过独立预热操作实现 scope 初始化。完整时序、失败与取消见
+[core 创建和初始化说明](../nestrs-core/README.md#6-生命周期与预热)。
 `cargo nestrs graph` 仍只分析图，即使配置为 Eager 也不执行 factory 或 cleanup。
 
 ## 工具链与命令
@@ -79,7 +93,7 @@ export PATH="$PWD/target/debug:$PATH"
 cargo nestrs doctor
 cargo nestrs init
 cargo nestrs check -p nestrs-di-example --all-targets
-cargo nestrs run -p nestrs-di-example -- sample --eager --warm-up-scopes
+cargo nestrs run -p nestrs-di-example -- sample --eager --scope-initialization eager
 cargo nestrs test -p nestrs-di-example
 cargo nestrs graph -p nestrs-di-example
 ```
@@ -95,7 +109,7 @@ $env:PATH = "$PWD\target\debug;$env:PATH"
 cargo nestrs doctor
 cargo nestrs init
 cargo nestrs check -p nestrs-di-example --all-targets
-cargo nestrs run -p nestrs-di-example -- sample --eager --warm-up-scopes
+cargo nestrs run -p nestrs-di-example -- sample --eager --scope-initialization eager
 cargo nestrs graph -p nestrs-di-example
 ```
 
@@ -123,7 +137,7 @@ CLI 默认查找同目录的 driver 与 bridge。`NESTRS_DRIVER`、`NESTRS_MACRO
 `NESTRS_RUSTC` 可指定路径，完整编译器身份仍须匹配。桥接必须来自匹配工具链，
 不能只拷贝 CLI 而遗漏它。普通 core/工具检查不需要开启 `compiler-driver` feature；
 应用则必须获得 CLI 的注入环境，普通 Cargo 不提供此环境。仅用普通 Cargo 编译
-core API 的应用，调用 build/build_with_options 时返回 `BuildError::CompilerPlanUnavailable`，
+core API 的应用，调用 build（无论传 None 或 Some）时返回 `BuildError::CompilerPlanUnavailable`，
 不会把缺失工具链计划解释成合法空图。
 
 Cargo 仍管理依赖、features、cfg、profile、target 和 build.rs。CLI 转发 Cargo
@@ -186,7 +200,8 @@ cargo nestrs init --all-targets --output target/editor/rust-project.json --vscod
 | `cargo nestrs check/build` | 注入声明宏，生成真实类型绑定，完成 Rust 类型与借用检查；最终 binary / test 同时编译并验证完整 DI 图 |
 | `cargo nestrs init` | 初始化或刷新现有项目的 Nestrs 开发环境，成功检查后生成 rust-analyzer 项目与设置 |
 | `cargo nestrs test` | 执行测试；文档示例经完整 driver 编译后由真实 rustdoc 运行 |
-| `ServiceProvider::build()` | 加载入口共享的不可变编译计划，创建独立运行时；按服务声明策略与全局默认选取 Singleton 预热根 |
+| `ServiceProvider::build(None)` | 加载入口共享的不可变编译计划，创建独立运行时；按服务声明策略与 root 默认选取 Singleton 初始化入口 |
+| `provider.create_scope(None)` | 异步创建独立 scope；按服务声明策略与 scope 默认选取 Scoped 初始化入口，成功后交付 |
 | `cargo nestrs graph` | 对选定 binary 执行 Cargo check，从编译器同源 sidecar 生成 HTML；`--bin` 限定单入口 |
 | 实际激活 | 执行 constructor/factory；外部资源初始化仍可能失败 |
 
@@ -217,7 +232,7 @@ Clippy；这不等于应用级 Clippy 已接入 Nestrs。旧 `ide` 命令已改�
 工具在源码所属 crate 生成合法的 typed adapter，并在最终 binary/test 汇总声明、
 查询和闭合泛型，冻结完整计划。项目生成内容统称 `nestrs-reflect`，不是需要新增的
 Cargo package。私有执行入口为 `__nestrs_reflect_v2`；工具和 core 要配套重编译，
-引用 core 的空图也在 check 阶段验证 `plan_set_options_v2`，不接受旧协议。
+引用 core 的空图也在 check 阶段验证 `plan_set_options_v3`，不接受旧协议。
 
 | 产物 | 用途 |
 | --- | --- |

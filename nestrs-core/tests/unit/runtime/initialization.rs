@@ -76,22 +76,10 @@ async fn shared_plan_allows_each_root_default_without_merging_instances() {
         node(1, ServiceLifetime::Singleton, Some(true)),
         node(2, ServiceLifetime::Singleton, Some(false)),
     ]);
-    let (lazy_runtime, lazy_root) = Runtime::start(graph.clone(), 2);
-    let (eager_runtime, eager_root) = Runtime::start(graph.clone(), 2);
-    lazy_runtime
-        .warm_up(
-            &lazy_root,
-            ServiceLifetime::Singleton,
-            InitializationMode::Lazy,
-        )
+    let (lazy_runtime, lazy_root) = Runtime::start(graph.clone(), 2, InitializationMode::Lazy)
         .await
         .unwrap();
-    eager_runtime
-        .warm_up(
-            &eager_root,
-            ServiceLifetime::Singleton,
-            InitializationMode::Eager,
-        )
+    let (eager_runtime, eager_root) = Runtime::start(graph.clone(), 2, InitializationMode::Eager)
         .await
         .unwrap();
     assert_eq!(published(&lazy_root), [2]);
@@ -110,43 +98,34 @@ async fn shared_plan_allows_each_root_default_without_merging_instances() {
 }
 
 #[tokio::test]
-async fn scopes_honor_declaration_overrides_and_transients_are_never_preheat_roots() {
+async fn scopes_honor_declaration_overrides_and_transients_are_never_initialization_roots() {
     let graph = graph(vec![
         node(0, ServiceLifetime::Scoped, None),
         node(1, ServiceLifetime::Scoped, Some(true)),
         node(2, ServiceLifetime::Scoped, Some(false)),
         node(3, ServiceLifetime::Transient, Some(false)),
     ]);
-    let (runtime, root) = Runtime::start(graph, 3);
-    let first = runtime.create_scope();
-    let second = runtime.create_scope();
-    assert!(published(&first).is_empty());
-    assert!(published(&second).is_empty());
-    runtime
-        .warm_up(&first, ServiceLifetime::Scoped, InitializationMode::Eager)
+    let (runtime, root) = Runtime::start(graph, 3, crate::InitializationMode::Lazy)
+        .await
+        .unwrap();
+    let first = runtime
+        .create_scope(InitializationMode::Eager)
+        .await
+        .unwrap();
+    let second = runtime
+        .create_scope(InitializationMode::Lazy)
         .await
         .unwrap();
     assert_eq!(published(&first), [0, 2]);
-    assert!(published(&second).is_empty());
+    assert_eq!(published(&second), [2]);
     assert!(published(&root).is_empty());
-    // 重复预热必须复用该 scope 的缓存，而不产生额外实例。
-    runtime
-        .warm_up(&first, ServiceLifetime::Scoped, InitializationMode::Eager)
-        .await
-        .unwrap();
-    assert_eq!(published(&first), [0, 2]);
+    // 已初始化的 Scoped 命中同一缓存，服务级 lazy 仍能由普通查询构造。
+    let eager_value = runtime.resolve(&first, 0).await.unwrap();
+    assert!(eager_value.ptr_eq(&runtime.resolve(&first, 0).await.unwrap()));
     let deferred_first = runtime.resolve(&first, 1).await.unwrap();
     let deferred_second = runtime.resolve(&second, 1).await.unwrap();
     assert!(!deferred_first.ptr_eq(&deferred_second));
-    // 即使内部误将 Transient 作为预热类型，也不能凭 lazy(false) 制造无消费者实例。
-    runtime
-        .warm_up(
-            &first,
-            ServiceLifetime::Transient,
-            InitializationMode::Eager,
-        )
-        .await
-        .unwrap();
+    // Transient 即使标注 lazy(false)，也不会成为 scope 创建时的自主入口。
     assert_eq!(published(&first), [0, 1, 2]);
     let transient_first = runtime.resolve(&first, 3).await.unwrap();
     let transient_second = runtime.resolve(&first, 3).await.unwrap();
@@ -176,11 +155,13 @@ async fn an_ordinary_dependency_constructs_a_lazy_provider_before_its_eager_cons
         inputs.ensure_all_consumed()?;
         Ok(ErasedService::new(*dependency + 1))
     });
-    let (runtime, root) = Runtime::start(graph(vec![dependency, consumer]), 1);
-    runtime
-        .warm_up(&root, ServiceLifetime::Singleton, InitializationMode::Lazy)
-        .await
-        .unwrap();
+    let (runtime, root) = Runtime::start(
+        graph(vec![dependency, consumer]),
+        1,
+        crate::InitializationMode::Lazy,
+    )
+    .await
+    .unwrap();
     assert_eq!(published(&root), [0, 1]);
     let consumer = runtime.resolve(&root, 1).await.unwrap();
     // SAFETY: lease 保活准确 u32 实例，pointer 检查与声明一致的真实类型。

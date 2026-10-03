@@ -12,7 +12,7 @@ type Repository = dyn RepositoryPort<UserEntity> + Send + Sync;
 async fn main() {
     // The imports above are the only references to the implementation crates.
     // This application knows only their public contracts, not concrete types.
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let repository = provider.get_required_service::<Repository>().await.unwrap();
     let reader = provider.get_required_service::<Reader>().await.unwrap();
     let identity = provider

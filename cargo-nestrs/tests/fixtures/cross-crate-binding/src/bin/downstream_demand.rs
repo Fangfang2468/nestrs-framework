@@ -8,10 +8,10 @@ use upstream_consumer::Checkout;
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     assert_eq!(upstream_consumer::linked_provider_constructions(), 0);
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert_eq!(primary_provider::total_constructions(), 0);
-    let left = provider.create_scope();
-    let right = provider.create_scope();
+    let left = provider.create_scope(None).await.unwrap();
+    let right = provider.create_scope(None).await.unwrap();
     let checkout = left
         .service_provider()
         .get_required_service::<Checkout>()

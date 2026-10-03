@@ -1,8 +1,8 @@
 use crate as nestrs_core;
 use ahash::AHashMap;
 use nestrs_core::{
-    BuildError, DisposeError, InitializationMode, ResolveError, ServiceKey, ServiceProvider,
-    ServiceProviderOptions, ServiceScope,
+    BuildError, DisposeError, InitializationMode, ResolveError, ScopeBuildError, ServiceKey,
+    ServiceProvider, ServiceProviderOptions, ServiceScope, ServiceScopeOptions,
 };
 use std::{
     error::Error,
@@ -27,13 +27,12 @@ trait Port: Send + Sync {}
 fn assert_error<E: Error>() {}
 
 fn provider_api(provider: &ServiceProvider) {
-    std::mem::drop(ServiceProvider::build());
-    std::mem::drop(ServiceProvider::build_with_options(
-        ServiceProviderOptions {
-            initialization: InitializationMode::Eager,
-            max_concurrent_activations: NonZeroUsize::new(4).unwrap(),
-        },
-    ));
+    std::mem::drop(ServiceProvider::build(None));
+    std::mem::drop(ServiceProvider::build(Some(ServiceProviderOptions {
+        initialization: InitializationMode::Eager,
+        scope_initialization: InitializationMode::Lazy,
+        max_concurrent_activations: NonZeroUsize::new(4).unwrap(),
+    })));
     std::mem::drop(provider.get_required_service::<Concrete>());
     std::mem::drop(provider.get_service::<Concrete>());
     std::mem::drop(
@@ -41,7 +40,10 @@ fn provider_api(provider: &ServiceProvider) {
     );
     std::mem::drop(provider.get_keyed_service::<Concrete>(ServiceKey::Indexed(1)));
     std::mem::drop(provider.get_required_service::<dyn Port>());
-    let _ = provider.create_scope();
+    std::mem::drop(provider.create_scope(None));
+    std::mem::drop(provider.create_scope(Some(ServiceScopeOptions {
+        initialization: InitializationMode::Eager,
+    })));
 }
 async fn chained_scope_api(scope: &ServiceScope<'_>) {
     let value = scope
@@ -50,7 +52,6 @@ async fn chained_scope_api(scope: &ServiceScope<'_>) {
         .await
         .unwrap();
     let _ = std::ptr::from_ref(value);
-    std::mem::drop(scope.warm_up());
 }
 fn provider_disposal(provider: ServiceProvider) {
     std::mem::drop(provider.dispose_async());
@@ -68,10 +69,19 @@ fn public_facade_types_and_signatures_are_available() {
         scope_disposal,
     );
     assert_error::<BuildError>();
+    assert_error::<ScopeBuildError>();
     assert_error::<ResolveError>();
     assert_error::<DisposeError>();
     assert_eq!(
         ServiceProviderOptions::default().initialization,
+        InitializationMode::Lazy
+    );
+    assert_eq!(
+        ServiceProviderOptions::default().scope_initialization,
+        InitializationMode::Lazy
+    );
+    assert_eq!(
+        ServiceScopeOptions::default().initialization,
         InitializationMode::Lazy
     );
     assert_eq!(
@@ -84,7 +94,7 @@ fn public_facade_types_and_signatures_are_available() {
 
 #[tokio::test]
 async fn empty_provider_and_scope_complete_full_lifecycle() {
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     assert!(provider.get_service::<Concrete>().await.unwrap().is_none());
     assert!(
         provider
@@ -94,8 +104,8 @@ async fn empty_provider_and_scope_complete_full_lifecycle() {
             .to_string()
             .contains("未注册")
     );
-    let scope = provider.create_scope();
-    scope.warm_up().await.unwrap();
+    let scope = provider.create_scope(None).await.unwrap();
+
     assert!(
         scope
             .service_provider()
@@ -114,7 +124,7 @@ fn build_reports_missing_runtime_without_creating_one() {
         future::Future,
         task::{Context, Poll, Waker},
     };
-    let mut build = std::pin::pin!(ServiceProvider::build());
+    let mut build = std::pin::pin!(ServiceProvider::build(None));
     let mut context = Context::from_waker(Waker::noop());
     assert!(matches!(
         build.as_mut().poll(&mut context),
@@ -155,7 +165,10 @@ fn observed_projection() -> ServiceProjector {
 
 /// 直接建立本测试的冻结计划，再走真实 runtime 与公开门面；不修改进程共享的
 /// OnceLock，也不为应用添加可替换计划的入口。两种 key 各有一个无依赖 provider。
-fn observed_provider(lifetime: ServiceLifetime, project: ServiceProjector) -> ServiceProvider {
+async fn observed_provider(
+    lifetime: ServiceLifetime,
+    project: ServiceProjector,
+) -> ServiceProvider {
     let mut nodes = Vec::new();
     let mut routes = AHashMap::new();
     for key in [None, Some(ServiceKey::Named("named".to_owned()))] {
@@ -200,21 +213,24 @@ fn observed_provider(lifetime: ServiceLifetime, project: ServiceProjector) -> Se
         topological_order: vec![0, 1],
         dependents: vec![vec![], vec![]],
     });
-    let (runtime, owner) = Runtime::start(graph.clone(), 2);
+    let (runtime, owner) = Runtime::start(graph.clone(), 2, crate::InitializationMode::Lazy)
+        .await
+        .unwrap();
     ServiceProvider {
         graph,
         runtime,
         owner,
+        scope_initialization: InitializationMode::Lazy,
     }
 }
 
 #[tokio::test]
 async fn chained_scope_trait_and_keyed_queries_share_the_selected_instance() {
-    let provider = observed_provider(ServiceLifetime::Scoped, observed_projection());
+    let provider = observed_provider(ServiceLifetime::Scoped, observed_projection()).await;
     // 可选查询也不能把生命周期限制当成未注册；正常请求需要一个 scope。
     assert!(provider.get_service::<dyn ObservedPort>().await.is_err());
-    let first = provider.create_scope();
-    let second = provider.create_scope();
+    let first = provider.create_scope(None).await.unwrap();
+    let second = provider.create_scope(None).await.unwrap();
     let concrete = first
         .service_provider()
         .get_required_service::<ObservedService>()
@@ -275,10 +291,10 @@ fn projected_root_reference_is_kept_alive_after_tokio_stops() {
         .enable_all()
         .build()
         .unwrap();
-    let provider = {
-        let _entered = runtime.enter();
-        observed_provider(ServiceLifetime::Singleton, observed_projection())
-    };
+    let provider = runtime.block_on(observed_provider(
+        ServiceLifetime::Singleton,
+        observed_projection(),
+    ));
     let service = runtime
         .block_on(provider.get_required_service::<dyn ObservedPort>())
         .unwrap();
@@ -309,7 +325,8 @@ async fn facade_rejects_a_projector_that_substitutes_another_instance() {
             output,
             |value| value,
         )
-    });
+    })
+    .await;
     let error = provider
         .get_required_service::<dyn ObservedPort>()
         .await

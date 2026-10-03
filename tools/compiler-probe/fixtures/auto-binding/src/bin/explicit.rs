@@ -27,7 +27,7 @@ impl Port for Service {
 async fn main() {
     assert_eq!(automatic_assertions::explicit_count(), 1);
     automatic_assertions::assert_count::<dyn Port>(0);
-    let provider = ServiceProvider::build().await.unwrap();
+    let provider = ServiceProvider::build(None).await.unwrap();
     let concrete = provider.get_required_service::<Service>().await.unwrap();
     let interface = provider.get_required_service::<dyn Port>().await.unwrap();
     assert_eq!(interface.identity(), concrete as *const Service as usize);

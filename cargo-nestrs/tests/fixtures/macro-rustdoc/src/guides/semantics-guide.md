@@ -19,7 +19,7 @@ fn main() {
     assert_eq!(include_str!("../semantics-value.txt"), "module");
     assert_eq!(include!("included/nested.rs"), "nested");
     tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
-        let provider = nestrs_core::ServiceProvider::build().await.unwrap();
+        let provider = nestrs_core::ServiceProvider::build(None).await.unwrap();
         let service = provider.get_required_service::<dyn IncludedContract>().await.unwrap();
         assert_eq!(service.answer(), 42);
         provider.dispose_async().await.unwrap();
