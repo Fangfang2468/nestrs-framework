@@ -7,6 +7,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub mod associated_consts;
+pub mod forwarding_queries;
 pub mod trait_calls;
 
 static CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);

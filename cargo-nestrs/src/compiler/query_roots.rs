@@ -2,9 +2,10 @@
 //!
 //! 查询根属于类型检查后的源码语义，不属于优化后的运行路径。每个函数/闭包的 HIR
 //! 摘要分别记录直接查询的 T、引用的函数项类型 F 和常量的真实定义及实参；查询与
-//! 函数摘要复制到 MIR 入口，常量引用沿用原生 required_consts，随上游 metadata
-//! 保留。因此 `if false`、未调用函数和 Release 消除都不会删掉声明。
-//! 泛型函数只在出现闭合调用实例时替换参数；显式队列处理调用链，不执行业务函数。
+//! 函数摘要复制到 MIR 入口，不可变 static 的闭合摘要汇入私有 summary 函数，常量
+//! 引用沿用原生 required_consts。因此 `if false`、未调用函数和 Release 消除都
+//! 不会删掉业务声明。标准库转发只按携带已知查询类型的闭合调用读取其原生 MIR；
+//! 泛型替换和调用展开使用显式队列，不执行业务函数，也不求值静态函数指针。
 
 extern crate rustc_index;
 extern crate rustc_infer;
@@ -226,6 +227,10 @@ fn business_definition(tcx: TyCtxt<'_>, id: DefId) -> bool {
     }
 }
 
+fn standard_definition(tcx: TyCtxt<'_>, id: DefId) -> bool {
+    matches!(tcx.crate_name(id.krate).as_str(), "core" | "alloc" | "std")
+}
+
 struct Summary<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     typeck: &'tcx ty::TypeckResults<'tcx>,
@@ -241,12 +246,14 @@ impl<'tcx> Summary<'_, 'tcx> {
                 });
             }
         } else if business_definition(self.tcx, id)
+            || (standard_definition(self.tcx, id) && args.types().next().is_some())
             || (self.tcx.def_kind(id) == DefKind::AssocFn && self.tcx.trait_of_assoc(id).is_some())
         {
             // 调用点可以引用标准库的 trait 方法，而实际实现位于业务 crate。
             // 先保存带实参的 trait 方法身份，待闭合后由 Instance 求解实现；不能
             // 按 trait 所属 crate 提前丢弃 Iterator::next、Add::add 等调用。
-            // 这里只保存调用边，函数体仍仅从业务摘要读取，不扫描标准库 MIR。
+            // 标准库的默认方法也可能继续转发到业务实现。这里只保存真实函数项；
+            // 闭合实参携带已知查询类型时，收集阶段才按需读取其 MIR 调用边。
             self.records.push(Record {
                 value: QueryValue::Callable(
                     self.tcx
@@ -343,13 +350,99 @@ fn local_summary<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId) -> Vec<Record<'tcx>
     records
 }
 
+/// rustc 不把 static 初始化器的 CTFE MIR 编码到上游 metadata。不可变 static
+/// 的初始化器已经是闭合、经过类型检查的 body；把其中的函数项摘要放入现有私有
+/// summary 函数，才能让下游与本 crate 一样恢复这些查询。只展开常量的定义摘要，
+/// 不求值 static/const、不读取函数地址，也不为静态变量创建可调用的伪 FnDef。
+fn immutable_static_summary<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Vec<Record<'tcx>>, String> {
+    let mut pending = VecDeque::new();
+    for owner in tcx.hir_body_owners() {
+        if matches!(
+            tcx.def_kind(owner),
+            DefKind::Static {
+                mutability: rustc_hir::Mutability::Not,
+                ..
+            }
+        ) {
+            pending.extend(local_summary(tcx, owner));
+        }
+    }
+    let mut seen = HashSet::new();
+    let mut records = Vec::new();
+    let mut constants = 0usize;
+    while let Some(record) = pending.pop_front() {
+        // 这里还不能知道 static 是否包含 DI 查询。先保留真实函数项和常量摘要，
+        // 相关性分析后才实施查询类型复杂度上限；无关常量的大而浅类型同样合法。
+        if !record.value.closed() || !seen.insert(record.value) {
+            continue;
+        }
+        let QueryValue::Constant(id, args) = record.value else {
+            records.push(record);
+            continue;
+        };
+        constants += 1;
+        if constants > MAX_QUERY_TYPES {
+            expansion_error(
+                tcx,
+                record.span,
+                record.span,
+                "static_query_instances",
+                MAX_QUERY_TYPES,
+                "不可变 static 的查询常量摘要超过有限分析上限".into(),
+            );
+        }
+        // 固定定义的常量直接代入摘要即可；trait 常量仍必须让 rustc 选择真实实现。
+        // 归一化用于原生常量身份解析，不在这里套用尚无查询需求的 DI 类型上限。
+        let (id, args) = if tcx.trait_of_assoc(id).is_some() {
+            let args = tcx
+                .try_normalize_erasing_regions(
+                    ty::TypingEnv::fully_monomorphized(),
+                    ty::Unnormalized::new_wip(args),
+                )
+                .map_err(|error| {
+                    format!(
+                        "无法归一化 static 查询常量 {}: {error:?}",
+                        tcx.def_path_str(id)
+                    )
+                })?;
+            let Some(instance) =
+                ty::Instance::try_resolve(tcx, ty::TypingEnv::fully_monomorphized(), id, args)
+                    .map_err(|_| format!("无法解析 static 查询常量 {}", tcx.def_path_str(id)))?
+            else {
+                continue;
+            };
+            (instance.def_id(), instance.args)
+        } else {
+            (id, args)
+        };
+        let nested = if let Some(owner) = id.as_local() {
+            local_summary(tcx, owner)
+        } else {
+            external_summary(tcx, id)
+        };
+        for nested in nested {
+            pending.push_back(Record {
+                value: nested.value.instantiate(tcx, args),
+                ..nested
+            });
+        }
+    }
+    Ok(records)
+}
+
 /// 在原始 MIR 完成后加上类型摘要。复制的是已有、通过类型检查的类型身份；既不
 /// 改写用户调用，也不伪造借用、trait 投影或任意函数签名。标记函数无参数且为 const。
 /// 摘要放在所有分支之前，确保其跨 crate metadata 与 Debug/Release 含义一致。
 pub fn preserve_summary<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, body: &mut mir::Body<'tcx>) {
     // 常量引用由 rustc 原生 required_consts 在优化前保留，随 MIR metadata 编码。
     // 这里只追加原有类型标记；不插入常量求值或运行期调用，也不改变常量有效性规则。
-    let records: Vec<_> = local_summary(tcx, owner)
+    let summary = if crate::reflection::summary_definition(tcx, owner.to_def_id()) {
+        immutable_static_summary(tcx)
+            .unwrap_or_else(|error| crate::diagnostics::internal(tcx, error))
+    } else {
+        local_summary(tcx, owner)
+    };
+    let records: Vec<_> = summary
         .into_iter()
         .filter(|record| !matches!(record.value, QueryValue::Constant(..)))
         .collect();
@@ -502,13 +595,133 @@ fn external_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
     records
 }
 
+/// 标准库没有 Nestrs marker，但其泛型 MIR 保留了真实函数项与 trait 调用。
+/// 只在闭合调用的实参携带已知查询实现/闭包时读取，不扫描整套标准库；函数指针
+/// 转换前的 FnDef 同样保留，不能只看 Call terminator 丢掉传递给回调的函数项。
+fn standard_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
+    if !tcx.is_mir_available(id) {
+        return Vec::new();
+    }
+    struct Calls<'a, 'tcx> {
+        tcx: TyCtxt<'tcx>,
+        body: &'a mir::Body<'tcx>,
+        records: Vec<Record<'tcx>>,
+    }
+    impl<'tcx> mir::visit::Visitor<'tcx> for Calls<'_, 'tcx> {
+        fn visit_operand(&mut self, operand: &Operand<'tcx>, location: mir::Location) {
+            let value = operand.ty(&self.body.local_decls, self.tcx);
+            if matches!(
+                value.kind(),
+                ty::FnDef(..) | ty::Closure(..) | ty::Coroutine(..) | ty::CoroutineClosure(..)
+            ) {
+                self.records.push(Record {
+                    value: QueryValue::Callable(self.tcx.erase_and_anonymize_regions(value)),
+                    span: self.body.source_info(location).span,
+                });
+            }
+            self.super_operand(operand, location);
+        }
+    }
+    let body = tcx.optimized_mir(id);
+    let mut calls = Calls {
+        tcx,
+        body,
+        records: Vec::new(),
+    };
+    mir::visit::Visitor::visit_body(&mut calls, body);
+    let mut seen = HashSet::new();
+    calls.records.retain(|record| seen.insert(record.value));
+    calls.records
+}
+
+/// 只使用已有查询摘要的真实身份作为转发入口：方法所属的名义类型，以及已知
+/// 查询函数/闭包。例如 collect<Query<T>> 的 Query 来自业务 next 的 impl Self，
+/// 不靠 collect/next 拼写，也不枚举其他 impl 或猜测泛型实参。这个筛选只决定是否
+/// 读取调用边；实际调用仍必须由 Instance 选择，不能据此直接注册某个方法的查询。
+#[derive(Default)]
+struct QueryCarriers {
+    types: HashSet<DefId>,
+    callables: HashSet<DefId>,
+}
+impl QueryCarriers {
+    fn add(&mut self, tcx: TyCtxt<'_>, method: DefId) -> Vec<DefId> {
+        self.callables.insert(method);
+        let mut added = Vec::new();
+        if tcx.def_kind(method) == DefKind::AssocFn
+            && let Some(implementation) = tcx.impl_of_assoc(method)
+        {
+            let self_type = tcx
+                .type_of(implementation)
+                .instantiate_identity()
+                .skip_normalization();
+            let mut arguments = self_type.walk();
+            while let Some(argument) = arguments.next() {
+                if let Some(value) = argument.as_type()
+                    && let ty::Adt(definition, _) = value.kind()
+                    && business_definition(tcx, definition.did())
+                {
+                    if self.types.insert(definition.did()) {
+                        added.push(definition.did());
+                    }
+                    // Wrapper<PhantomData<T>> 的分派身份是 Wrapper；其泛型内部
+                    // 不能独立把 PhantomData、Vec 或另一业务类型变成查询载体。
+                    // 引用与标准库基础包装则继续向内寻找实际业务名义类型。
+                    arguments.skip_current_subtree();
+                }
+            }
+        }
+        added
+    }
+
+    fn identities(value: QueryValue<'_>) -> HashSet<DefId> {
+        let types = match value {
+            QueryValue::Service(value) | QueryValue::Callable(value) => vec![value],
+            QueryValue::Constant(_, args) => args.types().collect(),
+        };
+        types
+            .into_iter()
+            .flat_map(|value| value.walk())
+            .filter_map(|argument| {
+                argument.as_type().and_then(|value| match *value.kind() {
+                    ty::Adt(definition, _) => Some(definition.did()),
+                    ty::FnDef(id, _)
+                    | ty::Closure(id, _)
+                    | ty::Coroutine(id, _)
+                    | ty::CoroutineClosure(id, _) => Some(id),
+                    _ => None,
+                })
+            })
+            .collect()
+    }
+
+    fn contains_type(&self, value: Ty<'_>) -> bool {
+        value.walk().any(|argument| {
+            argument.as_type().is_some_and(|value| match *value.kind() {
+                ty::Adt(definition, _) => self.types.contains(&definition.did()),
+                ty::FnDef(id, _)
+                | ty::Closure(id, _)
+                | ty::Coroutine(id, _)
+                | ty::CoroutineClosure(id, _) => self.callables.contains(&id),
+                _ => false,
+            })
+        })
+    }
+
+    fn contains(&self, value: QueryValue<'_>) -> bool {
+        match value {
+            QueryValue::Service(value) | QueryValue::Callable(value) => self.contains_type(value),
+            QueryValue::Constant(_, args) => args.types().any(|value| self.contains_type(value)),
+        }
+    }
+}
+
 fn closed(value: Ty<'_>) -> bool {
     !value.has_non_region_param() && !value.has_infer() && !value.has_escaping_bound_vars()
 }
 
 /// 每个编译入口汇总全部已类型检查的 body。非泛型 body 即使没有被调用也贡献查询；
 /// 泛型 body 的闭合查询同样直接贡献，带参数的查询则等待实际闭合函数项进行替换。
-/// 只沿保存的语义摘要遍历，不沿优化后的控制流可达性遍历。
+/// 业务部分沿保存的语义摘要遍历；标准库只补充闭合回调的原生 MIR 转发边。
 pub fn collect<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Vec<QueryRoot<'tcx>>, String> {
     collect_with_providers(tcx, &[])
 }
@@ -609,6 +822,8 @@ pub fn collect_with_providers<'tcx>(
     // 查询展开限制。trait 调用先关联真实 impl 对应的 trait item，闭合时仍由 rustc
     // Instance 求解实际实现；这个粗筛只排除不可能包含查询的函数，不选择实现。
     let mut incoming: HashMap<DefId, Vec<DefId>> = HashMap::new();
+    let mut carrier_users: HashMap<DefId, Vec<DefId>> = HashMap::new();
+    let mut carriers = QueryCarriers::default();
     let mut relevant = HashSet::new();
     let mut propagation = VecDeque::new();
     for (&id, records) in &summaries {
@@ -622,6 +837,9 @@ pub fn collect_with_providers<'tcx>(
             if let Some(target) = record.value.definition() {
                 incoming.entry(target).or_default().push(id);
             }
+            for identity in QueryCarriers::identities(record.value) {
+                carrier_users.entry(identity).or_default().push(id);
+            }
         }
         if matches!(
             tcx.def_kind(id),
@@ -634,10 +852,18 @@ pub fn collect_with_providers<'tcx>(
     while let Some(id) = propagation.pop_front() {
         if relevant.insert(id) {
             propagation.extend(incoming.get(&id).into_iter().flatten().copied());
+            propagation.extend(carrier_users.get(&id).into_iter().flatten().copied());
+            // 一个转发层变得相关后，它所属的业务类型又可能使另一层标准转发
+            // 相关。类型到 owner 的反向索引与调用边共用工作队列直到固定点，
+            // 不只计算一次载体，也不为每层反复扫描全部摘要。
+            for identity in carriers.add(tcx, id) {
+                propagation.extend(carrier_users.get(&identity).into_iter().flatten().copied());
+            }
         }
     }
     let relevant_record = |record: &Record<'tcx>| {
         matches!(record.value, QueryValue::Service(_))
+            || carriers.contains(record.value)
             || record
                 .value
                 .definition()
@@ -737,12 +963,20 @@ pub fn collect_with_providers<'tcx>(
         if !seen.insert((id, args)) {
             continue;
         }
+        if standard_definition(tcx, id) {
+            summaries
+                .entry(id)
+                .or_insert_with(|| standard_summary(tcx, id));
+        }
         let Some(records) = summaries.get(&id) else {
             continue;
         };
-        for &nested in records.iter().filter(|record| relevant_record(record)) {
+        for &nested in records {
             let value = nested.value.instantiate(tcx, args);
-            pending.push_back((Record { value, ..nested }, owner, depth + 1, origin));
+            let nested = Record { value, ..nested };
+            if relevant_record(&nested) {
+                pending.push_back((nested, owner, depth + 1, origin));
+            }
         }
     }
     roots.sort_by_key(|root| (root.service.to_string(), format!("{:?}", root.service)));

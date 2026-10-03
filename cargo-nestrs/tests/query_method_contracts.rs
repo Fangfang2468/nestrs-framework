@@ -1,6 +1,7 @@
 //! 查询根来自编译器类型语义，Debug 与 Release 的未执行分支应贡献相同图。
 //! fixture 同时断言上游泛型 Iterator/Add、运算符、trait/inherent 方法和关联常量
-//! 函数指针的 Eager 构造计数与真实查询结果，防止调用或常量身份被提前过滤。
+//! 函数指针、不可变 static 以及标准库 collect/适配器转发的 Eager 构造计数与真实
+//! 查询结果；各路径独立类型，防止一个直接调用替另一条遗漏路径补根。
 #![cfg(feature = "compiler-driver")]
 
 use std::{path::Path, process::Command};

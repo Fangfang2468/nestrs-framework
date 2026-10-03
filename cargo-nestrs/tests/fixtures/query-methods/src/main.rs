@@ -4,6 +4,7 @@ use nestrs_core::{InitializationMode, ServiceProvider, ServiceProviderOptions};
 use query_library::associated_consts::{
     self as upstream_consts, DefaultQuery, ExplicitQuery, Holder, OverriddenQuery,
 };
+use query_library::forwarding_queries;
 use query_library::trait_calls::{self, CustomQuery, Query};
 use query_library::{Repository, generic_query, nested_query};
 use std::ops::Add;
@@ -34,6 +35,12 @@ struct ThroughUpstreamOverriddenConst;
 struct ThroughUpstreamConstFn;
 struct ThroughUpstreamInlineConst;
 struct ThroughDeadUpstreamConst;
+struct ThroughCollect;
+struct ThroughGenericCollect;
+struct ThroughGenericTypeCollect;
+struct ThroughIteratorAdapters;
+struct ThroughOverriddenCollect;
+struct ThroughNestedCollect;
 #[cfg(feature = "extra-root")]
 struct ThroughFeatureUpstreamConst;
 struct Select;
@@ -47,12 +54,46 @@ async fn main() {
     assert_eq!(trait_calls::constructions(), 0);
     assert_eq!(associated_consts::constructions(), 0);
     assert_eq!(upstream_consts::constructions(), 0);
+    assert_eq!(forwarding_queries::constructions(), 0);
     let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
         initialization: InitializationMode::Eager,
         ..Default::default()
     })
     .await
     .unwrap();
+    // 六个上游 static（含私有未调用项和数组）和五条不同的标准库转发路径。
+    // 先核对 Eager 计数，再执行回调，避免运行时路径替漏掉的冻结计划补根。
+    assert_eq!(forwarding_queries::constructions(), 11);
+    let overridden: Vec<_> =
+        forwarding_queries::OverriddenQuery::<ThroughOverriddenCollect>::new(&provider).collect();
+    assert!(overridden.is_empty());
+    drop(overridden);
+    let mut forwarded_ids = vec![
+        forwarding_queries::DIRECT(&provider).await.unwrap(),
+        forwarding_queries::ASSOCIATED(&provider).await.unwrap(),
+        forwarding_queries::CONST_FN(&provider).await.unwrap(),
+        forwarding_queries::INLINE(&provider).await.unwrap(),
+        forwarding_queries::ARRAY[0](&provider).await.unwrap(),
+    ];
+    let forwarded = [
+        forwarding_queries::Query::<ThroughCollect>::new(&provider).collect::<Vec<_>>(),
+        forwarding_queries::generic_iterator(
+            forwarding_queries::Query::<ThroughGenericCollect>::new(&provider),
+        ),
+        forwarding_queries::generic_type::<ThroughGenericTypeCollect>(&provider),
+        forwarding_queries::OuterQuery::<ThroughNestedCollect>::new(&provider).collect::<Vec<_>>(),
+        forwarding_queries::Query::<ThroughIteratorAdapters>::new(&provider)
+            .map(|future| future)
+            .take(1)
+            .collect::<Vec<_>>(),
+    ];
+    for queries in forwarded {
+        assert_eq!(queries.len(), 1);
+        forwarded_ids.push(queries.into_iter().next().unwrap().await.unwrap());
+    }
+    forwarded_ids.sort_unstable();
+    assert!(forwarded_ids.windows(2).all(|pair| pair[0] != pair[1]));
+    assert_eq!(forwarding_queries::constructions(), 11);
     // 闭合 helper、函数项、闭包、关联类型、const 参数以及服务方法的实例在 build 前进入计划。
     // 上游另含永不执行分支；只沿优化后可达代码收集将丢失这个实例。
     assert_eq!(
