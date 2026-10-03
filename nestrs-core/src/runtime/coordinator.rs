@@ -17,6 +17,7 @@ use crate::{
     error::{DisposeError, ResolveError},
     graph::{DependencyInput, ValidatedGraph},
     lifetime::ServiceLifetime,
+    panic_payload::PanicPayload,
 };
 
 use super::{
@@ -452,6 +453,15 @@ impl Coordinator {
             .job_kinds
             .remove(&id)
             .expect("每个 worker 必须有归属记录");
+        // JoinError 拥有用户 panic 载荷；必须在保护范围内消费它，不能让它在
+        // 协调器的 match 分支末尾隐式析构。取消错误没有需要回收的 panic 载荷。
+        let completion = completion.map_err(|error| {
+            let message = error.to_string();
+            match error.try_into_panic() {
+                Ok(payload) => PanicPayload::new(payload).finish_message(message),
+                Err(_) => message,
+            }
+        });
         match kind {
             JobKind::Activation(task) => {
                 self.running_activations -= 1;

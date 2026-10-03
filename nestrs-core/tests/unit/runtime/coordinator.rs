@@ -4,6 +4,9 @@
 #[path = "subscriptions.rs"]
 mod subscriptions;
 
+#[path = "panic_payloads.rs"]
+mod panic_payloads;
+
 use ahash::AHashMap;
 use std::{
     sync::{

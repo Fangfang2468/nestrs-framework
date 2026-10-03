@@ -11,9 +11,9 @@ use crate::{
     },
     error::ResolveError,
     graph::{AbsentInput, Constructor, DependencyInput, ValidatedGraph},
+    panic_payload::PanicPayload,
 };
 use std::{
-    any::Any,
     future::poll_fn,
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{Arc, Weak},
@@ -100,13 +100,16 @@ pub(super) async fn cleanup(entry: Published, graph: Arc<ValidatedGraph>) -> Vec
     // 只有整个 hook 结束且其 future 被释放后，才释放当前实例；协调器随后才推进下一个 cleanup。
     if let Some(hook) = node.common.cleanup {
         match catch_unwind(AssertUnwindSafe(hook)) {
-            Err(payload) => errors.push(describe("cleanup panic", panic_message(payload.as_ref()))),
+            Err(payload) => errors.push(describe(
+                "cleanup panic",
+                PanicPayload::new(payload).into_message(),
+            )),
             Ok(mut future) => {
                 let outcome = poll_fn(|cx| {
                     match catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(cx))) {
                         Ok(Poll::Pending) => Poll::Pending,
                         Ok(Poll::Ready(())) => Poll::Ready(Ok(())),
-                        Err(payload) => Poll::Ready(Err(panic_message(payload.as_ref()))),
+                        Err(payload) => Poll::Ready(Err(PanicPayload::new(payload).into_message())),
                     }
                 })
                 .await;
@@ -116,7 +119,7 @@ pub(super) async fn cleanup(entry: Published, graph: Arc<ValidatedGraph>) -> Vec
                 if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(future))) {
                     errors.push(describe(
                         "cleanup future Drop panic",
-                        panic_message(payload.as_ref()),
+                        PanicPayload::new(payload).into_message(),
                     ));
                 }
             }
@@ -129,16 +132,4 @@ pub(super) async fn cleanup(entry: Published, graph: Arc<ValidatedGraph>) -> Vec
         }
     }
     errors
-}
-
-fn panic_message(payload: &(dyn Any + Send)) -> String {
-    payload
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| {
-            payload
-                .downcast_ref::<&str>()
-                .map(|message| (*message).to_owned())
-        })
-        .unwrap_or_else(|| "未提供字符串 panic 信息".to_owned())
 }

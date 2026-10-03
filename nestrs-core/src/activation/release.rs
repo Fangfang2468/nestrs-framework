@@ -9,17 +9,18 @@
 //! 这次释放中的析构 panic，而不会误报其他线程的失败。
 
 use std::{
-    any::Any,
     cell::RefCell,
     collections::VecDeque,
     future::Future,
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+    panic::{AssertUnwindSafe, catch_unwind},
     pin::Pin,
+    rc::Rc,
     sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
 };
 
 use super::instance::InstancePayload;
+use crate::panic_payload::PanicPayload;
 
 /// 同一 root 及其 scopes 共用的同步释放域；不依赖异步执行器。
 #[derive(Default)]
@@ -45,34 +46,50 @@ impl ReleaseDomain {
             .ok()
             .flatten();
         let nested = active.is_some();
-        let group = active.unwrap_or_default();
-        self.enqueue(payload, group.clone());
         // 重入的依赖释放属于发起它的完成组；其他线程排队的释放有各自的结果。
-        // 普通 Drop 仅在当前组已经完成且本线程未展开栈时恢复 panic，避免双重 panic。
-        if !nested
-            && !std::thread::panicking()
-            && let Some(failures) = group.take_completed()
-            && let Some(failure) = failures.into_iter().next()
-        {
-            resume_unwind(failure.panic);
+        // 仅当前调用取得排空权且本线程未展开栈时，才在排空后恢复自己的首个 panic。
+        // 不把其他线程组的 panic 抛给当前线程，也不在重入的释放中展开栈。
+        let propagate = !nested && !std::thread::panicking();
+        if let Some(panic) = self.enqueue(payload, active.unwrap_or_default(), propagate) {
+            panic.resume();
         }
     }
 
     pub(super) fn release_tracked(&self, payload: InstancePayload) -> ReleaseCompletion {
         let group = Arc::new(ReleaseGroup::default());
-        self.enqueue(payload, group.clone());
+        self.enqueue(
+            payload,
+            ActiveRelease {
+                group: group.clone(),
+                propagation: None,
+            },
+            false,
+        );
         ReleaseCompletion(group)
     }
 
-    fn enqueue(&self, payload: InstancePayload, group: Arc<ReleaseGroup>) {
-        group.begin();
+    fn enqueue(
+        &self,
+        payload: InstancePayload,
+        mut origin: ActiveRelease,
+        propagate: bool,
+    ) -> Option<PanicPayload> {
+        origin.group.begin();
         {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            state.pending.push_back(PendingRelease { payload, group });
+            state.pending.push_back(PendingRelease {
+                payload,
+                group: origin.group.clone(),
+            });
             if state.draining {
-                return;
+                return None;
             }
             state.draining = true;
+        }
+        // 原始 panic 只在同步调用链与 TLS 间暂存，从不进入队列或共享完成组。
+        // 跨域的同线程重入可写入此槽，但只有最外层普通 Drop 有权恢复它。
+        if propagate {
+            origin.propagation = Some(Rc::default());
         }
         loop {
             let pending = {
@@ -89,10 +106,37 @@ impl ReleaseDomain {
             let service = payload.service_name();
             // 先离开锁作用域，再执行用户析构。析构期间释放的依赖加入当前完成组，
             // 入队后由外层循环处理，既不会死锁，也不会形成递归析构调用栈。
-            let context = ReleaseContext::enter(group.clone());
-            let panic = catch_unwind(AssertUnwindSafe(|| drop(payload))).err();
+            let propagation = if Arc::ptr_eq(&origin.group, &group) {
+                origin.propagation.clone()
+            } else {
+                None
+            };
+            let context = ReleaseContext::enter(ActiveRelease {
+                group: group.clone(),
+                propagation: propagation.clone(),
+            });
+            let failure = catch_unwind(AssertUnwindSafe(|| drop(payload)))
+                .err()
+                .and_then(|payload| {
+                    let panic = PanicPayload::new(payload);
+                    if let Some(slot) = &propagation {
+                        let mut first = slot.borrow_mut();
+                        if first.is_none() {
+                            *first = Some(panic);
+                            return None;
+                        }
+                    }
+                    // 不持有槽位借用或队列锁执行用户 Drop。panic 载荷也可能持有
+                    // lease；它的依赖须先 begin，再 finish 父项，避免过早完成或归错组。
+                    Some(format!("{service}: {}", panic.into_message()))
+                });
             drop(context);
-            group.finish(panic.map(|panic| ReleaseFailure { service, panic }));
+            group.finish(failure);
+        }
+        if propagate {
+            origin.propagation.and_then(|slot| slot.borrow_mut().take())
+        } else {
+            None
         }
     }
 }
@@ -104,16 +148,23 @@ struct PendingRelease {
 
 thread_local! {
     // 只传播当前同步析构的完成组，不保存实例；TLS 销毁期间不可用时允许直接跳过。
-    static ACTIVE_RELEASE: RefCell<Option<Arc<ReleaseGroup>>> = const { RefCell::new(None) };
+    static ACTIVE_RELEASE: RefCell<Option<ActiveRelease>> = const { RefCell::new(None) };
+}
+
+#[derive(Clone, Default)]
+struct ActiveRelease {
+    group: Arc<ReleaseGroup>,
+    // 只在同线程同步重入中共享，不能随 PendingRelease 进入另一个线程的排空者。
+    propagation: Option<Rc<RefCell<Option<PanicPayload>>>>,
 }
 
 /// 恢复之前的线程局部上下文，使重入、析构 panic 和 TLS 销毁都不会遗留错误状态。
-struct ReleaseContext(Option<Arc<ReleaseGroup>>);
+struct ReleaseContext(Option<ActiveRelease>);
 impl ReleaseContext {
-    fn enter(group: Arc<ReleaseGroup>) -> Self {
+    fn enter(context: ActiveRelease) -> Self {
         Self(
             ACTIVE_RELEASE
-                .try_with(|active| active.replace(Some(group)))
+                .try_with(|active| active.replace(Some(context)))
                 .ok()
                 .flatten(),
         )
@@ -125,16 +176,12 @@ impl Drop for ReleaseContext {
     }
 }
 
-struct ReleaseFailure {
-    service: &'static str,
-    panic: Box<dyn Any + Send>,
-}
-
 #[derive(Default)]
 struct ReleaseProgress {
     // 包含尚未开始和正在析构的载荷；重入依赖必须先 begin，再让父载荷 finish。
     pending: usize,
-    failures: Vec<ReleaseFailure>,
+    // 完成组只存文本；poll、丢弃回执或最后一个 Arc 均不再执行用户载荷的 Drop。
+    failures: Vec<String>,
     waker: Option<Waker>,
 }
 
@@ -148,7 +195,7 @@ impl ReleaseGroup {
             .pending += 1;
     }
 
-    fn finish(&self, failure: Option<ReleaseFailure>) {
+    fn finish(&self, failure: Option<String>) {
         let waker = {
             let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
             state.failures.extend(failure);
@@ -162,11 +209,6 @@ impl ReleaseGroup {
         if let Some(waker) = waker {
             waker.wake();
         }
-    }
-
-    fn take_completed(&self) -> Option<Vec<ReleaseFailure>> {
-        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
-        (state.pending == 0).then(|| std::mem::take(&mut state.failures))
     }
 }
 
@@ -187,19 +229,6 @@ impl Future for ReleaseCompletion {
             }
             std::mem::take(&mut state.failures)
         };
-        Poll::Ready(
-            failures
-                .into_iter()
-                .map(|failure| {
-                    let detail = failure
-                        .panic
-                        .downcast_ref::<String>()
-                        .map(String::as_str)
-                        .or_else(|| failure.panic.downcast_ref::<&str>().copied())
-                        .unwrap_or("未提供字符串 panic 信息");
-                    format!("{}: {detail}", failure.service)
-                })
-                .collect(),
-        )
+        Poll::Ready(failures)
     }
 }

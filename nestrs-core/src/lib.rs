@@ -22,6 +22,7 @@ mod facade;
 mod graph;
 mod lifetime;
 mod options;
+mod panic_payload;
 mod runtime;
 #[allow(dead_code)]
 mod service;
