@@ -89,6 +89,13 @@ harness 分别构建并运行有效图，覆盖私有类型、泛型、key、fac
 逐项编译与执行证据由正式 harness 写入 target。构建或测试命令失败会终止后续
 步骤，并传播实际退出状态；不能仅凭生成了 report.json 就认定通过。
 
+报告将准备阶段的 `preparation_toolchain` 与实际执行阶段的 `toolchain` 分开保存。
+脚本先以相同参数执行 `cargo test --no-run`，完成可能改写 CLI / driver 的测试构建，
+再查询执行身份并通过原 Cargo 命令运行测试。结束后保存 `toolchain_after` 并核对
+`toolchain_stable`；即使测试通过，身份变化或末态查询失败也不会报告整轮成功。
+测试本身失败时仍尽量记录末态，但不会让身份核查错误覆盖原测试退出码。
+这项前后核对不隔离任意并发写入，验证期间仍应避免其他构建改写同一工具目录。
+
 不显式选择编译器时，包装脚本让正式 doctor 发现匹配工具链。`--rustc` 或
 `NESTRS_RUSTC` 显式选择的编译器先用于查询 sysroot，再把实际编译器路径交给
 doctor 完成身份检查；脚本不复制该检查或缓存规则。`--skip-build` 只跳过前置

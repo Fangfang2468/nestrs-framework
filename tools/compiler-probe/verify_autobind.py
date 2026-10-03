@@ -2,7 +2,8 @@
 """Build the pinned tools and run the production automatic-binding contracts.
 
 All fixture selection and AOT assertions belong to the Rust integration harness.
-This script only prepares its toolchain environment and retains command logs.
+This script prepares its environment, records tool identity after test compilation,
+and retains command logs plus an execution-end identity check.
 """
 
 from __future__ import annotations
@@ -74,8 +75,8 @@ def run_contracts(root, output, rustc, skip_build, report):
     )
     target = Path(json.loads(metadata.stdout)["target_directory"])
     cli = target / "debug" / executable_name("cargo-nestrs")
-    doctor = query_doctor(cli, cwd=root, environment=environment, log=output / "doctor")
-    report["toolchain"] = doctor
+    doctor = query_doctor(cli, cwd=root, environment=environment, log=output / "doctor-preparation")
+    report["preparation_toolchain"] = doctor
 
     environment.update({
         "RUSTC": doctor["compiler"],
@@ -89,11 +90,40 @@ def run_contracts(root, output, rustc, skip_build, report):
         "RUSTC_BOOTSTRAP": "nestrs_driver",
     })
     compiler_library_environment(environment, Path(doctor["sysroot"]), doctor["rustc"]["host"])
-    invoke(
-        ["cargo", "test", "-p", "cargo-nestrs", "--features", "compiler-driver",
-         "--test", "autobind_contracts", "--locked", "--offline"],
-        environment, root, output / "autobind-contracts",
+    command = [
+        "cargo", "test", "-p", "cargo-nestrs", "--features", "compiler-driver",
+        "--test", "autobind_contracts", "--locked", "--offline",
+    ]
+    # Integration-test compilation can replace CLI/driver files at the same
+    # paths. Finish that build before recording the tools under test; keep the
+    # same command and environment so Cargo retains its test runtime setup.
+    invoke(command + ["--no-run"], environment, root, output / "autobind-contracts-build")
+    report["toolchain"] = query_doctor(
+        cli, cwd=root, environment=environment, log=output / "doctor-execution",
     )
+    report["toolchain_stable"] = False
+    test_error = None
+    try:
+        invoke(command, environment, root, output / "autobind-contracts")
+    except subprocess.CalledProcessError as error:
+        test_error = error
+
+    # A changed or unreadable final identity cannot certify a successful run.
+    # If the harness failed too, retain its original status as the primary
+    # failure and record the additional provenance error separately.
+    try:
+        report["toolchain_after"] = query_doctor(
+            cli, cwd=root, environment=environment, log=output / "doctor-after",
+        )
+        report["toolchain_stable"] = report["toolchain"] == report["toolchain_after"]
+        if not report["toolchain_stable"]:
+            raise RuntimeError("Toolchain identity changed during automatic-binding contracts")
+    except (OSError, ValueError, KeyError, RuntimeError, subprocess.CalledProcessError) as error:
+        report["toolchain_verification_error"] = str(error)
+        if test_error is None:
+            raise
+    if test_error is not None:
+        raise test_error
 
 
 def main():
