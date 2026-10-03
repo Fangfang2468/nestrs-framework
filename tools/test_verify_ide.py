@@ -1,4 +1,4 @@
-"""Regression checks for bounded retries in the stock rust-analyzer verifier."""
+"""Regression checks for source locations and bounded retries in the IDE verifier."""
 
 from collections import deque
 import importlib.util
@@ -13,6 +13,56 @@ spec = importlib.util.spec_from_file_location(
 )
 verify_ide = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verify_ide)
+
+
+class FieldLocationTests(unittest.TestCase):
+    def test_field_position_preserves_original_whitespace(self):
+        cases = [
+            ("optional.delayed_present.as_ref()", 0, 9),
+            ("  optional \t.  delayed_present \t. as_ref()", 0, 15),
+            ("optional\n    .delayed_present\n    .as_ref()", 1, 5),
+            ("optional .\n    delayed_present\n    .as_ref()", 1, 4),
+            ("optional\r\n\t.\r\n  delayed_present\r\n .as_ref()", 2, 2),
+        ]
+        for source, line, character in cases:
+            with self.subTest(source=source):
+                self.assertEqual(
+                    verify_ide.field_params("file:///fixture.rs", source, "optional", "delayed_present"),
+                    {"textDocument": {"uri": "file:///fixture.rs"},
+                     "position": {"line": line, "character": character}},
+                )
+
+    def test_field_location_selects_the_exact_receiver_and_field(self):
+        source = (
+            "other.delayed_present.as_ref();\n"
+            "not_optional.delayed_present.as_ref();\n"
+            "optional.delayed_present_extra.as_ref();\n"
+            "optional.delayed_present.as_ref();\n"
+        )
+        location = verify_ide.field_params("file:///fixture.rs", source, "optional", "delayed_present")
+        self.assertEqual(location["position"], {"line": 3, "character": 9})
+
+    def test_missing_field_access_reports_the_anchor(self):
+        with self.assertRaisesRegex(AssertionError, r"optional\.delayed_present, found 0"):
+            verify_ide.field_params("file:///fixture.rs", "optional.present.as_ref()", "optional", "delayed_present")
+
+    def test_ambiguous_field_access_is_not_silently_selected(self):
+        source = "optional.delayed_present.as_ref();\noptional\n .delayed_present.as_ref();"
+        with self.assertRaisesRegex(AssertionError, r"optional\.delayed_present, found 2"):
+            verify_ide.field_params("file:///fixture.rs", source, "optional", "delayed_present")
+
+    def test_current_fixture_optional_fields_target_usage_tokens(self):
+        fixture = Path(__file__).resolve().parent.parent / "cargo-nestrs/tests/fixtures/ide/src/main.rs"
+        source = fixture.read_text(encoding="utf-8")
+        for field in ["present", "absent", "delayed_present", "delayed_absent"]:
+            with self.subTest(field=field):
+                location = verify_ide.field_params(fixture.as_uri(), source, "optional", field)
+                line = source.splitlines()[location["position"]["line"]]
+                suffix = line[location["position"]["character"]:]
+                # Field declarations use the same names earlier in this file;
+                # the request must land on the use, including the wrapped use.
+                self.assertTrue(suffix.startswith(field), suffix)
+                self.assertNotIn(":", suffix)
 
 
 class Clock:

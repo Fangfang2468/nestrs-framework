@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -209,14 +210,31 @@ class Lsp:
             self.output.with_suffix(".messages.json").write_text(json.dumps(self.messages, indent=2) + "\n", encoding="utf-8")
 
 
-def position(source, fragment, offset=0):
-    index = source.index(fragment) + offset
+def position_at(source, index):
+    """Convert an offset in the original fixture text to its LSP position."""
     prefix = source[:index]
     return {"line": prefix.count("\n"), "character": len(prefix.rsplit("\n", 1)[-1])}
 
 
+def position(source, fragment, offset=0):
+    return position_at(source, source.index(fragment) + offset)
+
+
 def params(uri, source, fragment, offset=0):
     return {"textDocument": {"uri": uri}, "position": position(source, fragment, offset)}
+
+
+def field_params(uri, source, receiver, field):
+    """Locate a unique chained field access without depending on its formatting."""
+    pattern = rf"\b{re.escape(receiver)}\s*\.\s*(?P<field>{re.escape(field)})\b\s*\."
+    matches = list(re.finditer(pattern, source))
+    assert len(matches) == 1, (
+        f"expected one field access {receiver}.{field}, found {len(matches)}"
+    )
+    match = matches[0]
+    # Keep the original whitespace so the request targets the field token in
+    # the document sent to rust-analyzer, including after rustfmt wraps a chain.
+    return {"textDocument": {"uri": uri}, "position": position_at(source, match.start("field"))}
 
 
 def completion_labels(answer):
@@ -376,7 +394,7 @@ def lsp_cases(server, project, settings, environment, output, full, release):
         optional_fields = {}
         for name, token in [("present", "Injection"), ("absent", "Injection"),
                             ("delayed_present", "LazyInjection"), ("delayed_absent", "LazyInjection")]:
-            location = params(uri, source, f"optional.{name}.", len("optional."))
+            location = field_params(uri, source, "optional", name)
             hover = session.request("textDocument/hover", location)
             assert hover and "Option" in json.dumps(hover) and token in json.dumps(hover), (name, hover)
             definitions = session.request("textDocument/definition", location)

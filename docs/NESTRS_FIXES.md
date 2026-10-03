@@ -16,7 +16,7 @@
 
 原始日志、任务起点快照、精确差异及工具哈希保存在各轮 `target/` 目录，不随仓库分发。
 本文正文和正式源码、测试链接保留必要说明，使清理 `target/` 后仍能理解修复。
-记录编号 R01～R12 是本文的时间线索引，不是原报告中会重复使用的 F1/P2 编号，
+记录编号 R01～R13 是本文的时间线索引，不是原报告中会重复使用的 F1/P2 编号，
 也不是 Git 提交号。各轮基线均包含当时已有未提交工作，没有用 Git HEAD 代替实际快照。
 
 ## 修复与复核时间线
@@ -35,6 +35,7 @@
 | 2026-10-03 / R10 | Clone shim 的真实实例 MIR | 第五轮独立复核未发现新增可复现缺陷，范围限当时 Linux 快照 |
 | 2026-10-03 / R11 | 统一 root / scope 创建初始化，移除独立 warm_up API | 属于明确授权的 API 调整；此前功能和性能结论不自动覆盖本次实现 |
 | 2026-10-03 / R12 | build / create_scope 各收敛为接受 Option 的单一入口 | 保留 R11 的初始化契约；None 继承默认，Some 完整覆盖，两者不能混同 |
+| 2026-10-03 / R13 | 修复 IDE 验证脚本对单行字段访问的依赖 | 夹具格式化阻断正式验证；保留原有 LSP 类型和导航断言 |
 
 这些发现来自逐步扩充的输入组合。后续新缺陷不意味着前一轮的原始修复失效；每轮都应
 同时保留原触发复测和新增失败证据，不能用已有测试全绿替代边界核查。
@@ -531,3 +532,34 @@ rustdoc 契约共 16 项通过，DI runtime / UI 38 个外层测试通过，包�
 格式及差异空白检查通过；当前 HTML 模板的 11 个浏览器场景、12 份 Markdown 的
 471 条链接与锚点检查通过。测试集合有重叠，259 个显式忽略的文档测试不计入通过数；
 未重新验证 Windows、跨 target 或完整 LSP。
+
+
+## R13：IDE 字段定位支持格式化后的多行访问链
+
+**触发与根因。** R12 之后的第六轮复核确认，IDE 夹具中的
+`optional.delayed_present.as_ref()` 已被格式化为多行，但正式验证脚本仍查找
+连续字符串 `optional.delayed_present.`。脚本在 default 冷启动通过后抛出
+`ValueError: substring not found`，尚未发送该字段的 hover / definition 请求，
+也无法完成后续编辑、诊断恢复、保存检查及 alternate / release 验证。原报告只在
+target 中修正定位进行对照，不能作为正式脚本已通过的证据。
+
+**修复。** [正式验证脚本](../tools/verify-ide.py)为四个 optional 字段共用的定位
+增加空白与换行支持，按匹配字段名在原始源码中的绝对偏移生成 LSP 坐标，不压缩
+源码，也不按连续片段重新查找位置。匹配必须唯一；缺失或歧义会报告接收者、字段名
+及匹配数量。原有 Option / Injection / LazyInjection 类型断言和定义文件、行号
+断言全部保留。IDE 夹具、生成器及 core 运行期实现没有为此修改。
+
+**回归入口。** [验证器单元测试](../tools/test_verify_ide.py)增加 5 项字段定位回归，
+覆盖单行、空格、点号前后换行、CRLF、接收者与字段名称前后缀干扰、缺失与歧义，
+并直接定位当前仓库夹具的四个 optional 字段。定位回归与既有取消重试回归共
+12 项通过。真实 LSP 仍通过正式 `tools/verify-ide.py` 命令独立验证；本轮原始日志
+与起点快照保存在 `target/ide-field-locator-fix-20261003/`。
+
+**本轮实际验证。** 使用固定 Rust 1.98.0 的 Linux x86_64 工具链及其原版
+rust-analyzer，原失败命令 `python3 tools/verify-ide.py --skip-build --rust-analyzer
+/root/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rust-analyzer` 已退出 0。
+default 配置下字段及工厂 hover、补全、定义跳转、未保存编辑、真实诊断与恢复、
+保存检查及缓存稳定性全部通过；alternate 和 release 的项目模型与冷启动检查
+通过；不支持的 cfg 仍被拒绝并保留原模型及设置。原始 IDE 夹具内容保持不变。
+本次仅修复验证脚本和补充配套回归、文档，未重新运行完整 core / compiler-driver
+矩阵，也未重新验证 Windows、其他 target、性能或服务器容量。
