@@ -16,6 +16,7 @@
 | --- | --- |
 | core 在整个框架里负责什么，内部怎样分层？ | [定位与架构](#1-库的定位与工具链边界)、[基本概念](#2-三个不同层级的保证) |
 | 工具与 core 如何对接，编辑器是否有另一套生成器？ | [工具接入](#工具怎样把声明交给-core)、[constructor 生成](#constructor-怎样进入同一构造协议) |
+| injectable 结构体又被 factory 返回时，谁负责创建？ | [创建声明的冲突、不同 key 与泛型蓝图](#injectable-与-factory-返回同一类型时怎样选择) |
 | 一个服务怎样被查询和关闭？ | [公开门面](#公开门面)、[完整结账示例](../example/di-checkout/README.md) |
 | 编译器究竟给运行时留下了什么？ | [执行计划](#4-类型化声明与编译器执行计划)、[图的冻结](#5-依赖图如何编译和冻结) |
 | 多个查询如何共享实例，延迟依赖何时创建？ | [生命周期与预热](#6-生命周期与预热)、[一次查询的执行过程](#7-非递归的-tokio-调度) |
@@ -381,6 +382,220 @@ constructor 返回 `Result<Self, E: Debug>` 时，adapter 将错误保存为 Deb
 函数选择、参数到字段的真实来源映射、宏卫生及受支持的返回路径属于工具职责，
 统一见[构造函数注入](../docs/NESTRS_MACROS.md#35-用-constructor-明确初始化业务状态)
 与[rustc 集成指南](../docs/NESTRS_RUSTC_EXTENSION_GUIDE.md)。
+
+### injectable 与 factory 返回同一类型时怎样选择
+
+`#[injectable]` 与 `#[factory]` 都能声明服务的创建方式。理解它们的关系，首先要区分
+**具体服务的创建声明**和**等待闭合类型的泛型蓝图**：普通非泛型 injectable 会贡献
+一个具体 provider；泛型 injectable 为后续实际需要的闭合类型提供构造蓝图。
+factory 则为其成功返回类型贡献具体 provider，返回 `Result<T, E>` 时服务类型是 `T`。
+同步或异步工厂遵循同一套选择规则。
+
+服务路由按**真实 Rust 类型与 key**区分，不按工厂函数名、源码模块或创建顺序区分。
+同一类型的别名不产生新身份；不同模块中各自定义的结构体即使同名，也不因此成为
+同一类型。默认 key、字符串 key、整数 key 分别匹配，例如字符串 `"7"` 与整数 `7`
+不是同一个 key。
+
+| 声明组合 | 编译器如何处理 | core 最终执行什么 |
+| --- | --- | --- |
+| 非泛型 injectable 与 factory，同类型、同 key | 两个具体 provider 冲突，报告 `NESTRS-DI007` | 没有可执行的合法计划 |
+| 非泛型 injectable 与 factory，同类型、不同 key | 保留两条独立路由 | 按查询或输入的 key 执行对应构造 |
+| 普通结构体仅由 factory 提供 | factory 本身完成服务声明 | 执行工厂，不要求结构体标记 injectable |
+| 泛型 injectable 蓝图与返回闭合类型的 factory，同类型、同 key | 显式 factory 优先，不为这一路由加入蓝图 provider | 执行工厂 |
+| 泛型蓝图与 factory 的 key 不同 | factory 不替代蓝图自己的 key；按闭合需求保留蓝图 | 各自按 key 执行构造 |
+
+这些选择在最终 binary / test 的编译期完成。core 接收已经选定的 Class 或 Factory
+入口，运行时不会重新决定“这次用结构体还是用工厂”，也没有后注册覆盖前注册的规则。
+工厂初始化失败时按自身生命周期的失败规则传播和缓存，不会转而尝试 Class 构造路径。
+
+#### 非泛型同类型同 key 会在编译时拒绝
+
+下面是一个**预期编译失败**的完整最小程序。两个声明都使用默认 key：
+
+```rust
+use nestrs::{factory, injectable};
+
+#[injectable]
+struct Service;
+
+#[factory]
+fn make_service() -> Service {
+    Service
+}
+
+fn main() {}
+```
+
+通过 `cargo nestrs check` 或 `cargo nestrs build` 检查时，诊断会指向工厂的返回类型，
+并标出结构体的另一处创建声明。诊断关键内容为：
+
+```text
+error: [NESTRS-DI007] `Service` 在默认 key 下有多个创建声明
+  = note: 两个声明提供同一真实类型与 key；primary 不能覆盖重复的具体类型声明。
+  = help: 保留一个创建声明，或为它们设置不同 key。
+```
+
+这里的 `main` 没有调用容器 `build()`，仍然会报错；Lazy 初始化或从不查询这个服务
+也不会推迟或跳过重复声明检查。library 可以先贡献声明，冲突在最终入口汇总时验证。
+
+增加 `#[primary]` 不能消除这种冲突。primary 用于同 key 的接口多候选选择，不能
+在同一具体类型的两个创建声明之间挑选一个。生命周期、服务级 lazy 与 cleanup
+也不参与路由身份：例如一个声明为 Singleton、另一个为 Transient，仍然重复。
+
+#### 统一由工厂创建时，只保留 factory 声明
+
+如果需要连接外部资源、执行异步初始化，或完全控制实例如何产生，可以使用普通
+结构体配合 factory。下面的 `Service` 不需要 `#[injectable]`：
+
+```rust
+use nestrs::factory;
+
+struct Service {
+    value: u32,
+}
+
+#[factory]
+fn make_service() -> Service {
+    Service { value: 42 }
+}
+```
+
+`get_required_service::<Service>().await` 会使用这个工厂对应的路由，其他服务也可以
+正常注入 `Service`。若只想定制 injectable 的同步构造逻辑，可以保留
+`#[injectable]` 并使用 `#[constructor]`；constructor 替换同一个 Class provider
+的自动字段构造，不会额外声明第二个 provider。相关语法分别见
+[工厂声明](../docs/NESTRS_MACROS.md#4-用-factory-控制创建过程)和
+[构造函数注入](../docs/NESTRS_MACROS.md#35-用-constructor-明确初始化业务状态)。
+
+#### 两种创建方式都需要时，用不同 key 区分
+
+以下完整程序保留默认的 Class 路由，再以 `"custom"` 注册一条 Factory 路由。
+`value` 是普通字段，Class 自动构造时调用 `u32::default()`，因此得到 `0`；
+工厂则明确返回 `42`：
+
+```rust
+use nestrs::{factory, injectable};
+use nestrs_core::{ServiceKey, ServiceProvider};
+
+#[injectable]
+struct Service {
+    value: u32,
+}
+
+#[factory(key = "custom")]
+fn make_service() -> Service {
+    Service { value: 42 }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ServiceProvider::build().await?;
+    let default = provider.get_required_service::<Service>().await?;
+    let custom = provider
+        .get_required_keyed_service::<Service>(ServiceKey::Named("custom".into()))
+        .await?;
+
+    assert_eq!(default.value, 0);
+    assert_eq!(custom.value, 42);
+    assert!(!std::ptr::eq(default, custom));
+    provider.dispose_async().await?;
+    Ok(())
+}
+```
+
+两个 provider 分别遵循自身声明的生命周期、预热策略和 cleanup；同为 Singleton
+时也各自缓存自己的实例。它们不会因为返回类型相同就共享同一份实例。字段注入同样
+按 key 选择：`#[inject]` 选择默认路由，`#[inject("custom")]` 选择工厂路由。
+服务级 lazy 只影响自主预热，不改变这种选择；完整规则见[生命周期与预热](#6-生命周期与预热)。
+
+#### 泛型蓝图允许工厂提供某个闭合类型
+
+泛型 `#[injectable] struct Service<T>` 没有预先为所有 `T` 注册具体服务。
+编译器遇到实际需要的 `Service<u64>` 等闭合类型时，才考虑使用蓝图创建 provider。
+如果该真实类型与蓝图的 key 已有显式 factory，就采用 factory，避免再加入一份
+相同路由的 Class provider。这个优先规则针对按需物化的蓝图，不适用于前面两个
+非泛型具体声明的冲突，也不能使两个同类型、同 key 的 factory 合法共存。
+
+下面的完整程序同时请求两个闭合类型：`Service<u64>` 由工厂创建，
+`Service<u32>` 由泛型蓝图创建。
+
+```rust
+use nestrs::{factory, injectable};
+use nestrs_core::ServiceProvider;
+use std::marker::PhantomData;
+
+#[injectable]
+struct Service<T: Send + Sync + 'static> {
+    value: u32,
+    marker: PhantomData<T>,
+}
+
+#[factory]
+fn make_u64_service() -> Service<u64> {
+    Service {
+        value: 42,
+        marker: PhantomData,
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ServiceProvider::build().await?;
+    let from_factory = provider.get_required_service::<Service<u64>>().await?;
+    let from_blueprint = provider.get_required_service::<Service<u32>>().await?;
+
+    assert_eq!(from_factory.value, 42);
+    assert_eq!(from_blueprint.value, 0);
+    provider.dispose_async().await?;
+    Ok(())
+}
+```
+
+该选择严格限定在具体类型与 key 上：
+
+- `Service<u64>` 的工厂不会替代 `Service<u32>` 的蓝图，也不会枚举其他未被需要的类型。
+- 默认、字符串和整数 key 都遵循相同规则。工厂使用 `key = "custom"` 时，不会
+  压制蓝图的默认 key；默认路由仍可在需要时物化。
+- 被替代的蓝图构造路径不会贡献这一路由的字段依赖需求；最终采用工厂参数声明的
+  输入。其他已物化的蓝图以及所有具体 provider 继续接受完整图验证；某个具体
+  provider 即使从未查询，也不能因此绕过验证。
+- 未选中蓝图不等于跳过 Rust 检查。结构体及其生成代码仍须通过正常的类型、借用与
+  trait 检查，工厂也必须返回合法的闭合类型值。
+
+#### 工厂返回后不会再执行一次 Class 构造
+
+每个已选 provider 只有一个构造入口。Factory adapter 调用工厂，取得成功值后交给
+统一的实例发布、lease 保活、缓存和关闭流程；core 不会再对这个值执行 injectable
+的字段注入、`#[constructor]`、字段 `Default` 或 `#[value(...)]` 初始化表达式。
+如果工厂业务代码自己调用了某个普通构造函数，则该调用属于工厂自身的逻辑。
+
+| 执行信息 | Class provider | Factory provider |
+| --- | --- | --- |
+| 依赖来源 | 自动字段的注入声明，或显式 constructor 参数 | factory 参数 |
+| 实例如何产生 | 自动初始化字段，或执行选中的 constructor | 执行工厂并取得成功返回值 |
+| 生命周期、key、primary、服务级 lazy、cleanup | injectable 及其组合属性的配置 | factory 及其组合属性的配置 |
+
+Factory provider 不继承或合并返回类型上 injectable 的 provider 配置。即使泛型
+蓝图与 factory 使用相同 key，最终也采用工厂这一整份配置；工厂未设置的项目使用
+它自己的默认规则，例如未指定 lifetime 时为 Singleton，未指定服务级 lazy 时
+不设置服务级预热覆盖，未指定 cleanup 时没有该 provider 的异步清理回调。
+未覆盖时的具体预热行为由本次 build 或 scope 预热操作决定，见第 6 节。
+
+结构体的 Rust 定义仍然有效：injectable 对注入字段生成的 `Injection<T>`、
+`LazyInjection<T>` 或 optional 包装不会因改由 factory 创建而消失。工厂必须按
+这些真实字段类型构造合法值，不能期待返回之后由容器自动补齐字段。普通工厂参数
+是 frame 内的借用，不能直接伪装成拥有 lease 的字段令牌；延迟参数的按值交付与
+跨 await 规则见[构造输入与 factory frame](#构造输入与-factory-frame)。
+
+实现可对照工具侧的[具体路由判重](../cargo-nestrs/src/di_plan.rs)、
+[重复声明诊断](../cargo-nestrs/src/compiler/di_plan/diagnostics.rs)和
+[闭合蓝图选择](../cargo-nestrs/src/compiler/di_plan/mod.rs)，以及 core 的
+[Class / Factory 执行契约](src/activation/adapter.rs)。已有
+[图模型测试](../cargo-nestrs/tests/di_plan.rs)覆盖 primary 不能消除具体类型重复、
+不同 key 保留独立路由；[真实 driver 契约](../cargo-nestrs/tests/registry_abi.rs)通过
+[同 key 工厂优先](../tools/compiler-probe/fixtures/auto-binding/src/bin/factory_override.rs)与
+[不同 key 保留蓝图](../tools/compiler-probe/fixtures/auto-binding/src/bin/factory_other_key.rs)
+验证实际查询结果。
 
 ### 普通方法如何贡献查询根
 
