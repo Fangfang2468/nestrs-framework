@@ -8,10 +8,8 @@
 //! 编译器入口是私有、版本化的协议。所有写入只发生在 `load` 的栈上装配器中，完成后
 //! 装配器整体消费并封存。后续每次 build 共享计划，各自建立独立的运行期 owner。
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, OnceLock},
-};
+use ahash::AHashMap;
+use std::sync::{Arc, OnceLock};
 
 use super::{
     AbsentInput, CompiledDependency, CompiledNode, DependencyInput, NodePolicy, RootRoute,
@@ -47,7 +45,7 @@ struct PlanAssembly {
     options: ServiceProviderOptions,
     nodes: Vec<PendingNode>,
     bindings: Vec<ProjectionAdapter>,
-    routes: HashMap<crate::service::ServiceIdentifier, RootRoute>,
+    routes: AHashMap<crate::service::ServiceIdentifier, RootRoute>,
     topological_order: Vec<usize>,
     dependents: Vec<Vec<usize>>,
 }

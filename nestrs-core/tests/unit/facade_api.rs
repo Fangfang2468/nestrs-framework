@@ -1,10 +1,10 @@
 use crate as nestrs_core;
+use ahash::AHashMap;
 use nestrs_core::{
     BuildError, DisposeError, InitializationMode, ResolveError, ServiceKey, ServiceProvider,
     ServiceProviderOptions, ServiceScope,
 };
 use std::{
-    collections::HashMap,
     error::Error,
     num::NonZeroUsize,
     sync::{
@@ -157,7 +157,7 @@ fn observed_projection() -> ServiceProjector {
 /// OnceLock，也不为应用添加可替换计划的入口。两种 key 各有一个无依赖 provider。
 fn observed_provider(lifetime: ServiceLifetime, project: ServiceProjector) -> ServiceProvider {
     let mut nodes = Vec::new();
-    let mut routes = HashMap::new();
+    let mut routes = AHashMap::new();
     for key in [None, Some(ServiceKey::Named("named".to_owned()))] {
         let provider = nodes.len();
         let identifier =

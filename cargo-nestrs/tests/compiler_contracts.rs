@@ -48,6 +48,7 @@ path = "lib.rs"
 doctest = false
 
 [dependencies]
+ahash = "0.8.12"
 thiserror = "2"
 serde_json = "1"
 tokio = {{ version = "1.53.1", default-features = false, features = ["rt-multi-thread", "sync", "macros", "time"] }}

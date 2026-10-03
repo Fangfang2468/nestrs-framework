@@ -4,8 +4,8 @@
 #[path = "subscriptions.rs"]
 mod subscriptions;
 
+use ahash::AHashMap;
 use std::{
-    collections::HashMap,
     sync::{
         Arc, Condvar, Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
@@ -76,7 +76,7 @@ fn graph(nodes: Vec<CompiledNode>) -> Arc<ValidatedGraph> {
         topological_order: (0..nodes.len()).collect(),
         dependents,
         nodes,
-        routes: HashMap::new(),
+        routes: AHashMap::new(),
     })
 }
 

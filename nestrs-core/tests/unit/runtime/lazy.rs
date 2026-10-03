@@ -13,12 +13,10 @@ use crate::{
     },
     service::{ServiceIdentifier, ServiceKey, ServiceSource, ServiceType},
 };
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+use ahash::AHashMap;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 static DROPS: AtomicUsize = AtomicUsize::new(0);
@@ -160,7 +158,7 @@ async fn lazy_edges_skip_activation_waits_but_order_cleanup_after_the_consumer()
         ],
         dependents: vec![vec![], vec![0]],
         topological_order: vec![1, 0],
-        routes: HashMap::new(),
+        routes: AHashMap::new(),
     });
     let (runtime, owner) = super::super::Runtime::start(graph, 1);
     let lease = runtime.resolve(&owner, 0).await.unwrap();
@@ -491,7 +489,7 @@ fn ten_thousand_deferred_nodes_construct_close_and_release_on_small_stack() {
                     nodes,
                     dependents,
                     topological_order: (0..DEPTH).rev().collect(),
-                    routes: HashMap::new(),
+                    routes: AHashMap::new(),
                 });
                 let (container, owner) = super::super::Runtime::start(graph, 1);
                 let lease = container.resolve(&owner, 0).await.unwrap();
@@ -597,7 +595,7 @@ fn an_accepted_lazy_request_reports_runtime_exit_instead_of_waiting_forever() {
         ],
         dependents: vec![vec![], vec![0]],
         topological_order: vec![1, 0],
-        routes: HashMap::new(),
+        routes: AHashMap::new(),
     });
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

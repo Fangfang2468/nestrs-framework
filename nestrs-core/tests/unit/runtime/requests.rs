@@ -1,7 +1,7 @@
 //! 查询等待端的所有权回归：RAII 退订覆盖取消、完成竞争和预热中的全部请求。
 
+use ahash::AHashMap;
 use std::{
-    collections::HashMap,
     future::poll_fn,
     sync::{Arc, atomic::AtomicU64},
     task::Poll,
@@ -54,7 +54,7 @@ fn fixture() -> (Runtime, Arc<Owner>, mpsc::UnboundedReceiver<Command>) {
             nodes,
             dependents: vec![vec![], vec![], vec![]],
             topological_order: vec![0, 1, 2],
-            routes: HashMap::new(),
+            routes: AHashMap::new(),
         }),
         commands,
         next_owner: AtomicU64::new(1),

@@ -21,7 +21,8 @@ mod error;
 mod names;
 pub(crate) mod plan;
 
-use std::{collections::HashMap, sync::Arc};
+use ahash::AHashMap;
+use std::sync::Arc;
 
 use crate::{
     ServiceLifetime,
@@ -48,7 +49,8 @@ pub(crate) type ProviderId = usize;
 #[derive(Debug)]
 pub(crate) struct ValidatedGraph {
     pub(crate) nodes: Vec<CompiledNode>,
-    pub(crate) routes: HashMap<ServiceIdentifier, RootRoute>,
+    /// 查询只需按完整服务身份查找；使用随机种子的 aHash，不把哈希顺序用于图语义。
+    pub(crate) routes: AHashMap<ServiceIdentifier, RootRoute>,
     /// 依赖总在消费者之前，用于预热与已验证的 Scope 能力传播。
     pub(crate) topological_order: Vec<ProviderId>,
     /// 每个 Provider 的去重反向邻接表，按确定的 ProviderId 顺序排列。

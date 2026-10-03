@@ -3,7 +3,7 @@
 //! provider 是静态声明，task 是某次实际构造 occurrence。Singleton/Scoped 可共享 task，
 //! Transient 每个消费槽位创建新的 task；不要把重复依赖槽位合并为同一个 Transient。
 
-use std::collections::{HashMap, HashSet};
+use ahash::{AHashMap, AHashSet};
 
 use crate::activation::DependencyLease;
 
@@ -39,8 +39,8 @@ pub(super) struct Activation {
     pub(super) provider: usize,
     pub(super) state: TaskState,
     // 同一个消费者可出现多个不同输入槽位，逐一保留才能维持重复注入语义。
-    pub(super) parents: HashSet<(TaskId, usize)>,
-    pub(super) query_waiters: HashMap<QueryId, ResolveWaiter>,
+    pub(super) parents: AHashSet<(TaskId, usize)>,
+    pub(super) query_waiters: AHashMap<QueryId, ResolveWaiter>,
     // 延迟接收端归字段所有，取消一次 get 不应注销仍可接续的 watch 订阅。
     pub(super) lazy_waiters: Vec<tokio::sync::watch::Sender<Option<Resolution>>>,
 }

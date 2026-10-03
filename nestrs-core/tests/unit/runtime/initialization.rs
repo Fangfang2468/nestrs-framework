@@ -1,6 +1,7 @@
 //! 服务声明级初始化策略只影响预热入口，不改变依赖构造、缓存与 owner 边界。
 
-use std::{collections::HashMap, sync::Arc};
+use ahash::AHashMap;
+use std::sync::Arc;
 
 use super::{Owner, Runtime};
 use crate::{
@@ -50,7 +51,7 @@ fn graph(nodes: Vec<CompiledNode>) -> Arc<ValidatedGraph> {
         topological_order: (0..nodes.len()).collect(),
         nodes,
         dependents,
-        routes: HashMap::new(),
+        routes: AHashMap::new(),
     })
 }
 

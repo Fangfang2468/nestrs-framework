@@ -4,10 +4,8 @@
 //! 不需要额外锁。任务表只保存未结束的 occurrence；已完成的共享结果放在 owner 缓存。
 //! 展开和失败传播都使用显式工作队列，深层服务图不会变成 Rust 调用栈。
 
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    sync::Arc,
-};
+use ahash::{AHashMap, AHashSet};
+use std::{collections::VecDeque, sync::Arc};
 
 use tokio::{
     sync::mpsc,
@@ -46,14 +44,15 @@ pub(super) struct Coordinator {
     domain: Arc<ReleaseDomain>,
     commands: mpsc::UnboundedReceiver<Command>,
     commands_open: bool,
-    owners: HashMap<OwnerId, OwnerState>,
-    tasks: HashMap<TaskId, Activation>,
+    // 调度索引采用随机种子的 aHash；依赖推进与关闭次序仍由显式队列和图顺序决定。
+    owners: AHashMap<OwnerId, OwnerState>,
+    tasks: AHashMap<TaskId, Activation>,
     // 只定位尚未完成的普通查询。退订直接找到所属任务，不扫描其他等待者或任务。
-    query_tasks: HashMap<QueryId, TaskId>,
+    query_tasks: AHashMap<QueryId, TaskId>,
     next_task: TaskId,
     ready: VecDeque<TaskId>,
     jobs: JoinSet<JobCompletion>,
-    job_kinds: HashMap<Id, JobKind>,
+    job_kinds: AHashMap<Id, JobKind>,
     running_activations: usize,
     max_activations: usize,
     closed_scope_errors: Vec<String>,
@@ -71,13 +70,13 @@ impl Coordinator {
             domain: ReleaseDomain::new(),
             commands,
             commands_open: true,
-            owners: HashMap::from([(ROOT, OwnerState::new(root))]),
-            tasks: HashMap::new(),
-            query_tasks: HashMap::new(),
+            owners: AHashMap::from([(ROOT, OwnerState::new(root))]),
+            tasks: AHashMap::new(),
+            query_tasks: AHashMap::new(),
             next_task: 0,
             ready: VecDeque::new(),
             jobs: JoinSet::new(),
-            job_kinds: HashMap::new(),
+            job_kinds: AHashMap::new(),
             running_activations: 0,
             max_activations,
             closed_scope_errors: Vec::new(),
@@ -234,8 +233,8 @@ impl Coordinator {
                 owner,
                 provider,
                 state: TaskState::Unexpanded,
-                parents: HashSet::new(),
-                query_waiters: HashMap::new(),
+                parents: AHashSet::new(),
+                query_waiters: AHashMap::new(),
                 lazy_waiters: Vec::new(),
             },
         );

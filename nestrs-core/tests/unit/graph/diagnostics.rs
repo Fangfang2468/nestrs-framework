@@ -1,6 +1,7 @@
 //! 验证只读图数据保留请求、槽位、key、来源与类型展示身份，不执行服务入口。
 
-use std::{any::TypeId, collections::HashMap};
+use ahash::AHashMap;
+use std::any::TypeId;
 
 use super::*;
 use crate::{
@@ -98,7 +99,7 @@ fn graph(nodes: Vec<CompiledNode>) -> ValidatedGraph {
         topological_order: (0..nodes.len()).rev().collect(),
         nodes,
         dependents,
-        routes: HashMap::new(),
+        routes: AHashMap::new(),
     }
 }
 

@@ -4,7 +4,8 @@
 //! 相互推进：依赖请求激活接口能力，接口能力又可能物化新的 concrete 声明。队列耗尽后
 //! 才分配最终 ProviderId，避免回调发现顺序影响查询路由与诊断。
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use ahash::{AHashMap, AHashSet};
+use std::collections::VecDeque;
 
 use super::{
     Constructor, Declaration, GraphDiagnostic, Kind, binding_order, sort_declarations, source,
@@ -44,8 +45,8 @@ struct CatalogEntry {
 /// 只有这个对象能把新声明加入展开集合，重复与优先级规则集中在两个插入方法中。
 struct DeclarationExpansion<'diagnostics> {
     providers: Vec<Declaration>,
-    catalog: HashMap<ServiceIdentifier, CatalogEntry>,
-    materialized: HashSet<(ServiceType, usize)>,
+    catalog: AHashMap<ServiceIdentifier, CatalogEntry>,
+    materialized: AHashSet<(ServiceType, usize)>,
     diagnostics: &'diagnostics mut Vec<GraphDiagnostic>,
 }
 
@@ -55,8 +56,8 @@ impl<'diagnostics> DeclarationExpansion<'diagnostics> {
         sort_declarations(&mut declarations);
         let mut expansion = Self {
             providers: Vec::with_capacity(declarations.len()),
-            catalog: HashMap::new(),
-            materialized: HashSet::new(),
+            catalog: AHashMap::new(),
+            materialized: AHashSet::new(),
             diagnostics,
         };
         for declaration in declarations {
@@ -174,7 +175,7 @@ pub(super) fn expand(
     } = snapshot;
 
     blueprints.sort_by_key(|entry| (entry.service_type.name, entry.source));
-    let mut blueprint_catalog: HashMap<ServiceType, Vec<ClosedProviderCallback>> = HashMap::new();
+    let mut blueprint_catalog: AHashMap<ServiceType, Vec<ClosedProviderCallback>> = AHashMap::new();
     for blueprint in blueprints {
         if let Some(callback) = blueprint.materialize {
             blueprint_catalog
@@ -188,11 +189,11 @@ pub(super) fn expand(
     // 上游投影是被动能力。仅在完整入口真正请求该接口时启用，且不能覆盖显式 pair。
     // 多个 crate 可以贡献同一自动 pair；其幂等不能掩盖重复的显式 binding。
     automatic_bindings.sort_by_key(binding_order);
-    let mut known_pairs: HashSet<_> = bindings
+    let mut known_pairs: AHashSet<_> = bindings
         .iter()
         .map(|binding| (binding.trait_type, binding.concrete_type))
         .collect();
-    let mut automatic_by_interface: HashMap<ServiceType, Vec<TraitBinding>> = HashMap::new();
+    let mut automatic_by_interface: AHashMap<ServiceType, Vec<TraitBinding>> = AHashMap::new();
     for binding in automatic_bindings {
         if known_pairs.insert((binding.trait_type, binding.concrete_type)) {
             automatic_by_interface
@@ -203,7 +204,7 @@ pub(super) fn expand(
     }
     let mut requested_interfaces: VecDeque<_> =
         roots.iter().map(|root| root.service_type).collect();
-    let mut visited_interfaces = HashSet::new();
+    let mut visited_interfaces = AHashSet::new();
 
     // 显式 binding 的闭合 self 类型本身也是声明锚点；只查询 dyn Trait 时，也必须
     // 先发现对应泛型 Provider，再判断 binding 是否孤立。

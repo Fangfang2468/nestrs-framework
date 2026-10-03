@@ -1,6 +1,7 @@
 //! 未完成的共享构造只保留仍有效的订阅；取消查询或父任务失败不取消其构造。
 
-use std::{collections::HashMap, sync::Arc};
+use ahash::AHashMap;
+use std::sync::Arc;
 
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -333,7 +334,7 @@ fn deep_failure_unlinks_pending_siblings_without_recursive_retirement() {
             assert!(result.try_recv().unwrap().is_err());
             assert_eq!(coordinator.tasks.len(), 1);
             assert!(coordinator.tasks[&pending].parents.is_empty());
-            assert_eq!(coordinator.query_tasks, HashMap::new());
+            assert_eq!(coordinator.query_tasks, AHashMap::new());
             assert_eq!(coordinator.owners[&ROOT].active_tasks.len(), 1);
             assert!(root.journal.lock().unwrap().is_empty());
         })

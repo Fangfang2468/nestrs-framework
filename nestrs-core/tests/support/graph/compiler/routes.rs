@@ -3,7 +3,7 @@
 //! 展开阶段已经收集完整声明；本阶段不再物化类型，也不执行构造。
 //! binding 只提供投影能力，同一个 concrete Provider 不会因多个接口而复制实例。
 
-use std::collections::HashMap;
+use ahash::AHashMap;
 
 use super::{
     Declaration, GraphDiagnostic, Kind, ProviderId, RootRoute, binding_order, compare_tokens,
@@ -13,11 +13,10 @@ use crate::{
     registration::binding::TraitBinding,
     service::{ServiceIdentifier, ServiceType},
 };
-
 /// 查询路由供冻结图使用，binding 索引只在输入编译期间选择正确的 typed preparer。
 pub(super) struct SelectedRoutes {
-    pub(super) roots: HashMap<ServiceIdentifier, RootRoute>,
-    pub(super) bindings: HashMap<(ServiceType, ServiceType), TraitBinding>,
+    pub(super) roots: AHashMap<ServiceIdentifier, RootRoute>,
+    pub(super) bindings: AHashMap<(ServiceType, ServiceType), TraitBinding>,
 }
 
 /// 先建立 concrete 路由，再按 trait 与精确 key 分组；只有同组中的 primary 才参与决胜。
@@ -26,7 +25,7 @@ pub(super) fn select(
     mut bindings: Vec<TraitBinding>,
     diagnostics: &mut Vec<GraphDiagnostic>,
 ) -> SelectedRoutes {
-    let mut roots: HashMap<_, _> = providers
+    let mut roots: AHashMap<_, _> = providers
         .iter()
         .enumerate()
         .map(|(provider, declaration)| {
@@ -39,7 +38,7 @@ pub(super) fn select(
             )
         })
         .collect();
-    let mut by_type: HashMap<ServiceType, Vec<ProviderId>> = HashMap::new();
+    let mut by_type: AHashMap<ServiceType, Vec<ProviderId>> = AHashMap::new();
     for (provider, declaration) in providers.iter().enumerate() {
         by_type
             .entry(declaration.identifier.service_type)
@@ -48,9 +47,9 @@ pub(super) fn select(
     }
 
     bindings.sort_by_key(binding_order);
-    let mut binding_index = HashMap::new();
-    let mut candidates: HashMap<ServiceIdentifier, Vec<(ProviderId, TraitBinding)>> =
-        HashMap::new();
+    let mut binding_index = AHashMap::new();
+    let mut candidates: AHashMap<ServiceIdentifier, Vec<(ProviderId, TraitBinding)>> =
+        AHashMap::new();
     for binding in bindings {
         if let Some(original) =
             binding_index.insert((binding.trait_type, binding.concrete_type), binding)
@@ -101,7 +100,7 @@ pub(super) fn select(
         }
     }
 
-    // HashMap 只承担索引；在产生诊断与路由选择前显式排序，避免哈希/收集顺序影响结果。
+    // AHashMap 只承担索引；在产生诊断与路由选择前显式排序，避免哈希/收集顺序影响结果。
     let mut candidate_groups: Vec<_> = candidates.into_iter().collect();
     candidate_groups.sort_by(|(left, _), (right, _)| compare_tokens(left, right));
     for (identifier, candidates) in candidate_groups {

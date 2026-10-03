@@ -4,8 +4,9 @@
 //! journal 必须放在共享数据里：即使 Tokio 已停止、协调器 future 已被丢弃，
 //! 门面借用仍会保活成功发布的实例，已返回的 `&T` 才不会悬垂。
 
+use ahash::{AHashMap, AHashSet};
 use std::{
-    collections::{BinaryHeap, HashMap, HashSet},
+    collections::BinaryHeap,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU8, Ordering},
@@ -215,9 +216,9 @@ pub(super) enum OwnerPhase {
 pub(super) struct OwnerState {
     pub(super) data: Arc<OwnerData>,
     pub(super) phase: OwnerPhase,
-    pub(super) cache: HashMap<usize, CacheEntry>,
+    pub(super) cache: AHashMap<usize, CacheEntry>,
     // 集合只含未结束的 occurrence；is_empty 就是排空条件，不另维护容易失配的计数。
-    pub(super) active_tasks: HashSet<TaskId>,
+    pub(super) active_tasks: AHashSet<TaskId>,
     pub(super) errors: Vec<String>,
     pub(super) close_waiters: Vec<CloseWaiter>,
 }
@@ -227,8 +228,8 @@ impl OwnerState {
         Self {
             data,
             phase: OwnerPhase::Open,
-            cache: HashMap::new(),
-            active_tasks: HashSet::new(),
+            cache: AHashMap::new(),
+            active_tasks: AHashSet::new(),
             errors: Vec::new(),
             close_waiters: Vec::new(),
         }
