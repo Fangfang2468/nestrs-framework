@@ -20,6 +20,7 @@ pub(crate) type LazyReceiver = watch::Receiver<Option<Result<DependencyLease, Re
 /// 调用必须同步完成提交并返回接收端，不能在二者之间挂起。槽位只弱引用此对象，
 /// 避免 owner journal → 消费者 → 槽位 → owner 的强引用环。
 pub(crate) trait LazyResolver: Send + Sync {
+    /// 同步提交首次目标请求并返回可接续的结果订阅。
     fn request(&self, provider: usize) -> Result<LazyReceiver, &'static str>;
 }
 
@@ -28,14 +29,19 @@ pub(crate) trait LazyResolver: Send + Sync {
 /// 不在结构体声明上要求 `T: Injectable`，保留相互引用的 Rust 服务类型进行
 /// Send/Sync 共归纳检查的能力；实际交付方法再约束可注入类型。
 pub(super) struct DeferredSlot<T: ?Sized> {
+    /// 固定选择与当前字段实际 owner 的弱请求上下文。
     dependency: LazyDependency,
-    // OnceCell 的初始化 future 可以被取消，因此 receiver 不能只放在该 future 中。
-    // 锁仅覆盖同步读取/保存/取走，不跨 await，也不在持锁时释放用户实例。
+
+    /// 跨 get 取消保存原请求订阅，避免重复构造 Transient；不能只放在可取消的
+    /// OnceCell 初始化 future 中。锁仅覆盖同步访问，不跨 await 或用户实例释放。
     receiver: Mutex<Option<LazyReceiver>>,
+
+    /// 字段最终交付的令牌或错误；成功和失败均固定缓存。
     resolved: OnceCell<Result<Injection<T>, ResolveError>>,
 }
 
 impl<T: Injectable + ?Sized> DeferredSlot<T> {
+    /// 为当前消费槽位建立独立状态，并核对共享计划中的输入编号。
     pub(super) fn new(dependency: LazyDependency, input: InputSlot) -> Self {
         // 输入位置属于共享计划。生成的构造适配器只能把描述交付给同一个槽位。
         assert_eq!(
@@ -49,10 +55,12 @@ impl<T: Injectable + ?Sized> DeferredSlot<T> {
         }
     }
 
+    /// 复用已交付结果，或在等待许可通过后接续该字段的唯一请求。
     pub(super) async fn get(&self) -> Result<&T, ResolveError> {
         if let Some(result) = self.resolved.get() {
             return result.as_ref().map(|token| &**token).map_err(Clone::clone);
         }
+
         // 每个尚未交付的调用者都先检查，再争取 OnceCell 的初始化许可。若只在
         // initializer 中检查，另一个构造 worker 会先排队等待，无法及时拒绝死锁。
         // 回调不依赖 owner 存活；已接受请求在 owner 关闭后仍可从 receiver 交付结果。
@@ -80,6 +88,7 @@ impl<T: Injectable + ?Sized> DeferredSlot<T> {
         if let Some(receiver) = existing {
             return Ok(receiver);
         }
+
         // initialize 独占 OnceCell 的初始化许可，request 到保存之间又没有 await，
         // 因此无需持 receiver 锁调用协议。request 结束会释放临时 owner 强引用；若
         // 它恰是最后一份，可能销毁 journal 中的用户实例，必须让此过程发生在锁外。
@@ -94,6 +103,7 @@ impl<T: Injectable + ?Sized> DeferredSlot<T> {
         Ok(request)
     }
 
+    /// 等待已保存请求的完成结果，再投影为持有真实 lease 的令牌。
     async fn initialize(&self) -> Result<Injection<T>, ResolveError> {
         let mut receiver = self.subscribe()?;
         let lease = loop {
@@ -107,6 +117,7 @@ impl<T: Injectable + ?Sized> DeferredSlot<T> {
                     .error("Tokio 协调器已停止，延迟初始化未完成".into())
             })?;
         };
+
         // 后续投影与 token 交付全程同步。地址由实际 projector 检查，成功 token 自带
         // 强 lease；这里既不伪造借用，也不改变目标实例经过 ReleaseDomain 释放的路径。
         self.dependency.prepare(lease)

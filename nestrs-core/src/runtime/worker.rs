@@ -23,14 +23,24 @@ use std::{
 
 /// 一次就绪构造的执行上下文。调度器移交输入后，由 worker 独占准备与调用过程。
 pub(super) struct ActivationWorker {
+    /// 当前入口共享的不可变执行计划。
     graph: Arc<ValidatedGraph>,
+
+    /// 冻结计划中的 provider 节点编号。
     provider: usize,
+
+    /// 协调器按槽位交付的普通依赖 lease，延迟与缺席槽位不持目标。
     inputs: Vec<Option<DependencyLease>>,
+
+    /// 当前构造的任务标记及延迟输入弱请求能力。
     context: ActivationContext,
+
+    /// 实例最终释放使用的同步域，独立于 Tokio 任务存活。
     domain: Arc<ReleaseDomain>,
 }
 
 impl ActivationWorker {
+    /// 接收本次工作所需的固定计划与实例上下文，不查询或扩展依赖。
     pub(super) fn new(
         graph: Arc<ValidatedGraph>,
         provider: usize,
@@ -52,6 +62,7 @@ impl ActivationWorker {
         ActivationContext::run(self.construct()).await
     }
 
+    /// 将就绪输入组装为准确槽位，调用已选构造入口并交付带依赖 lease 的实例。
     async fn construct(self) -> Resolution {
         let Self {
             graph,
@@ -64,6 +75,7 @@ impl ActivationWorker {
         let convert = |error: crate::activation::ConstructionError| {
             ResolveError::construction(&node.identifier, node.common.source, error.to_string())
         };
+
         // 调度器已经构造 Immediate 目标。这里只组合已选执行信息和真实实例凭证，
         // 不调用逐参数准备回调；生成 adapter 会一次读取全部 typed 输入再执行业务代码。
         let slot_count = node.dependencies.len();
@@ -78,6 +90,7 @@ impl ActivationWorker {
                 slot_count,
             }));
         }
+
         // 已知准确槽位数，不能用 Result<Vec<_>> 收集丢失 size_hint 后按最小容量增长。
         // 输入记录含类型及执行能力，短参数列表的多余容量会抵消去除逐参数 Box 的收益。
         let mut selected = Vec::with_capacity(slot_count);
@@ -112,6 +125,7 @@ impl ActivationWorker {
                             slot,
                         }));
                     }
+
                     // 共享描述与实际 owner 在本次槽位组合；不提交目标请求或收纳强 lease。
                     ConstructionInput::lazy(service_type, kind, context.dependency(plan.clone()))
                 }
@@ -119,6 +133,7 @@ impl ActivationWorker {
             selected.push(input);
         }
         let inputs = ConstructionInputs::new(selected).map_err(convert)?;
+
         // 延迟输入已经保存弱能力，worker 不在用户构造 future 中额外持有上下文。
         drop(context);
         let (service, dependencies) = match node.constructor {
@@ -139,6 +154,7 @@ impl ActivationWorker {
                 (service, frame.into_dependencies())
             }
         };
+
         // 在发布前确认类型身份。任何失败都会释放未发布的结果，不允许错误类型进入缓存或 journal。
         if service.service_type() != node.identifier.service_type {
             return Err(ResolveError::construction(
@@ -153,15 +169,20 @@ impl ActivationWorker {
 
 /// 一个已发布实例的关闭上下文，包含 hook 及本次释放触发的析构工作。
 pub(super) struct CleanupWorker {
+    /// 本次负责清理的已发布实例及其 provider 身份。
     entry: Published,
+
+    /// 当前入口共享的不可变执行计划。
     graph: Arc<ValidatedGraph>,
 }
 
 impl CleanupWorker {
+    /// 接管一个已发布实例及其清理计划，等待协调器安排本次关闭工作。
     pub(super) fn new(entry: Published, graph: Arc<ValidatedGraph>) -> Self {
         Self { entry, graph }
     }
 
+    /// 执行 cleanup 并等待本次释放工作，汇总各阶段 panic 后交还协调器。
     pub(super) async fn run(self) -> Vec<String> {
         let Self { entry, graph } = self;
         let node = &graph.nodes[entry.provider];
@@ -172,6 +193,7 @@ impl CleanupWorker {
                 node.identifier, node.common.source,
             )
         };
+
         // hook 的创建、每次 poll 和 future 析构都可能 panic，分别记录才能继续清理剩余实例。
         // 只有整个 hook 结束且其 future 被释放后，才释放当前实例；协调器随后才推进下一个 cleanup。
         if let Some(hook) = node.common.cleanup {
@@ -203,6 +225,7 @@ impl CleanupWorker {
                 }
             }
         }
+
         // 逃逸 lease 可以延长内存存活，不能阻塞逻辑关闭；只有当前释放触发的析构工作需要等待。
         if let Some(completion) = entry.lease.release_tracked() {
             for detail in completion.await {

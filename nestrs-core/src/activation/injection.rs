@@ -17,7 +17,10 @@ use crate::service::Injectable;
 /// `T` 可以是 `dyn Trait`。这时 `ptr` 是由编译器生成的类型化投影创建的完整 trait
 /// object 指针；服务实例的 owner 仍然是对应具体类型的 `InstanceRecord`。
 pub struct Injection<T: ?Sized> {
+    /// 经过准确类型或 trait 投影核对的完整稳定地址。
     ptr: NonNull<T>,
+
+    /// 保活该地址指向的实例及其普通依赖闭包。
     _lease: DependencyLease,
 }
 
@@ -43,6 +46,7 @@ where
         self.ptr
     }
 
+    /// 克隆同一实例的保活凭证，供投影核对或后续交付使用。
     pub(crate) fn lease(&self) -> DependencyLease {
         self._lease.clone()
     }
@@ -54,6 +58,7 @@ where
 {
     type Target = T;
 
+    /// 在令牌借用期内提供已验证目标的共享引用。
     #[inline]
     fn deref(&self) -> &Self::Target {
         // SAFETY: 本令牌持有准确投影实例的强 lease；字段构造保证地址稳定且只读，
@@ -67,6 +72,7 @@ where
 // 后者会阻断相互注入类型的 Send/Sync 共归纳检查，使 Rust 提前拒绝类型，无法交由图
 // 编译器给出真正的循环依赖诊断。
 unsafe impl<T: ?Sized + Send + Sync + 'static> Send for Injection<T> {}
+
 // SAFETY: 与上面的 Send 相同，共享令牌只会得到共享引用，lease 覆盖全部读取的存活期。
 unsafe impl<T: ?Sized + Send + Sync + 'static> Sync for Injection<T> {}
 

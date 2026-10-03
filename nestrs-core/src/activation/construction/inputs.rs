@@ -20,21 +20,31 @@ use super::{ConstructionError, InputSlot, LazyDependency, ProjectionTarget, Serv
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputKind {
+    /// 必须交付已构造实例的普通输入。
     Required,
+
+    /// 交付普通实例令牌或已确认的缺席值。
     Optional,
+
+    /// 必须交付能够首次获取目标的延迟句柄。
     LazyRequired,
+
+    /// 交付延迟句柄或已确认的缺席值。
     LazyOptional,
 }
 
 impl InputKind {
+    /// 判断该交付形态是否允许冻结计划选择缺席。
     pub(crate) fn is_optional(self) -> bool {
         matches!(self, Self::Optional | Self::LazyOptional)
     }
 
+    /// 判断该槽位是否交付延迟句柄，而非已构造实例。
     pub(crate) fn is_lazy(self) -> bool {
         matches!(self, Self::LazyRequired | Self::LazyOptional)
     }
 
+    /// 将期望的交付形态转换为带输入位置的协议错误。
     fn expected_error(self, slot: InputSlot) -> ConstructionError {
         match self {
             Self::Required => ConstructionError::RequiredInputExpected { slot },
@@ -50,21 +60,36 @@ impl InputKind {
 /// 只有 runtime 能提供真实 lease 或当前 owner 的弱请求能力。创建整个输入集合时
 /// 验证数据与交付形态一致，之后 adapter 只能读取，不能替换来源。
 pub(crate) struct ConstructionInput {
+    /// 该值或输入的准确 Rust 类型身份，用于交付前核对。
     service_type: ServiceType,
+
+    /// 固定的必选、可选、普通或延迟交付形态。
     kind: InputKind,
+
+    /// 与交付形态对应的真实执行数据。
     source: InputSource,
 }
 
+/// 一个输入实际拥有的数据：缺席、就绪实例或延迟请求上下文。
 enum InputSource {
+    /// 冻结选择确认该可选输入没有目标。
     Absent,
+
+    /// 持有就绪实例及已选投影，可直接交付普通令牌。
     Immediate {
+        /// 保活已选真实实例的强所有权凭证。
         lease: DependencyLease,
+
+        /// 已选实例的准确类型投影，不重新选择目标。
         project: ServiceProjector,
     },
+
+    /// 只保存首次请求目标所需的计划与 owner 能力。
     Lazy(LazyDependency),
 }
 
 impl ConstructionInput {
+    /// 记录已经确认缺席的可选输入；完整集合建立时再核对形态。
     pub(crate) fn absent(service_type: ServiceType, kind: InputKind) -> Self {
         Self {
             service_type,
@@ -73,6 +98,7 @@ impl ConstructionInput {
         }
     }
 
+    /// 记录就绪实例及其已选投影，保留真实 lease 到读取成功。
     pub(crate) fn immediate(
         service_type: ServiceType,
         kind: InputKind,
@@ -86,6 +112,7 @@ impl ConstructionInput {
         }
     }
 
+    /// 记录延迟输入的计划与 owner 请求能力，不在这里请求目标。
     pub(crate) fn lazy(
         service_type: ServiceType,
         kind: InputKind,
@@ -98,6 +125,7 @@ impl ConstructionInput {
         }
     }
 
+    /// 检查缺席、立即或延迟来源是否符合交付形态及固定槽位。
     fn validate_source(&self, slot: InputSlot) -> Result<(), ConstructionError> {
         match &self.source {
             InputSource::Absent if !self.kind.is_optional() => {
@@ -117,6 +145,7 @@ impl ConstructionInput {
         }
     }
 
+    /// 按准确 Rust 类型和输入形态检查读取请求，不消费槽位。
     fn validate<T: Injectable + ?Sized>(
         &self,
         slot: InputSlot,
@@ -135,6 +164,7 @@ impl ConstructionInput {
         Ok(())
     }
 
+    /// 从现有来源投影令牌；失败时原槽位仍保留其 lease。
     fn project<T: Injectable + ?Sized>(
         &self,
         slot: InputSlot,
@@ -157,11 +187,16 @@ impl ConstructionInput {
 /// [`Self::ensure_all_consumed`]，随后才执行用户 constructor、factory、Default 或 value。
 #[doc(hidden)]
 pub struct ConstructionInputs {
+    /// 逐槽保存可用或已消费状态，不合并重复类型输入。
     slots: Vec<ConsumptionSlot>,
 }
 
+/// 区分仍可读取的输入与已成功移交的槽位，防止重复消费。
 enum ConsumptionSlot {
+    /// 来源已验证且仍未被 adapter 消费的输入。
     Available(ConstructionInput),
+
+    /// 已经成功交付，任何重复读取均应拒绝。
     Consumed,
 }
 
@@ -274,6 +309,7 @@ impl ConstructionInputs {
         }
     }
 
+    /// 拒绝遗漏读取的输入，使用户构造只在全部参数验证成功后执行。
     pub fn ensure_all_consumed(&self) -> Result<(), ConstructionError> {
         let Some(index) = self
             .slots
@@ -287,6 +323,7 @@ impl ConstructionInputs {
         })
     }
 
+    /// 取得尚未消费的槽位，分别报告越界和重复消费。
     fn available(&self, slot: InputSlot) -> Result<&ConstructionInput, ConstructionError> {
         let slot_count = self.slots.len();
         match self.slots.get(slot.index()) {

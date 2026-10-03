@@ -5,14 +5,15 @@
 
 use std::num::NonZeroUsize;
 
-/// root 的初始化默认值；单个服务上的 #[lazy] / #[lazy(false)] 优先于此默认值。
+/// root 的初始化默认值；单个服务上的 `#[lazy]` / `#[lazy(false)]` 优先于此默认值。
 /// 主动预热只选择 Singleton 入口及其必要依赖，不改变 Scoped/Transient 的生命周期。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum InitializationMode {
-    /// 默认等待查询或依赖需求；显式 #[lazy(false)] Singleton 仍在 build 时预热。
+    /// 默认等待查询或依赖需求；显式 `#[lazy(false)]` Singleton 仍在 build 时预热。
     #[default]
     Lazy,
-    /// 构建时默认预热 Singleton；#[lazy] 排除独立入口，但不阻止普通依赖需要它。
+
+    /// 构建时默认预热 Singleton；`#[lazy]` 排除独立入口，但不阻止普通依赖需要它。
     Eager,
 }
 
@@ -21,11 +22,13 @@ pub enum InitializationMode {
 pub struct ServiceProviderOptions {
     /// 入口的全局初始化默认值；服务声明级覆盖优先，选中的预热在 build 返回前完成。
     pub initialization: InitializationMode,
+
     /// 整个 root 及所有 scope 共享的构造任务上限，不限制业务服务方法的执行并发。
     pub max_concurrent_activations: NonZeroUsize,
 }
 
 impl Default for ServiceProviderOptions {
+    /// 返回库的 Lazy / 32 基线，不读取入口项目的编译配置。
     fn default() -> Self {
         Self {
             initialization: InitializationMode::Lazy,

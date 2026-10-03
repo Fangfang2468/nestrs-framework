@@ -26,13 +26,17 @@ use crate::{
 
 /// 每个最终 binary/test 入口只有这一份不可变配置与计划；服务实例不存放在这里。
 pub(crate) struct CompiledApplication {
+    /// 编译器固化的入口启动默认设置。
     pub(crate) options: ServiceProviderOptions,
+
+    /// 当前入口共享的不可变执行计划。
     pub(crate) graph: Arc<ValidatedGraph>,
 }
 
 impl CompiledApplication {
     /// OnceLock 只缓存不可变程序计划。第一次装载也不需要 Tokio，不持有任何实例或 owner。
     pub(crate) fn load() -> &'static Self {
+        /// 当前最终入口共享的不可变装配结果，不缓存运行期实例。
         static APPLICATION: OnceLock<CompiledApplication> = OnceLock::new();
         APPLICATION.get_or_init(|| {
             #[allow(unused_mut)]
@@ -53,18 +57,35 @@ const ABSENT: usize = usize::MAX;
 
 /// 装配期间暂存真实执行入口，等待编译计划给每个输入写入已确定的目标。
 struct PendingNode {
+    /// 已装配的节点基本信息，输入尚待编译计划填充。
     node: CompiledNode,
+
+    /// 待按槽位消费的准确输入适配器，每项只能写入一次。
     adapters: Vec<Option<InputAdapter>>,
+
+    /// 按固定输入编号保存的已写或尚缺输入描述。
     inputs: Vec<Option<CompiledDependency>>,
 }
 
+/// 接收编译器入口的顺序写入，核对执行协议后冻结为目标端计划。
 #[derive(Default)]
 struct PlanAssembly {
+    /// 编译器固化的入口启动默认设置。
     options: ServiceProviderOptions,
+
+    /// 按编译计划顺序追加的待完成节点。
     nodes: Vec<PendingNode>,
+
+    /// 按计划编号保存的真实 concrete 到 trait 投影能力。
     bindings: Vec<ProjectionAdapter>,
+
+    /// 完整类型和 key 到已选节点及投影的查询路由。
     routes: AHashMap<crate::service::ServiceIdentifier, RootRoute>,
+
+    /// 编译期验证得到的依赖优先顺序。
     topological_order: Vec<usize>,
+
+    /// 完整依赖图的去重反向邻接表，含延迟目标。
     dependents: Vec<Vec<usize>>,
 }
 
@@ -86,6 +107,7 @@ impl PlanAssembly {
         }
     }
 
+    /// 从已验证标量装配入口默认设置，并拒绝零构造并发数。
     fn set_options(&mut self, eager: bool, concurrency: usize) {
         let options = ServiceProviderOptions {
             initialization: if eager {
@@ -99,10 +121,12 @@ impl PlanAssembly {
         self.options = options;
     }
 
+    /// 按编译期编号保存真实类型投影能力。
     fn push_binding(&mut self, binding: ProjectionAdapter) {
         self.bindings.push(binding);
     }
 
+    /// 装配已选节点与 concrete 路由，并为其输入保留待写槽位。
     #[allow(clippy::too_many_arguments)]
     fn push_provider(
         &mut self,
@@ -171,6 +195,7 @@ impl PlanAssembly {
         self.dependents.push(Vec::new());
     }
 
+    /// 写入一个已选输入，核对目标、可选形态、准确类型与投影协议。
     #[allow(clippy::too_many_arguments)]
     fn set_input(
         &mut self,
@@ -198,6 +223,7 @@ impl PlanAssembly {
         } else {
             assert!(optional, "Nestrs 编译计划将必选输入标记为缺席");
         }
+
         // 此处没有候选选择：编译器已经用 binding 编号指定唯一投影。普通和延迟交付
         // 共用同一个经 Rust 检查的 projector；optional 不影响目标或投影选择。
         let project = if binding != ABSENT {
@@ -221,6 +247,7 @@ impl PlanAssembly {
             }
             adapter.project
         };
+
         // 描述在程序计划首次装载时创建一次。所有运行期 occurrence 只克隆 Arc，
         // 不再重复复制消费者名称、key、源码位置与投影协议；状态仍属于各自字段。
         let label = (!label.is_empty()).then_some(label);
@@ -229,6 +256,7 @@ impl PlanAssembly {
             Self::key(key_kind, key_name, key_index),
             adapter.service_type,
         );
+
         // 可选字段只存在于编译器装配协议。此处一次确定最终交付分支，worker 随后
         // 直接匹配该分支；不会再遇到“有延迟标记但没有对应计划”的半完成执行节点。
         // 缺席保留普通/延迟类别，准确 T 则由 requested 保留，读取 None 时仍核对两者。
@@ -262,6 +290,7 @@ impl PlanAssembly {
         });
     }
 
+    /// 将已验证接口路由接到具体节点及真实投影能力。
     fn push_trait_route(&mut self, provider: usize, binding: usize) {
         let target = &self.nodes[provider].node;
         let binding = self.bindings[binding];
@@ -287,16 +316,19 @@ impl PlanAssembly {
         );
     }
 
+    /// 按编译计划追加依赖优先的节点次序。
     fn push_order(&mut self, provider: usize) {
         assert!(provider < self.nodes.len(), "Nestrs 编译计划的顺序节点越界");
         self.topological_order.push(provider);
     }
 
+    /// 保存完整图的反向依赖关系，供关闭次序使用。
     fn push_dependent(&mut self, dependency: usize, consumer: usize) {
         assert!(consumer < self.nodes.len(), "Nestrs 编译计划的消费者越界");
         self.dependents[dependency].push(consumer);
     }
 
+    /// 检查装配完整性并冻结计划；不执行候选选择或用户构造。
     fn finish(self) -> CompiledApplication {
         // 这里只核对协议完整性，不重新运行图验证。编译器必须写入每一个槽位；如果
         // 工具与 core 的协议不匹配，应在启动时明确失败，不能交付不完整的输入计划。
@@ -335,6 +367,7 @@ impl PlanAssembly {
 
 #[cfg(nestrs_compiler)]
 unsafe extern "Rust" {
+    /// driver 为当前最终入口生成的唯一写入函数，只同步填充栈上的装配器。
     fn __nestrs_reflect_v2(output: *mut ());
 }
 

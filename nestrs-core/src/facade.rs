@@ -22,10 +22,15 @@ use crate::{
 /// cleanup 时必须调用 [`Self::dispose_async`]。
 #[must_use]
 pub struct ServiceProvider {
+    /// 当前入口共享的不可变执行计划。
     graph: Arc<ValidatedGraph>,
+
+    /// 用于提交当前 owner 查询与关闭的共享协调器句柄。
     runtime: Arc<Runtime>,
+
     // Owner 的 Drop 统一发送非阻塞关闭请求。门面不再重复实现同一兜底行为；
     // 即使 dispose_async 的 future 未完成就被丢弃，持有的 owner 也会负责发起关闭。
+    /// 本次操作所属的实际 root 或 scope。
     owner: Arc<Owner>,
 }
 
@@ -36,7 +41,7 @@ impl ServiceProvider {
         Self::build_from_plan(None).await
     }
 
-    /// 显式选项完整覆盖项目全局配置；服务声明的 #[lazy] 覆盖继续生效。
+    /// 显式选项完整覆盖项目全局配置；服务声明的 `#[lazy]` 覆盖继续生效。
     /// 服务图已由工具链验证；这里只创建运行期状态并完成选中的 Singleton 预热。
     pub async fn build_with_options(options: ServiceProviderOptions) -> Result<Self, BuildError> {
         Self::build_from_plan(Some(options)).await
@@ -63,7 +68,8 @@ impl ServiceProvider {
             runtime,
             owner,
         };
-        // Lazy 全局默认也可能存在 #[lazy(false)] Singleton，必须统一选择预热入口。
+
+        // Lazy 全局默认也可能存在 `#[lazy(false)]` Singleton，必须统一选择预热入口。
         // 选择策略保存在图节点上；不同 root 可使用不同默认值而共享同一不可变计划。
         if let Err(error) = provider
             .runtime
@@ -116,6 +122,7 @@ impl ServiceProvider {
         self.view().query::<T>(Some(key)).await
     }
 
+    /// 借用当前 root 的固定计划、运行时和 owner，建立轻量查询视图。
     fn view(&self) -> ServiceProviderRef<'_> {
         ServiceProviderRef {
             graph: &self.graph,
@@ -142,9 +149,13 @@ impl ServiceProvider {
 /// Scoped 实例的 owner，借用 root 并隔离其他 scope 的缓存。
 #[must_use]
 pub struct ServiceScope<'provider> {
+    /// 借用 root，确保 scope 使用期间其计划和运行时仍有效。
     provider: &'provider ServiceProvider,
+
+    /// 本次操作所属的实际 root 或 scope。
     owner: Arc<Owner>,
 }
+
 impl ServiceScope<'_> {
     /// 创建轻量查询视图；结果引用绑定当前 scope，而不是这个临时视图。
     pub fn service_provider(&self) -> ServiceProviderRef<'_> {
@@ -154,7 +165,8 @@ impl ServiceScope<'_> {
             owner: &self.owner,
         }
     }
-    /// 主动预热当前 scope：默认选择 Scoped 根，服务级 #[lazy] 可排除独立入口。
+
+    /// 主动预热当前 scope：默认选择 Scoped 根，服务级 `#[lazy]` 可排除独立入口。
     /// 普通依赖仍会构造必要目标；全局 Lazy 不取消这次显式预热，创建 scope 本身不构造。
     pub async fn warm_up(&self) -> Result<(), ResolveError> {
         self.provider
@@ -166,6 +178,7 @@ impl ServiceScope<'_> {
             )
             .await
     }
+
     /// 消费当前 scope，等待已接受任务及本 scope 的串行 cleanup 完成。
     /// 查询结果仍被使用时，Rust 借用检查会拒绝消费这个 scope。
     pub async fn dispose_async(self) -> Result<(), DisposeError> {
@@ -176,10 +189,16 @@ impl ServiceScope<'_> {
 /// 提供异步查询方法的轻量视图；临时视图不会缩短结果引用的有效期。
 #[derive(Clone, Copy)]
 pub struct ServiceProviderRef<'owner> {
+    /// 当前入口共享的不可变执行计划。
     graph: &'owner ValidatedGraph,
+
+    /// 用于提交当前 owner 查询与关闭的共享协调器句柄。
     runtime: &'owner Arc<Runtime>,
+
+    /// 本次操作所属的实际 root 或 scope。
     owner: &'owner Arc<Owner>,
 }
+
 impl<'owner> ServiceProviderRef<'owner> {
     /// 返回引用绑定实际 owner 的借用期，因此链式 service_provider() 不产生
     /// 临时视图借用错误；查询等待仍可以取消而不取消已接受的初始化。
@@ -212,6 +231,7 @@ impl<'owner> ServiceProviderRef<'owner> {
         self.query::<T>(Some(key)).await
     }
 
+    /// 将可选路由结果转换为必选查询，缺席时报告准确服务身份。
     async fn required<T: ?Sized + Send + Sync + 'static>(
         self,
         key: Option<ServiceKey>,
@@ -224,6 +244,7 @@ impl<'owner> ServiceProviderRef<'owner> {
         })
     }
 
+    /// 查找冻结路由并解析真实实例，最终返回受当前 owner 借用约束的引用。
     async fn query<T: ?Sized + Send + Sync + 'static>(
         self,
         key: Option<ServiceKey>,
@@ -236,6 +257,7 @@ impl<'owner> ServiceProviderRef<'owner> {
             return Ok(None);
         };
         let lease = self.runtime.resolve(self.owner, route.provider).await?;
+
         // concrete 查询从实例当前的共享借用恢复准确地址；trait 查询与构造输入、延迟交付
         // 共用直接写入 typed 栈槽的投影。ProjectionTarget 同时核对
         // 结果类型与实例 lease；投影只能创建当前实例的视图，不能更换它的所有者。
@@ -251,6 +273,7 @@ impl<'owner> ServiceProviderRef<'owner> {
                 ))
             })?
         };
+
         // SAFETY: runtime.resolve 在完成请求前已将强 lease 发布到实际 owner 的 journal。
         // journal 的存活期跟随 owner，不依赖 Tokio 协调任务仍在运行；返回引用被使用时，
         // 借用检查禁止消费/丢弃该 owner 的门面。上方同时核对 T 和准确的（可能为宽）地址。

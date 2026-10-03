@@ -16,6 +16,7 @@ impl InputSlot {
         Self(index)
     }
 
+    /// 读取已固定的输入编号；实际范围由输入集合检查。
     #[inline]
     pub(crate) const fn index(self) -> usize {
         self.0

@@ -26,9 +26,20 @@ use tokio::sync::oneshot;
 pub(crate) use handle::Runtime;
 pub(crate) use owner::Owner;
 
+/// 同一 root 运行时中的 owner 编号，root 使用保留值零。
 type OwnerId = u64;
+
+/// 一次实际构造 occurrence 的编号，与静态 provider 编号分开。
 type TaskId = u64;
+
+/// 普通查询订阅的唯一编号，供取消等待时精确退订。
 type QueryId = u64;
+
+/// 一次解析交付的真实实例 lease 或带依赖来源的错误。
 type Resolution = Result<DependencyLease, ResolveError>;
+
+/// 普通查询的一次性结果发送端。
 type ResolveWaiter = oneshot::Sender<Resolution>;
+
+/// 等待 owner 完整关闭结果的一次性发送端。
 type CloseWaiter = oneshot::Sender<Result<(), DisposeError>>;

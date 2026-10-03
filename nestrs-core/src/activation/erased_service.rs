@@ -9,6 +9,7 @@ use std::{any::Any, ptr::NonNull};
 use super::DependencyLease;
 use crate::service::{Injectable, ServiceType};
 
+/// 拥有 concrete 服务值的类型擦除 Box；其准确类型由外层记录保留。
 type AnyService = Box<dyn Any + Send + Sync>;
 
 /// 保留准确 T 的恢复能力，支持 pointer 的 ?Sized 请求而不伪造宽指针。
@@ -16,15 +17,20 @@ type AnyService = Box<dyn Any + Send + Sync>;
 struct TypedAddressResolver<T: ?Sized>(fn(&AnyService) -> Option<NonNull<T>>);
 
 impl<T: Injectable> TypedAddressResolver<T> {
-    // 仅含函数指针、无内部可变性或析构的关联常量可以被提升为静态引用。
-    // 每个 envelope 只借用它，不为相同的恢复能力再分配一个 Box。
+    /// 仅含函数指针、无内部可变性或析构的关联常量可以被提升为静态引用。
+    /// 每个 envelope 只借用它，不为相同的恢复能力再分配一个 Box。
     const SHARED: Self = Self(|value| value.downcast_ref::<T>().map(NonNull::from));
 }
 
 /// 拥有服务值的类型擦除容器；发布后由实例记录持有，不能再移出其中的值。
 pub struct ErasedService {
+    /// 该值或输入的准确 Rust 类型身份，用于交付前核对。
     service_type: ServiceType,
+
+    /// 拥有的 concrete 服务值，发布后不再从实例记录移出。
     value: AnyService,
+
+    /// 类型关联的静态恢复能力，不缓存服务移动前派生的地址。
     address_resolver: &'static (dyn Any + Send + Sync),
 }
 
@@ -41,6 +47,7 @@ impl ErasedService {
         }
     }
 
+    /// 返回被擦除值的准确类型身份，供计划和投影核对。
     pub fn service_type(&self) -> ServiceType {
         self.service_type
     }
@@ -67,7 +74,7 @@ impl ErasedService {
 
     /// 从当前值的共享借用派生指针，而非复用 envelope 移动之前的借用权限。
     ///
-    /// 生产调用由 DependencyLease 提供已固定在 Arc<InstanceRecord> 内的 envelope。
+    /// 生产调用由 DependencyLease 提供已固定在 `Arc<InstanceRecord>` 内的 envelope。
     /// 指针被使用期间不能移动或独占借用服务 Box；最后 lease 才允许移走并释放载荷。
     pub(crate) fn pointer<T>(&self) -> Option<NonNull<T>>
     where
@@ -84,14 +91,17 @@ impl ErasedService {
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct ErasedServiceRef {
+    /// 保活已选真实实例的强所有权凭证。
     lease: DependencyLease,
 }
 
 impl ErasedServiceRef {
+    /// 以真实实例 lease 建立可交付的擦除引用。
     pub(crate) fn new(lease: DependencyLease) -> Self {
         Self { lease }
     }
 
+    /// 只有准确类型匹配才同时交付地址与 lease；否则返回实际类型。
     pub(crate) fn cast<T>(self) -> Result<(NonNull<T>, DependencyLease), ServiceType>
     where
         T: Injectable + ?Sized,

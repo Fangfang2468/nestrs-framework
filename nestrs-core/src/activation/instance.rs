@@ -16,7 +16,10 @@ use crate::service::{Injectable, ServiceType};
 pub(super) struct InstancePayload {
     // Rust 按声明顺序析构字段：先销毁消费者，再释放依赖边。
     // 即使消费者的 Drop 展开栈，其依赖也必须在消费者析构期间保持有效。
+    /// 消费者本体，按字段析构顺序先于其普通依赖释放。
     service: ErasedService,
+
+    /// 构造时保存的普通输入 lease，覆盖消费者析构期间的依赖存活。
     _dependencies: Vec<DependencyLease>,
 }
 
@@ -29,11 +32,15 @@ impl InstancePayload {
 
 /// `payload` 只会在最后一个 lease 的释放路径被取走。
 struct InstanceRecord {
+    /// 仅由最后一个 lease 的释放路径取走的服务与依赖。
     payload: Option<InstancePayload>,
+
+    /// 实例最终释放使用的同步域，独立于 Tokio 任务存活。
     domain: Arc<ReleaseDomain>,
 }
 
 impl Drop for InstanceRecord {
+    /// 将最后一个实例记录的载荷移交释放域，避免递归销毁依赖。
     fn drop(&mut self) {
         if let Some(payload) = self.payload.take() {
             self.domain.release(payload);
@@ -46,6 +53,7 @@ impl Drop for InstanceRecord {
 pub(crate) struct DependencyLease(Arc<InstanceRecord>);
 
 impl DependencyLease {
+    /// 将服务及普通依赖固定在共享记录中，建立首个强 lease。
     pub(crate) fn new(
         service: ErasedService,
         dependencies: Vec<Self>,
@@ -74,6 +82,7 @@ impl DependencyLease {
         })
     }
 
+    /// 借用仍由当前 lease 保活的服务值；已存活记录必须保留载荷。
     fn service(&self) -> &ErasedService {
         &self
             .0
@@ -83,18 +92,22 @@ impl DependencyLease {
             .service
     }
 
+    /// 读取本实例 concrete 值的准确类型身份。
     pub(crate) fn service_type(&self) -> ServiceType {
         self.service().service_type()
     }
 
+    /// 克隆当前 lease，供擦除投影过程保活同一个实例。
     pub(crate) fn erased_ref(&self) -> ErasedServiceRef {
         ErasedServiceRef::new(self.clone())
     }
 
+    /// 比较实例记录身份，而非仅比较服务类型或值。
     pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
 
+    /// 从已固定实例的当前共享借用恢复准确类型地址。
     pub(crate) fn pointer<T>(&self) -> Option<NonNull<T>>
     where
         T: Injectable + ?Sized,

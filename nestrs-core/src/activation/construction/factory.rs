@@ -30,17 +30,24 @@ pub type AsyncConstructor = for<'frame> fn(FactoryInputs<'frame>) -> FactoryFutu
 /// 只有持有全部真实依赖 lease 的 `FactoryLeaseFrame` 可以创建它。
 #[doc(hidden)]
 pub struct FactoryInputs<'frame> {
+    /// 已从帧移交、供 adapter 按槽位消费的完整输入。
     inputs: ConstructionInputs,
+
+    /// 把普通参数借用期绑定到仍持有全部依赖的帧。
     _lease_frame: &'frame [DependencyLease],
 }
 
 /// 由 worker 持有、但只能交付一次输入的工厂调用帧。
 pub(crate) struct FactoryLeaseFrame {
+    /// 尚未移交的完整输入；工厂帧只允许交付一次。
     inputs: Option<ConstructionInputs>,
+
+    /// 从原始立即输入派生的真实保活集合，构造成功后移交实例。
     dependencies: Vec<DependencyLease>,
 }
 
 impl FactoryLeaseFrame {
+    /// 从未消费的输入派生全部真实 lease，建立唯一的工厂调用帧。
     pub(crate) fn new(inputs: ConstructionInputs) -> Self {
         // 保活对象只能来自这些尚未消费的准确输入，调用者不能另传不匹配的 lease。
         let dependencies = inputs.dependency_leases();
@@ -50,6 +57,7 @@ impl FactoryLeaseFrame {
         }
     }
 
+    /// 移交一次构造输入，并将普通参数的借用期绑定到当前帧。
     pub(crate) fn inputs(&mut self) -> FactoryInputs<'_> {
         FactoryInputs {
             inputs: self.inputs.take().expect("工厂帧只能交付一次构造输入"),
@@ -57,6 +65,7 @@ impl FactoryLeaseFrame {
         }
     }
 
+    /// 构造结束后移交帧保存的依赖，供成功实例继续保活。
     pub(crate) fn into_dependencies(self) -> Vec<DependencyLease> {
         self.dependencies
     }

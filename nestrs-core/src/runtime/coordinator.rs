@@ -33,40 +33,82 @@ use super::{
 /// Tokio 的 JoinError 只携带任务 ID，必须独立记录所属激活/cleanup，才能把 panic
 /// 转回对应服务的诊断。这里的映射不参与服务缓存，也不能替代活跃构造任务表。
 enum JobKind {
+    /// 用活跃任务编号定位本次构造 occurrence。
     Activation(TaskId),
+
+    /// 用 owner 编号和 provider 节点编号定位正在清理的已发布实例。
     Cleanup { owner: OwnerId, provider: usize },
 }
 
+/// worker 交还协调器的构造结果或清理失败集合。
 enum JobCompletion {
+    /// 构造 worker 交付的实例 lease 或解析错误。
     Activation(Resolution),
+
+    /// 单个实例 cleanup 与释放过程中汇总的失败文本。
     Cleanup(Vec<String>),
 }
 
+/// 独占全部可变调度索引，统一推进任务、缓存、查询订阅与 owner 关闭。
 pub(super) struct Coordinator {
+    /// 当前入口共享的不可变执行计划。
     graph: Arc<ValidatedGraph>,
+
+    /// 实例最终释放使用的同步域，独立于 Tokio 任务存活。
     domain: Arc<ReleaseDomain>,
+
+    /// 接收外部门面和 owner 提交命令的唯一入口。
     commands: mpsc::UnboundedReceiver<Command>,
+
+    /// 命令通道是否仍开放，关闭后不再轮询接收分支。
     commands_open: bool,
-    // 调度索引采用随机种子的 aHash；依赖推进与关闭次序仍由显式队列和图顺序决定。
+
+    /// 按 owner 编号保存独立缓存和关闭状态；aHash 只负责索引，调度次序由显式队列决定。
     owners: AHashMap<OwnerId, OwnerState>,
+
+    /// 仅保存尚未结束的真实构造 occurrence。
     tasks: AHashMap<TaskId, Activation>,
-    // 只定位尚未完成的普通查询。退订直接找到所属任务，不扫描其他等待者或任务。
+
+    /// 从尚未完成的普通查询编号直接定位等待任务，退订无需扫描其他等待者或任务。
     query_tasks: AHashMap<QueryId, TaskId>,
+
+    /// 为新构造 occurrence 分配的下一个任务编号。
     next_task: TaskId,
+
+    /// 普通依赖已经就绪、等待构造名额的任务队列。
     ready: VecDeque<TaskId>,
+
+    /// 已启动的构造与 cleanup worker 集合。
     jobs: JoinSet<JobCompletion>,
+
+    /// 将 Tokio 任务编号映射回业务构造或 cleanup 归属。
     job_kinds: AHashMap<Id, JobKind>,
+
+    /// 当前占用构造名额的 worker 数，不包含 cleanup。
     running_activations: usize,
+
+    /// 同一 root 与全部 scope 共享的构造 worker 上限。
     max_activations: usize,
+
+    /// 已关闭 scope 的失败记录，root 关闭时一并汇总。
     closed_scope_errors: Vec<String>,
-    // 排序只在协调器内同步执行；所有 owner 共享下标工作区，绝不共享实例 journal。
+
+    /// 存在延迟边时复用的关闭排序下标工作区；排序在协调器内同步执行，
+    /// owner 共享工作区，但不共享实例 journal。
     cleanup_order: Option<CleanupOrder>,
+
+    /// 当前可推进关闭的 owner 编号缓冲，避免每轮分配快照。
     closing_owners: Vec<OwnerId>,
+
+    /// 各调度集合在当前观察窗口内的最大逻辑长度。
     capacity_peaks: [usize; 7],
+
+    /// 已观察的调度轮数，到达维护窗口后归零。
     capacity_ticks: u16,
 }
 
 impl Coordinator {
+    /// 为当前 root 建立唯一调度状态，按图中是否存在延迟边准备关闭工作区。
     pub(super) fn new(
         graph: Arc<ValidatedGraph>,
         root: Arc<OwnerData>,
@@ -104,6 +146,7 @@ impl Coordinator {
         }
     }
 
+    /// 接收命令和 worker 完成事件，推进构造与关闭直到 root 完全关闭。
     pub(super) async fn run(mut self) {
         loop {
             // 依赖一满足就入队并争取可用构造名额，不设置“整层完成”屏障。
@@ -133,6 +176,7 @@ impl Coordinator {
         }
     }
 
+    /// 在协调器内串行处理 owner 注册、查询、退订和关闭命令。
     fn handle_command(&mut self, command: Command) {
         match command {
             Command::Register(data) => {
@@ -162,6 +206,7 @@ impl Coordinator {
         }
     }
 
+    /// 检查 owner 与 Scope 约束，将等待者挂到共享任务或直接交付缓存结果。
     fn accept_resolution(
         &mut self,
         owner: OwnerId,
@@ -169,6 +214,7 @@ impl Coordinator {
         waiter: impl Into<ResolutionWaiter>,
     ) {
         let waiter = waiter.into();
+
         // 句柄提交前的原子检查只是快速失败；命令在排队期间可能发生关闭，
         // 因此真正“接受工作”的决定仍由协调器在这里作出。
         let open = self
@@ -214,6 +260,7 @@ impl Coordinator {
         self.expand(&mut expansion);
     }
 
+    /// 注销尚未完成的普通查询订阅，不取消对应构造任务。
     fn cancel_query(&mut self, query: QueryId) {
         if let Some(task) = self.query_tasks.remove(&query) {
             // 完成路径会同时删除索引；因此存在索引时任务和等待者都必须仍然存在。
@@ -291,6 +338,7 @@ impl Coordinator {
                 // 只复制本槽位的目标编号，避免为展开暂存整份 targets 数组。
                 let target = match &self.graph.nodes[provider].dependencies[index].input {
                     DependencyInput::Immediate { target, .. } => *target,
+
                     // 缺席输入直接交付 None，延迟输入只交付句柄，都不占前置任务。
                     DependencyInput::Absent(_) | DependencyInput::Lazy { .. } => continue,
                 };
@@ -341,6 +389,7 @@ impl Coordinator {
         }
     }
 
+    /// 当普通输入全部到齐时移交就绪队列，不重复排入同一任务。
     fn queue_if_ready(&mut self, task: TaskId) {
         let activation = self.tasks.get_mut(&task).unwrap();
         if let TaskState::Waiting {
@@ -366,6 +415,7 @@ impl Coordinator {
                 // 多条失败边可以到达同一个消费者，但它只完成一次。
                 continue;
             };
+
             // 提前失败只结束当前消费者，已接受的孩子仍独立排空。按仍未就绪的槽位
             // 移除子任务的反向订阅，避免长时间 Pending 的共享孩子保存历史失败父节点。
             if let TaskState::Waiting { children, .. } = &activation.state {
@@ -429,6 +479,7 @@ impl Coordinator {
         }
     }
 
+    /// 在全 root 的构造名额内启动就绪 worker，并记录其任务归属。
     fn launch_ready(&mut self) {
         while self.running_activations < self.max_activations {
             let Some(task) = self.ready.pop_front() else {
@@ -445,6 +496,7 @@ impl Coordinator {
             let provider = activation.provider;
             let graph = self.graph.clone();
             let domain = self.domain.clone();
+
             // 只传实际 owner 的弱请求能力，Singleton 始终绑定 root。worker 按计划的
             // Lazy 分支现场包装字段句柄；调度器无需另建逐槽位的延迟输入数组。
             let resolver = Arc::downgrade(&self.owners[&activation.owner].data);
@@ -458,6 +510,7 @@ impl Coordinator {
         }
     }
 
+    /// 按 worker 归属回收结果，将 panic 转为对应构造或清理失败。
     fn handle_completion(&mut self, completion: Result<(Id, JobCompletion), JoinError>) {
         let id = match &completion {
             Ok((id, _)) => *id,
@@ -467,6 +520,7 @@ impl Coordinator {
             .job_kinds
             .remove(&id)
             .expect("每个 worker 必须有归属记录");
+
         // JoinError 拥有用户 panic 载荷；必须在保护范围内消费它，不能让它在
         // 协调器的 match 分支末尾隐式析构。取消错误没有需要回收的 panic 载荷。
         let completion = completion.map_err(|error| {
@@ -509,6 +563,7 @@ impl Coordinator {
         }
     }
 
+    /// 合并关闭等待者并幂等推进关闭；root 关闭同时要求全部 scope 排空。
     fn begin_close(&mut self, owner: Arc<OwnerData>, waiter: Option<CloseWaiter>) {
         if let Some(result) = owner.completed_close() {
             if let Some(waiter) = waiter {
@@ -576,6 +631,7 @@ impl Coordinator {
         }
     }
 
+    /// 每个 owner 内串行清理，不同 scope 可并行；root 等全部 scope 关闭后推进。
     fn advance_closures(&mut self) {
         // 只收集可推进的 owner，复用下标数组；不为每个普通查询分配全 owner 快照。
         self.closing_owners.clear();
@@ -589,6 +645,7 @@ impl Coordinator {
                 self.closing_owners.push(owner);
             }
         }
+
         // root 最后检查，否则关闭多个空 scope 后可能再无事件唤醒 root。
         self.closing_owners.push(ROOT);
         for index in 0..self.closing_owners.len() {
@@ -599,6 +656,7 @@ impl Coordinator {
                     continue;
                 }
                 let state = self.owners.get_mut(&owner).unwrap();
+
                 // 此时活跃任务全部退役；去掉缓存强 lease，journal 独立持有待清理实例。
                 state.cache.clear();
                 if let Some(order) = &mut self.cleanup_order {
@@ -613,6 +671,7 @@ impl Coordinator {
                 let provider = entry.provider;
                 let graph = self.graph.clone();
                 self.owners.get_mut(&owner).unwrap().phase = OwnerPhase::Cleaning { running: true };
+
                 // 只有上一项 cleanup/释放完成，才会把 running 改回 false 并取下一项。
                 // 仅保证启动次序是不够的：依赖不能先于消费者的异步 hook 完成清理。
                 let worker = CleanupWorker::new(entry, graph);
@@ -645,6 +704,7 @@ impl Coordinator {
     }
 }
 
+/// 仅在容量显著超过保留目标时缩容，保留全部活动条目。
 fn reclaim_map<K: std::hash::Hash + Eq, V>(map: &mut AHashMap<K, V>, target: usize) {
     if map.capacity() > target.saturating_mul(2) {
         map.shrink_to(target);

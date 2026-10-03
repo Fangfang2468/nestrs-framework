@@ -26,9 +26,16 @@ pub type ServiceProjector = for<'a> fn(
 /// 生成代码只能提交带有真实 lease 的 token，不能取得底层 `Any` 或构造接收端。
 /// 无论 adapter 是否传播写入错误，重复写入或错误类型都会使整次交付失败。
 pub struct ProjectionTarget<'a> {
+    /// 当前输入的固定槽位编号。
     slot: InputSlot,
+
+    /// 调用者栈上的准确类型接收槽，仅在本次同步投影中借用。
     value: &'a mut dyn Any,
+
+    /// 接收槽要求的类型名，用于报告投影不匹配。
     expected: &'static str,
+
+    /// 记住首次写入失败，即使 adapter 吞掉错误也拒绝整体交付。
     failure: Option<ConstructionError>,
 }
 
@@ -55,6 +62,7 @@ impl ProjectionTarget<'_> {
             failure: None,
         };
         projector(slot, lease.erased_ref(), &mut target)?;
+
         // adapter 返回 Ok 不等于交付完成：吞掉的写入错误、静默不写入都必须在这里拒绝。
         if let Some(error) = target.failure {
             return Err(error);
@@ -96,23 +104,30 @@ impl ProjectionTarget<'_> {
 /// 一个已存在实例的类型化投影，拥有输入地址凭证及本次错误归属的槽位。
 /// concrete 与 trait 都消费同一份凭证并将真实 lease 移入令牌，不复制服务或分配中间载荷。
 pub(super) struct ServiceProjection {
+    /// 当前输入的固定槽位编号。
     slot: InputSlot,
+
+    /// 携带真实 lease 的擦除输入，成功转换后移交令牌。
     input: ErasedServiceRef,
 }
 
 impl ServiceProjection {
+    /// 把输入实例凭证与本次投影的诊断槽位关联。
     pub(super) fn new(slot: InputSlot, input: ErasedServiceRef) -> Self {
         Self { slot, input }
     }
 
+    /// 核对准确 concrete 类型后，将同一实例 lease 移入只读令牌。
     pub(super) fn concrete<T: Injectable + ?Sized>(
         self,
     ) -> Result<Injection<T>, ConstructionError> {
         let (pointer, lease) = self.cast::<T>()?;
+
         // SAFETY: cast 已按准确 T 检查地址类型，lease 持有同一不可移动的真实实例。
         Ok(unsafe { Injection::from_service_ptr(pointer, lease) })
     }
 
+    /// 以真实 Rust 借用转换取得 trait 视图，并沿用 concrete 实例的 lease。
     pub(super) fn bound<Concrete, Trait>(
         self,
         project: for<'a> fn(&'a Concrete) -> &'a Trait,
@@ -122,13 +137,16 @@ impl ServiceProjection {
         Trait: Injectable + ?Sized,
     {
         let (concrete, lease) = self.cast::<Concrete>()?;
+
         // SAFETY: cast 保证 concrete 的准确类型，lease 保活稳定实例；高阶借用签名
         // 限制投影结果的存活期，完整地址由真实 coercion 产生，不伪造 vtable。
         let pointer = NonNull::from(project(unsafe { concrete.as_ref() }));
+
         // SAFETY: pointer 来自合法投影，令牌接收同一 concrete 实例的强 lease。
         Ok(unsafe { Injection::from_service_ptr(pointer, lease) })
     }
 
+    /// 恢复准确类型地址；类型不符时保留当前槽位的诊断信息。
     fn cast<T: Injectable + ?Sized>(
         self,
     ) -> Result<(NonNull<T>, DependencyLease), ConstructionError> {

@@ -13,33 +13,50 @@ use crate::service::{ServiceIdentifier, ServiceSource};
 /// Lazy 默认下显式 #[lazy(false)] 的初始化失败也属于启动失败。
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
+    /// 应用没有经过工具链生成最终执行计划。
     #[error("服务容器缺少编译计划；请使用 cargo nestrs check/build/run/test 构建应用")]
     CompilerPlanUnavailable,
+
+    /// 当前线程上下文没有可用的 Tokio runtime。
     #[error("构建服务容器需要当前 Tokio runtime")]
     RuntimeUnavailable,
+
+    /// 启动预热失败，并保留清理尚未交付 root 的结果。
     #[error("服务容器预热失败: {error}; 关闭结果: {dispose_error:?}")]
     Initialization {
+        /// 启动预热产生的原始解析失败。
         #[source]
         error: ResolveError,
+
+        /// 清理尚未交付的 root 时发生的可选关闭失败。
         dispose_error: Option<DisposeError>,
     },
 }
 
+/// 共享原始错误详情和一条消费者路径，避免传播时复制深链文本。
 struct ResolveFailure {
-    // 同一个原始故障的所有路径共享详情，向上追加路径不复制整段文本。
+    /// 同一故障所有路径共享的详情，向上追加路径时不复制文本。
     detail: Arc<str>,
+
+    /// 当前消费者到原始故障的共享路径头。
     path: Option<Arc<FailureFrame>>,
 }
 
 /// 一次依赖传播只新增当前服务的路径帧，后续链段继续与缓存中的原始错误共享。
 /// 链的显示和释放都显式迭代，不能依赖递归 Display 或 Arc 的递归级联析构。
 struct FailureFrame {
+    /// 本路径帧对应的服务与 key。
     identifier: ServiceIdentifier,
+
+    /// 原始声明位置，供运行期失败诊断使用。
     source: ServiceSource,
+
+    /// 下游失败的共享路径后缀。
     parent: Option<Arc<FailureFrame>>,
 }
 
 impl Drop for FailureFrame {
+    /// 迭代拆除当前独占的错误路径前缀，保留其他请求共享的后缀。
     fn drop(&mut self) {
         // 缓存或其他请求可能仍持有后缀；只拆除当前独占的前缀。
         // 每次先取走 parent，再让当前帧离开作用域，因此深路径不会递归调用 Drop。
@@ -60,6 +77,7 @@ impl Drop for FailureFrame {
 pub struct ResolveError(Arc<ResolveFailure>);
 
 impl ResolveError {
+    /// 创建没有依赖路径的原始解析失败。
     pub(crate) fn new(detail: String) -> Self {
         Self(Arc::new(ResolveFailure {
             detail: detail.into(),
@@ -67,10 +85,12 @@ impl ResolveError {
         }))
     }
 
+    /// 生成 owner 已停止接受新请求的解析错误。
     pub(crate) fn closed() -> Self {
         Self::new("服务 owner 已关闭或正在关闭".to_owned())
     }
 
+    /// 将构造失败的详情归属到当前服务及其声明位置。
     pub(crate) fn construction(
         identifier: &ServiceIdentifier,
         source: ServiceSource,
@@ -79,6 +99,7 @@ impl ResolveError {
         Self::dependency(identifier, source, Self::new(detail))
     }
 
+    /// 追加消费者路径帧，继续共享下游故障详情与路径后缀。
     pub(crate) fn dependency(
         identifier: &ServiceIdentifier,
         source: ServiceSource,
@@ -98,6 +119,7 @@ impl ResolveError {
 }
 
 impl fmt::Display for ResolveError {
+    /// 按依赖路径迭代显示错误，避免深链造成递归格式化。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "服务解析失败: {}", self.0.detail)?;
         let mut current = self.0.path.as_deref();
@@ -121,27 +143,34 @@ impl fmt::Display for ResolveError {
         Ok(())
     }
 }
+
 impl fmt::Debug for ResolveError {
+    /// 按依赖路径迭代显示错误，避免深链造成递归格式化。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Debug 也走迭代显示；否则 BuildError 的派生 Debug 可能重新引入深链递归。
         fmt::Display::fmt(self, formatter)
     }
 }
+
 impl std::error::Error for ResolveError {}
 
 /// 所有 cleanup 都处理完成后汇总的关闭错误。
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("服务容器关闭失败: {failures:?}")]
 pub struct DisposeError {
+    /// 完整关闭过程中汇总的失败文本。
     failures: Arc<Vec<String>>,
 }
+
 impl DisposeError {
+    /// 表示协调器未能交付完整关闭结果。
     pub(crate) fn coordinator_stopped() -> Self {
         Self::new(vec![
             "Tokio 协调任务已经停止；异步 cleanup 未确认完成".to_owned(),
         ])
     }
 
+    /// 共享本次关闭汇总的失败集合，供多个关闭等待者复用。
     pub(crate) fn new(failures: Vec<String>) -> Self {
         Self {
             failures: Arc::new(failures),

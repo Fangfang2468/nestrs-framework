@@ -9,20 +9,36 @@ use crate::graph::ValidatedGraph;
 
 use super::owner::Published;
 
+/// 表示某个 provider 在当前 journal 中没有已发布实例的链表哨兵。
 const NONE: usize = usize::MAX;
 
+/// 跨 owner 复用的关闭排序工作空间；仅保存下标，不拥有实例 lease。
 #[derive(Default)]
 pub(super) struct CleanupOrder {
+    /// 每个 provider 在当前 journal 中最新发布实例的链表头。
     heads: Vec<usize>,
+
+    /// 当前 provider 尚未处理的消费者数量，按完整冻结图计算。
     remaining: Vec<usize>,
+
+    /// 同一 provider 各发布实例的反向串联下标。
     next: Vec<usize>,
+
+    /// 每个 journal 项在最终原地置换中的目标下标。
     destinations: Vec<usize>,
+
+    /// 当前可清理的 provider，优先选择逆发布时间靠前的实例。
     ready: BinaryHeap<(usize, usize)>,
+
+    /// 传播关闭依赖时复用的去重目标缓冲。
     targets: Vec<usize>,
+
+    /// 本容量观察窗口内最大的 journal 长度。
     peak_entries: usize,
 }
 
 impl CleanupOrder {
+    /// 按完整依赖图重排当前 journal，使尾部弹出顺序满足消费者优先。
     pub(super) fn order(&mut self, journal: &mut [Published], graph: &ValidatedGraph) {
         if journal.len() < 2 {
             return;
@@ -57,6 +73,7 @@ impl CleanupOrder {
                     continue;
                 }
             }
+
             // 使用同一个小工作数组去重槽位；未实例化 provider 也执行这一传播。
             self.targets.clear();
             self.targets.extend(
@@ -75,6 +92,7 @@ impl CleanupOrder {
             }
         }
         assert_eq!(destination, 0, "已验证 DAG 必须可完整排序");
+
         // 置换只交换 journal 内的 lease，不克隆、不释放、不构造第二份实例容器。
         for index in 0..journal.len() {
             while self.destinations[index] != index {

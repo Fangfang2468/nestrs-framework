@@ -30,14 +30,17 @@ tokio::task_local! {
 /// 复用实际 owner 的 Arc 分配，不增加 resolver 分配，也不保存字段的初始化状态。
 /// 等待许可只依赖当前任务，使已接受的请求在 owner 消失后仍可接续 watch 结果。
 pub(super) struct ActivationContext {
+    /// 构造所属实际 owner 的弱请求能力，绑定其延迟输入。
     resolver: Weak<dyn LazyResolver>,
 }
 
 impl ActivationContext {
+    /// 保存实际构造 owner 的弱请求能力，供该实例的延迟输入使用。
     pub(super) fn new(resolver: Weak<dyn LazyResolver>) -> Self {
         Self { resolver }
     }
 
+    /// 在整个构造 future 的轮询范围内安装禁止首次延迟等待的任务标记。
     pub(super) async fn run<F: Future>(future: F) -> F::Output {
         IN_ACTIVATION.scope((), future).await
     }
@@ -69,6 +72,7 @@ impl LazyResolver for OwnerData {
     /// 调用期间暂时升级命令通道，返回后只留下接收端，不持有 owner 或 runtime 的
     /// 强引用。关闭与请求之间若有竞争，协调器仍按队列中的 owner 状态作最终裁决。
     fn request(&self, provider: usize) -> Result<LazyReceiver, &'static str> {
+        // 状态已关闭和命令通道消失使用同一诊断，避免暴露内部失效路径。
         const CLOSED: &str = "服务 owner 已关闭或正在关闭，无法首次获取延迟依赖";
         if self.status.load(Ordering::Acquire) != super::owner::OPEN {
             return Err(CLOSED);

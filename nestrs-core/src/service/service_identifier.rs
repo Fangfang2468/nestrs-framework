@@ -12,6 +12,7 @@ pub struct ServiceIdentifier {
 }
 
 impl ServiceIdentifier {
+    /// 组合准确服务类型与完整 key，作为固定查询路由的身份。
     pub fn new(service_key: Option<ServiceKey>, service_type: ServiceType) -> Self {
         Self {
             service_key,
@@ -21,6 +22,7 @@ impl ServiceIdentifier {
 }
 
 impl From<ServiceType> for ServiceIdentifier {
+    /// 为指定 Rust 类型建立默认 key 的服务身份。
     fn from(value: ServiceType) -> Self {
         Self::new(None, value)
     }

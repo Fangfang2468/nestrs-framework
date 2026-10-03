@@ -17,6 +17,7 @@ use crate::{ResolveError, service::Injectable};
 /// 此类型不提供 `Deref`、`Clone`、可变访问或公开构造函数。返回引用受当前句柄借用
 /// 限制，内部强 lease 保证实例地址有效；owner cleanup 后不保证业务资源仍可使用。
 pub struct LazyInjection<T: ?Sized> {
+    /// 本字段独占的请求和交付状态；移动句柄不移动内部槽位。
     slot: Box<DeferredSlot<T>>,
 }
 
@@ -24,6 +25,7 @@ impl<T: ?Sized> LazyInjection<T>
 where
     T: Injectable,
 {
+    /// 接收已选依赖上下文，为本字段分配独占的延迟交付槽位。
     pub(crate) fn new(dependency: LazyDependency, slot: InputSlot) -> Self {
         Self {
             slot: Box::new(DeferredSlot::new(dependency, slot)),
