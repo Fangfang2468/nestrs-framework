@@ -148,10 +148,26 @@ class Lsp:
         while time.monotonic() < deadline:
             message = self.consume(deadline - time.monotonic())
             if message and message.get("id") == identifier and "method" not in message:
-                if message.get("error", {}).get("code") in [-32800, -32801]:
+                error = message.get("error", {})
+                data = error.get("data")
+                retry_diagnostics = (
+                    method == "textDocument/diagnostic"
+                    and error.get("code") == -32802
+                    and isinstance(data, dict)
+                    and data.get("retriggerRequest") is True
+                )
+                if error.get("code") in [-32800, -32801] or retry_diagnostics:
                     # A cold workspace or an edit can invalidate an in-flight
-                    # analysis snapshot. Retry the same standard LSP request.
-                    self.consume(0.05)
+                    # analysis snapshot. Diagnostic ServerCancelled responses
+                    # permit another request only when retriggerRequest is true.
+                    # Keep the original deadline, including the retry delay;
+                    # do not consume and discard a queued message during it.
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    time.sleep(min(0.05, remaining))
+                    if time.monotonic() >= deadline:
+                        break
                     self.next_id += 1
                     identifier = self.next_id
                     self.send({"jsonrpc": "2.0", "id": identifier, "method": method, "params": params})
