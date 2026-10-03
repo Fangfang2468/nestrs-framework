@@ -7,6 +7,9 @@ mod subscriptions;
 #[path = "panic_payloads.rs"]
 mod panic_payloads;
 
+#[path = "capacity.rs"]
+mod capacity;
+
 use ahash::AHashMap;
 use std::{
     sync::{

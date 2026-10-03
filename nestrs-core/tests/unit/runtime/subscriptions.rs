@@ -18,7 +18,7 @@ use crate::{
         coordinator::Coordinator,
         handle::Command,
         owner::{CacheEntry, OwnerData, ROOT},
-        task::TaskState,
+        task::{ResolutionWaiter, TaskState},
     },
     service::{ServiceIdentifier, ServiceKey, ServiceType},
 };
@@ -76,6 +76,59 @@ fn completed_value(coordinator: &Coordinator) -> DependencyLease {
         vec![],
         coordinator.domain.clone(),
     )
+}
+
+#[tokio::test]
+async fn high_fan_out_cancellation_keeps_surviving_queries_and_lazy_subscriptions() {
+    let (mut coordinator, root, _commands) = fixture(graph(vec![node::<u32>(
+        0,
+        ServiceLifetime::Singleton,
+        Constructor::Class(value),
+        vec![],
+    )]));
+    let mut queries = Vec::new();
+    for query in 0..4096 {
+        let (waiter, receiver) = oneshot::channel();
+        coordinator.accept_resolution(ROOT, 0, (query, waiter));
+        queries.push(Some(receiver));
+    }
+    let mut lazy = Vec::new();
+    for _ in 0..128 {
+        let (sender, receiver) = watch::channel(None);
+        coordinator.accept_resolution(ROOT, 0, ResolutionWaiter::Lazy(sender));
+        lazy.push(receiver);
+    }
+    let task = building(&coordinator, ROOT, 0);
+    assert_eq!(coordinator.tasks.len(), 1);
+    for query in (0..4096).step_by(2) {
+        drop(queries[query].take());
+        coordinator.handle_command(Command::CancelQuery(query as u64));
+    }
+    // 构造尚未完成时确认已取消的查询被移除；Lazy watch 不受 QueryId 退订影响。
+    assert_eq!(coordinator.tasks[&task].query_waiters.len(), 2048);
+    assert_eq!(coordinator.tasks[&task].lazy_waiters.len(), 128);
+    assert_eq!(coordinator.query_tasks.len(), 2048);
+    let lease = completed_value(&coordinator);
+    coordinator.settle(task, Ok(lease.clone()));
+    for query in queries.into_iter().flatten() {
+        assert!(query.await.unwrap().unwrap().ptr_eq(&lease));
+    }
+    for receiver in lazy {
+        assert!(
+            receiver
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .ptr_eq(&lease)
+        );
+    }
+    assert!(coordinator.query_tasks.is_empty());
+    assert!(coordinator.tasks.is_empty());
+    drop(lease);
+    coordinator.begin_close(root, None);
+    coordinator.run().await;
 }
 
 #[tokio::test]

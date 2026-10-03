@@ -87,3 +87,28 @@ fn zero_sized_values_keep_exact_type_and_unpublished_downcast() {
         Ok(Empty)
     ));
 }
+
+#[test]
+fn unsized_requests_require_the_exact_stored_type_not_a_possible_coercion() {
+    trait Port: Send + Sync {
+        fn value(&self) -> u32;
+    }
+    impl Port for u32 {
+        fn value(&self) -> u32 {
+            *self
+        }
+    }
+
+    let concrete = DependencyLease::new(ErasedService::new(7_u32), vec![], ReleaseDomain::new());
+    // 即使 concrete 可以合法 coercion 为 dyn Port，擦除容器也不能伪造投影。
+    assert!(concrete.pointer::<dyn Port>().is_none());
+    assert!(concrete.pointer::<[u8]>().is_none());
+
+    let boxed: Box<dyn Port> = Box::new(11_u32);
+    let boxed = DependencyLease::new(ErasedService::new(boxed), vec![], ReleaseDomain::new());
+    assert!(boxed.pointer::<dyn Port>().is_none());
+    assert!(boxed.pointer::<u32>().is_none());
+    let pointer = boxed.pointer::<Box<dyn Port>>().unwrap();
+    // SAFETY: boxed 在整个读取期间保活真实的 Box<dyn Port> 载荷。
+    assert_eq!(unsafe { pointer.as_ref() }.value(), 11);
+}

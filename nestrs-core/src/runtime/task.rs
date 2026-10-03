@@ -3,11 +3,12 @@
 //! provider 是静态声明，task 是某次实际构造 occurrence。Singleton/Scoped 可共享 task，
 //! Transient 每个消费槽位创建新的 task；不要把重复依赖槽位合并为同一个 Transient。
 
-use ahash::{AHashMap, AHashSet};
-
 use crate::activation::DependencyLease;
 
-use super::{OwnerId, QueryId, Resolution, ResolveWaiter, TaskId};
+use super::{
+    OwnerId, QueryId, Resolution, ResolveWaiter, TaskId,
+    compact::{CompactList, CompactMap, CompactSet},
+};
 
 /// 查缓存或创建任务的结果。只有 Pending 对应活跃任务表中的条目。
 pub(super) enum TaskRequest {
@@ -25,7 +26,7 @@ pub(super) enum TaskState {
         inputs: Vec<Option<DependencyLease>>,
         // 按输入槽位保存仍在等待的子任务。消费者提前失败时据此直接注销反向边，
         // 不扫描其他任务，也不取消仍须排空的子任务。
-        children: Vec<Option<TaskId>>,
+        children: WaitingChildren,
         remaining: usize,
     },
     Queued {
@@ -39,10 +40,68 @@ pub(super) struct Activation {
     pub(super) provider: usize,
     pub(super) state: TaskState,
     // 同一个消费者可出现多个不同输入槽位，逐一保留才能维持重复注入语义。
-    pub(super) parents: AHashSet<(TaskId, usize)>,
-    pub(super) query_waiters: AHashMap<QueryId, ResolveWaiter>,
+    pub(super) parents: CompactSet<(TaskId, usize)>,
+    pub(super) query_waiters: CompactMap<QueryId, ResolveWaiter>,
     // 延迟接收端归字段所有，取消一次 get 不应注销仍可接续的 watch 订阅。
-    pub(super) lazy_waiters: Vec<tokio::sync::watch::Sender<Option<Resolution>>>,
+    pub(super) lazy_waiters: CompactList<tokio::sync::watch::Sender<Option<Resolution>>>,
+}
+
+/// 只记录真实 Pending 的输入。缓存命中、缺席和 Lazy 输入不分配子任务槽位；
+/// 首个子任务直接内联，多个子任务才使用按原输入编号索引的数组。
+pub(super) enum WaitingChildren {
+    Empty,
+    One { input: usize, task: TaskId },
+    Many(Box<[Option<TaskId>]>),
+}
+
+impl WaitingChildren {
+    pub(super) fn insert(&mut self, input: usize, task: TaskId, slots: usize) {
+        match self {
+            Self::Empty => *self = Self::One { input, task },
+            Self::One {
+                input: previous,
+                task: previous_task,
+            } => {
+                debug_assert_ne!(*previous, input, "每个输入只能订阅一次");
+                let mut children = vec![None; slots].into_boxed_slice();
+                children[*previous] = Some(*previous_task);
+                children[input] = Some(task);
+                *self = Self::Many(children);
+            }
+            Self::Many(children) => {
+                debug_assert!(children[input].is_none(), "每个输入只能订阅一次");
+                children[input] = Some(task);
+            }
+        }
+    }
+
+    pub(super) fn take(&mut self, input: usize) -> Option<TaskId> {
+        match self {
+            Self::Empty => None,
+            Self::One {
+                input: previous, ..
+            } if *previous != input => None,
+            Self::One { task, .. } => {
+                let task = *task;
+                *self = Self::Empty;
+                Some(task)
+            }
+            Self::Many(children) => children[input].take(),
+        }
+    }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = (usize, TaskId)> + '_ {
+        let (one, many): (_, &[Option<TaskId>]) = match self {
+            Self::Empty => (None, &[]),
+            Self::One { input, task } => (Some((*input, *task)), &[]),
+            Self::Many(children) => (None, children),
+        };
+        one.into_iter().chain(
+            many.iter()
+                .enumerate()
+                .filter_map(|(input, &task)| task.map(|task| (input, task))),
+        )
+    }
 }
 
 /// 一次性查询与延迟槽位使用同一个任务完成协议。延迟槽位的接收端由句柄自身保留，
@@ -70,3 +129,7 @@ impl ResolutionWaiter {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/runtime/task.rs"]
+mod tests;

@@ -1,7 +1,7 @@
 //! 已构造服务的类型擦除容器与带 lease 的构造期引用。
 //!
-//! 运行时可以统一存放不同服务，但不能因此丢失准确类型信息。服务值与类型化地址恢复器
-//! 分别放进 Box；恢复器只保存函数，不缓存从尚可能移动的 Box 派生的裸指针。
+//! 运行时可以统一存放不同服务，但不能因此丢失准确类型信息。服务值放进 Box，类型化
+//! 地址恢复器引用类型关联的静态操作；恢复器不缓存从尚可能移动的 Box 派生的裸指针。
 //! 实例被 lease 固定在共享记录之后，才从当前值的共享借用恢复准确地址。
 
 use std::{any::Any, ptr::NonNull};
@@ -16,16 +16,16 @@ type AnyService = Box<dyn Any + Send + Sync>;
 struct TypedAddressResolver<T: ?Sized>(fn(&AnyService) -> Option<NonNull<T>>);
 
 impl<T: Injectable> TypedAddressResolver<T> {
-    fn new() -> Self {
-        Self(|value| value.downcast_ref::<T>().map(NonNull::from))
-    }
+    // 仅含函数指针、无内部可变性或析构的关联常量可以被提升为静态引用。
+    // 每个 envelope 只借用它，不为相同的恢复能力再分配一个 Box。
+    const SHARED: Self = Self(|value| value.downcast_ref::<T>().map(NonNull::from));
 }
 
 /// 拥有服务值的类型擦除容器；发布后由实例记录持有，不能再移出其中的值。
 pub struct ErasedService {
     service_type: ServiceType,
     value: AnyService,
-    address_resolver: AnyService,
+    address_resolver: &'static (dyn Any + Send + Sync),
 }
 
 impl ErasedService {
@@ -37,7 +37,7 @@ impl ErasedService {
         Self {
             service_type: ServiceType::create::<T>(),
             value: Box::new(value),
-            address_resolver: Box::new(TypedAddressResolver::<T>::new()),
+            address_resolver: &TypedAddressResolver::<T>::SHARED,
         }
     }
 

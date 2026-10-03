@@ -5,12 +5,9 @@
 //! 门面借用仍会保活成功发布的实例，已返回的 `&T` 才不会悬垂。
 
 use ahash::{AHashMap, AHashSet};
-use std::{
-    collections::BinaryHeap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU8, Ordering},
-    },
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU8, Ordering},
 };
 
 use tokio::sync::mpsc;
@@ -86,73 +83,17 @@ impl OwnerData {
             .push(Published { provider, lease });
     }
 
-    /// 排空后确定清理顺序。普通依赖的发布顺序已经正确，只有图含延迟边时才需要调整。
-    ///
-    /// 在完整冻结 DAG 上反向执行 Kahn：一个 provider 的所有消费者实例清理后，才能
-    /// 轮到它。没有实例的节点也参加拓扑传播，避免漏掉经过未实例化节点的间接约束。
-    /// 同时可选的实例按发布时间倒序取出，保留无依赖节点之间原来的清理偏好。
-    /// 只重排 journal，不执行用户代码；实例 lease 全程由桶、结果或 journal 保活。
-    pub(super) fn order_cleanup(&self, graph: &crate::graph::ValidatedGraph) {
-        if !graph.nodes.iter().any(|node| {
-            node.dependencies
-                .iter()
-                .any(|dependency| dependency.input.is_lazy())
-        }) {
-            return;
-        }
+    /// 排空后使用协调器的共享工作空间重排；实例始终由当前 journal 保活。
+    pub(super) fn order_cleanup(
+        &self,
+        graph: &crate::graph::ValidatedGraph,
+        order: &mut super::cleanup::CleanupOrder,
+    ) {
         let mut journal = self
             .journal
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let mut buckets: Vec<Vec<(usize, Published)>> =
-            (0..graph.nodes.len()).map(|_| Vec::new()).collect();
-        for (sequence, entry) in std::mem::take(&mut *journal).into_iter().enumerate() {
-            buckets[entry.provider].push((sequence, entry));
-        }
-        let mut remaining: Vec<_> = graph.dependents.iter().map(Vec::len).collect();
-        let mut ready = BinaryHeap::new();
-        for (provider, &count) in remaining.iter().enumerate() {
-            if count == 0 {
-                ready.push((
-                    buckets[provider].last().map_or(usize::MAX, |entry| entry.0),
-                    provider,
-                ));
-            }
-        }
-        let mut ordered = Vec::new();
-        while let Some((_, provider)) = ready.pop() {
-            if let Some((_, entry)) = buckets[provider].pop() {
-                ordered.push(entry);
-                if let Some((sequence, _)) = buckets[provider].last() {
-                    ready.push((*sequence, provider));
-                    continue;
-                }
-            }
-            // 拓扑计数使用去重边，构造槽位仍保持独立；重复 Transient 注入不会减两次。
-            let mut targets: Vec<_> = graph.nodes[provider]
-                .dependencies
-                .iter()
-                .filter_map(|dependency| dependency.input.target())
-                .collect();
-            targets.sort_unstable();
-            targets.dedup();
-            for target in targets {
-                remaining[target] -= 1;
-                if remaining[target] == 0 {
-                    ready.push((
-                        buckets[target].last().map_or(usize::MAX, |entry| entry.0),
-                        target,
-                    ));
-                }
-            }
-        }
-        debug_assert!(
-            buckets.iter().all(Vec::is_empty),
-            "已验证 DAG 必须可完整排序"
-        );
-        // next_cleanup 从尾部取出，故此处把消费者优先的结果反转保存。
-        ordered.reverse();
-        *journal = ordered;
+        order.order(&mut journal, graph);
     }
 
     /// 取出一个已排序实例。锁在返回前释放，绝不持锁调用用户 cleanup/Drop。

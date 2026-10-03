@@ -4,7 +4,7 @@
 //! 不需要额外锁。任务表只保存未结束的 occurrence；已完成的共享结果放在 owner 缓存。
 //! 展开和失败传播都使用显式工作队列，深层服务图不会变成 Rust 调用栈。
 
-use ahash::{AHashMap, AHashSet};
+use ahash::AHashMap;
 use std::{collections::VecDeque, sync::Arc};
 
 use tokio::{
@@ -22,9 +22,11 @@ use crate::{
 
 use super::{
     CloseWaiter, OwnerId, QueryId, Resolution, TaskId,
+    cleanup::CleanupOrder,
+    compact::{CompactList, CompactMap, CompactSet},
     handle::Command,
     owner::{CacheEntry, OwnerData, OwnerPhase, OwnerState, ROOT},
-    task::{Activation, ResolutionWaiter, TaskRequest, TaskState},
+    task::{Activation, ResolutionWaiter, TaskRequest, TaskState, WaitingChildren},
     worker::{ActivationWorker, CleanupWorker},
 };
 
@@ -57,6 +59,11 @@ pub(super) struct Coordinator {
     running_activations: usize,
     max_activations: usize,
     closed_scope_errors: Vec<String>,
+    // 排序只在协调器内同步执行；所有 owner 共享下标工作区，绝不共享实例 journal。
+    cleanup_order: Option<CleanupOrder>,
+    closing_owners: Vec<OwnerId>,
+    capacity_peaks: [usize; 7],
+    capacity_ticks: u16,
 }
 
 impl Coordinator {
@@ -66,6 +73,15 @@ impl Coordinator {
         commands: mpsc::UnboundedReceiver<Command>,
         max_activations: usize,
     ) -> Self {
+        let cleanup_order = graph
+            .nodes
+            .iter()
+            .any(|node| {
+                node.dependencies
+                    .iter()
+                    .any(|dependency| dependency.input.is_lazy())
+            })
+            .then(CleanupOrder::default);
         Self {
             graph,
             domain: ReleaseDomain::new(),
@@ -81,6 +97,10 @@ impl Coordinator {
             running_activations: 0,
             max_activations,
             closed_scope_errors: Vec::new(),
+            cleanup_order,
+            closing_owners: Vec::new(),
+            capacity_peaks: [0; 7],
+            capacity_ticks: 0,
         }
     }
 
@@ -89,6 +109,7 @@ impl Coordinator {
             // 依赖一满足就入队并争取可用构造名额，不设置“整层完成”屏障。
             self.launch_ready();
             self.advance_closures();
+            self.maintain_capacity();
             if self.owners[&ROOT].phase == OwnerPhase::Closed {
                 break;
             }
@@ -234,9 +255,9 @@ impl Coordinator {
                 owner,
                 provider,
                 state: TaskState::Unexpanded,
-                parents: AHashSet::new(),
-                query_waiters: AHashMap::new(),
-                lazy_waiters: Vec::new(),
+                parents: CompactSet::new(),
+                query_waiters: CompactMap::new(),
+                lazy_waiters: CompactList::new(),
             },
         );
         let state = self.owners.get_mut(&owner).unwrap();
@@ -262,21 +283,17 @@ impl Coordinator {
             let (owner, provider) = (activation.owner, activation.provider);
             activation.state = TaskState::Waiting {
                 inputs: vec![None; self.graph.nodes[provider].dependencies.len()],
-                children: vec![None; self.graph.nodes[provider].dependencies.len()],
+                children: WaitingChildren::Empty,
                 remaining: 0,
             };
-            let targets: Vec<_> = self.graph.nodes[provider]
-                .dependencies
-                .iter()
-                .map(|dependency| match &dependency.input {
-                    DependencyInput::Immediate { target, .. } => Some(*target),
-                    // 缺席输入直接交付 None，延迟输入只交付句柄，都不占前置任务。
-                    DependencyInput::Absent(_) | DependencyInput::Lazy { .. } => None,
-                })
-                .collect();
             let mut failure = None;
-            for (index, target) in targets.into_iter().enumerate() {
-                let Some(target) = target else { continue };
+            for index in 0..self.graph.nodes[provider].dependencies.len() {
+                // 只复制本槽位的目标编号，避免为展开暂存整份 targets 数组。
+                let target = match &self.graph.nodes[provider].dependencies[index].input {
+                    DependencyInput::Immediate { target, .. } => *target,
+                    // 缺席输入直接交付 None，延迟输入只交付句柄，都不占前置任务。
+                    DependencyInput::Absent(_) | DependencyInput::Lazy { .. } => continue,
+                };
                 debug_assert!(
                     self.graph.dependents[target]
                         .binary_search(&provider)
@@ -299,7 +316,7 @@ impl Coordinator {
                     }
                     TaskRequest::Pending(child) => {
                         *remaining += 1;
-                        children[index] = Some(child);
+                        children.insert(index, child, inputs.len());
                         self.tasks
                             .get_mut(&child)
                             .unwrap()
@@ -352,8 +369,8 @@ impl Coordinator {
             // 提前失败只结束当前消费者，已接受的孩子仍独立排空。按仍未就绪的槽位
             // 移除子任务的反向订阅，避免长时间 Pending 的共享孩子保存历史失败父节点。
             if let TaskState::Waiting { children, .. } = &activation.state {
-                for (input, child) in children.iter().enumerate() {
-                    if let Some(child) = child.and_then(|child| self.tasks.get_mut(&child)) {
+                for (input, child) in children.iter() {
+                    if let Some(child) = self.tasks.get_mut(&child) {
                         child.parents.remove(&(task, input));
                     }
                 }
@@ -388,7 +405,7 @@ impl Coordinator {
                 else {
                     unreachable!("仍在等待依赖的消费者必须处于 Waiting 阶段");
                 };
-                let child = children[input].take();
+                let child = children.take(input);
                 debug_assert_eq!(child, Some(task), "输入槽位必须仍订阅当前子任务");
                 match &result {
                     Ok(lease) => {
@@ -516,13 +533,66 @@ impl Coordinator {
         }
     }
 
+    /// 每 4096 个调度轮次观察一次完整窗口，仅在容量超过近期峰值四倍时回收。
+    /// 不在每个 scope 关闭后 shrink，避免相同并发波次反复扩容；无事件时也不启动计时器。
+    fn maintain_capacity(&mut self) {
+        let sizes = [
+            self.owners.len(),
+            self.tasks.len(),
+            self.query_tasks.len(),
+            self.job_kinds.len(),
+            self.ready.len(),
+            self.closing_owners.len(),
+            self.owners[&ROOT].active_tasks.len(),
+        ];
+        for (peak, size) in self.capacity_peaks.iter_mut().zip(sizes) {
+            *peak = (*peak).max(size);
+        }
+        self.capacity_ticks += 1;
+        if self.capacity_ticks < 4096 {
+            return;
+        }
+        self.capacity_ticks = 0;
+        let targets = self
+            .capacity_peaks
+            .map(|peak| peak.max(64).saturating_mul(2));
+        self.capacity_peaks = [0; 7];
+        reclaim_map(&mut self.owners, targets[0]);
+        reclaim_map(&mut self.tasks, targets[1]);
+        reclaim_map(&mut self.query_tasks, targets[2]);
+        reclaim_map(&mut self.job_kinds, targets[3]);
+        if self.ready.capacity() > targets[4].saturating_mul(2) {
+            self.ready.shrink_to(targets[4]);
+        }
+        if self.closing_owners.capacity() > targets[5].saturating_mul(2) {
+            self.closing_owners.shrink_to(targets[5]);
+        }
+        let active = &mut self.owners.get_mut(&ROOT).unwrap().active_tasks;
+        if active.capacity() > targets[6].saturating_mul(2) {
+            active.shrink_to(targets[6]);
+        }
+        if let Some(order) = &mut self.cleanup_order {
+            order.reclaim();
+        }
+    }
+
     fn advance_closures(&mut self) {
-        // 扫描全部 owner 使排空和 root 等待 scope 的顺序保持直观。
-        // 如果大量 scope 的量测证明这一步是瓶颈，再考虑按状态变化入队推进关闭。
-        let mut owners: Vec<_> = self.owners.keys().copied().collect();
+        // 只收集可推进的 owner，复用下标数组；不为每个普通查询分配全 owner 快照。
+        self.closing_owners.clear();
+        for (&owner, state) in &self.owners {
+            if owner != ROOT
+                && matches!(
+                    state.phase,
+                    OwnerPhase::Draining | OwnerPhase::Cleaning { running: false }
+                )
+            {
+                self.closing_owners.push(owner);
+            }
+        }
         // root 最后检查，否则关闭多个空 scope 后可能再无事件唤醒 root。
-        owners.sort_unstable_by_key(|owner| *owner == ROOT);
-        for owner in owners {
+        self.closing_owners.push(ROOT);
+        for index in 0..self.closing_owners.len() {
+            let owner = self.closing_owners[index];
             let state = &self.owners[&owner];
             if state.phase == OwnerPhase::Draining {
                 if !state.active_tasks.is_empty() || (owner == ROOT && self.owners.len() != 1) {
@@ -531,7 +601,9 @@ impl Coordinator {
                 let state = self.owners.get_mut(&owner).unwrap();
                 // 此时活跃任务全部退役；去掉缓存强 lease，journal 独立持有待清理实例。
                 state.cache.clear();
-                state.data.order_cleanup(&self.graph);
+                if let Some(order) = &mut self.cleanup_order {
+                    state.data.order_cleanup(&self.graph, order);
+                }
                 state.phase = OwnerPhase::Cleaning { running: false };
             }
             if self.owners[&owner].phase != (OwnerPhase::Cleaning { running: false }) {
@@ -570,6 +642,12 @@ impl Coordinator {
                 }
             }
         }
+    }
+}
+
+fn reclaim_map<K: std::hash::Hash + Eq, V>(map: &mut AHashMap<K, V>, target: usize) {
+    if map.capacity() > target.saturating_mul(2) {
+        map.shrink_to(target);
     }
 }
 

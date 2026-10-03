@@ -91,6 +91,18 @@ impl Port for Adapter {
 }
 
 #[test]
+fn erased_envelopes_allocate_only_the_service_payload() {
+    // 非 ZST 只需值本身的 Box；类型化地址恢复操作可共享，不应逐实例分配。
+    // ZST 连载荷分配也不需要。black_box 使窗口内构造的 envelope 实际逃逸。
+    let (concrete, concrete_count) =
+        allocations(|| std::hint::black_box(ErasedService::new(Adapter(73))));
+    let (empty, empty_count) = allocations(|| std::hint::black_box(ErasedService::new(())));
+    assert_eq!((concrete_count, empty_count), (1, 0));
+    assert!(matches!(concrete.downcast::<Adapter>(), Ok(Adapter(73))));
+    assert!(matches!(empty.downcast::<()>(), Ok(())));
+}
+
+#[test]
 fn concrete_and_trait_projection_deliver_without_temporary_allocations() {
     // 实例、lease、释放域都提前准备好，窗口只覆盖首次投影交付这一条待优化路径。
     let instance = lease(Adapter(73));

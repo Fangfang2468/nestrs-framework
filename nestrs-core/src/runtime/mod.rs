@@ -8,6 +8,8 @@
 //! - 成功实例先进入实际 owner 的 journal，再通知等待者或推进消费者。
 //! - 关闭先排空已接受任务，再逐 owner 按消费者优先的依赖顺序完成 cleanup；内存保活独立于 Tokio。
 
+mod cleanup;
+mod compact;
 mod coordinator;
 mod handle;
 mod lazy;
