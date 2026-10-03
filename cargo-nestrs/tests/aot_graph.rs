@@ -62,6 +62,11 @@ fn invalid_graphs_are_rejected_by_check_and_build() {
             "DI 泛型类型不断增长或过于复杂",
             &["1024", "递归泛型查询"][..],
         ),
+        (
+            "associated_const_growth",
+            "DI 泛型类型不断增长或过于复杂",
+            &["1024", "递归泛型查询"][..],
+        ),
     ] {
         for operation in ["check", "build"] {
             let output = Command::new(env!("CARGO_BIN_EXE_cargo-nestrs"))

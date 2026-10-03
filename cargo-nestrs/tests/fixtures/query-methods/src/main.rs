@@ -1,9 +1,14 @@
 //! 普通查询方法、Self、泛型 helper、跨 crate 和未执行分支的集成契约。
 use indirect_library as _;
 use nestrs_core::{InitializationMode, ServiceProvider, ServiceProviderOptions};
+use query_library::associated_consts::{
+    self as upstream_consts, DefaultQuery, ExplicitQuery, Holder, OverriddenQuery,
+};
 use query_library::trait_calls::{self, CustomQuery, Query};
 use query_library::{Repository, generic_query, nested_query};
 use std::ops::Add;
+
+mod associated_consts;
 
 struct User;
 struct Order;
@@ -20,6 +25,17 @@ struct ThroughInherent;
 struct ThroughDeadIterator;
 struct ThroughDeadAddMethod;
 struct ThroughDeadAddOperator;
+struct ThroughUpstreamConst;
+struct ThroughUpstreamConstChain;
+struct ThroughUpstreamConstDefault;
+struct ThroughUpstreamConstExplicit;
+struct ThroughUpstreamGenericTraitConst;
+struct ThroughUpstreamOverriddenConst;
+struct ThroughUpstreamConstFn;
+struct ThroughUpstreamInlineConst;
+struct ThroughDeadUpstreamConst;
+#[cfg(feature = "extra-root")]
+struct ThroughFeatureUpstreamConst;
 struct Select;
 impl query_library::SelectService for Select {
     type Service = Repository<ThroughAssociated>;
@@ -29,6 +45,8 @@ impl query_library::SelectService for Select {
 async fn main() {
     assert_eq!(query_library::constructions(), 0);
     assert_eq!(trait_calls::constructions(), 0);
+    assert_eq!(associated_consts::constructions(), 0);
+    assert_eq!(upstream_consts::constructions(), 0);
     let provider = ServiceProvider::build_with_options(ServiceProviderOptions {
         initialization: InitializationMode::Eager,
         ..Default::default()
@@ -44,6 +62,62 @@ async fn main() {
     // 六个真实调用、三个本地未执行调用，以及一个上游私有未执行调用。
     // 每个调用使用不同 T，避免某个正常路径替遗漏路径意外补出相同查询根。
     assert_eq!(trait_calls::constructions(), 10);
+    // 关联常量使用独立计数器：本地八条实际路径加一个 if false；跨 crate
+    // 八条实际路径、应用 if false 和上游私有 if false，feature 再各增加独立根。
+    // 必须在第一次调用这些函数指针前检查，防止运行期初始化掩盖编译期漏根。
+    assert_eq!(
+        associated_consts::constructions(),
+        associated_consts::expected_constructions()
+    );
+    let expected_upstream_consts = 10 + 2 * usize::from(cfg!(feature = "extra-root"));
+    assert_eq!(upstream_consts::constructions(), expected_upstream_consts);
+    associated_consts::verify(&provider).await;
+    let query = Holder::<ThroughUpstreamConst>::QUERY;
+    let mut const_query_ids = vec![
+        query(&provider).await.unwrap(),
+        Holder::<ThroughUpstreamConstChain>::CHAIN(&provider)
+            .await
+            .unwrap(),
+        <Holder<ThroughUpstreamConstDefault> as DefaultQuery<ThroughUpstreamConstDefault>>::QUERY(
+            &provider,
+        )
+        .await
+        .unwrap(),
+        <Holder<ThroughUpstreamConstExplicit> as ExplicitQuery<ThroughUpstreamConstExplicit>>::QUERY(
+            &provider,
+        )
+        .await
+        .unwrap(),
+        upstream_consts::generic_trait_query::<
+            Holder<ThroughUpstreamGenericTraitConst>,
+            ThroughUpstreamGenericTraitConst,
+        >(&provider)
+        .await
+        .unwrap(),
+        <Holder<ThroughUpstreamOverriddenConst> as OverriddenQuery<
+            ThroughUpstreamOverriddenConst,
+        >>::QUERY(&provider)
+        .await
+        .unwrap(),
+        Holder::<ThroughUpstreamConstFn>::THROUGH_CONST_FN(&provider)
+            .await
+            .unwrap(),
+        upstream_consts::inline_query::<ThroughUpstreamInlineConst>(&provider)
+            .await
+            .unwrap(),
+    ];
+    if false {
+        drop(Holder::<ThroughDeadUpstreamConst>::QUERY(&provider));
+    }
+    #[cfg(feature = "extra-root")]
+    const_query_ids.push(
+        Holder::<ThroughFeatureUpstreamConst>::QUERY(&provider)
+            .await
+            .unwrap(),
+    );
+    const_query_ids.sort_unstable();
+    assert!(const_query_ids.windows(2).all(|pair| pair[0] != pair[1]));
+    assert_eq!(upstream_consts::constructions(), expected_upstream_consts);
     if false {
         drop(Query::<ThroughDeadIterator>::new(&provider).next());
         drop(Query::<ThroughDeadAddMethod>::new(&provider).add(()));

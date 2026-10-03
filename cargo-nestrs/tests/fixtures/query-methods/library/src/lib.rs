@@ -6,6 +6,7 @@ pub use nestrs_core::ServiceProvider;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+pub mod associated_consts;
 pub mod trait_calls;
 
 static CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
