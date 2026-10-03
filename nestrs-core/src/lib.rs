@@ -44,7 +44,3 @@ pub use activation::{Injection, LazyInjection};
 #[cfg(test)]
 #[path = "../tests/unit/contracts.rs"]
 mod contract_tests;
-
-#[cfg(all(test, not(nestrs_compiler_contract)))]
-#[path = "../tests/unit/facade_api.rs"]
-mod facade_api_tests;

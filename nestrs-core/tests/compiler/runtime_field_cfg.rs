@@ -179,7 +179,7 @@ fn configured_dependency_slots_are_contiguous_and_preserve_requested_fields() {
         .iter()
         .find(|node| node.identifier.service_type == ServiceType::create::<Named>())
         .unwrap();
-    assert!(named.dependencies[0].target.is_some());
-    assert!(named.dependencies[1].target.is_some());
-    assert!(named.dependencies[2].target.is_none());
+    assert!(named.dependencies[0].input.target().is_some());
+    assert!(named.dependencies[1].input.target().is_some());
+    assert!(named.dependencies[2].input.target().is_none());
 }

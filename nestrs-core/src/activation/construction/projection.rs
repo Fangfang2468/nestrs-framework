@@ -1,7 +1,7 @@
 //! 将已经就绪的实例直接交付给调用者的类型化令牌槽位。
 //!
-//! 延迟字段首次就绪时只需要一个 `Injection<T>`，不需要普通构造输入使用的装箱载荷。
-//! 因此这里借用调用者栈上的 `Option<Injection<T>>`，用 `Any::downcast_mut` 验证完整
+//! 普通 trait 查询与延迟字段交付都只需要一个 `Injection<T>`，不需要普通构造输入
+//! 使用的装箱载荷。这里借用调用者栈上的 `Option<Injection<T>>`，用 `Any::downcast_mut` 验证完整
 //! 类型后写入。擦除的只是短暂借用，不擦除所有权、不延长生命周期，也不拼装裸指针。
 //! 普通 preparer 和这条直接交付路径复用同一组令牌构造函数，确保 concrete 类型检查、
 //! trait coercion 和真实实例 lease 的规则始终只有一份。
@@ -61,6 +61,11 @@ impl ProjectionTarget<'_> {
 }
 
 /// 从共享计划指定的投影函数取得准确令牌，成功路径不分配临时堆载荷。
+///
+/// 投影只能改变同一个实例的类型化视图，不能把另一个同类型实例替换进结果。
+/// 普通查询随后会释放令牌自己的 lease，并把引用的存活期交给实际 owner；因此
+/// 类型正确还不够，必须确认令牌属于 runtime 已发布的那个实例。延迟交付复用同一
+/// 检查，确保它缓存的也是已选任务的结果，不允许安全 adapter 改变计划中的实例身份。
 pub(crate) fn project_token<T>(
     slot: InputSlot,
     lease: DependencyLease,
@@ -81,7 +86,11 @@ where
     if let Some(error) = target.failure {
         return Err(error);
     }
-    token.ok_or(ConstructionError::UnfilledSlot { slot })
+    let token = token.ok_or(ConstructionError::UnfilledSlot { slot })?;
+    if !token.lease().ptr_eq(&lease) {
+        return Err(ConstructionError::ProjectionOwnerMismatch { slot });
+    }
+    Ok(token)
 }
 
 /// 将 concrete 实例直接投影到调用者的令牌槽位。

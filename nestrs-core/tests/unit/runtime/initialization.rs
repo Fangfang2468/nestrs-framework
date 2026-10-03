@@ -7,7 +7,7 @@ use crate::{
     InitializationMode, ServiceLifetime,
     activation::{ConstructionInputs, ErasedService, InputSlot, prepare_required},
     graph::NodePolicy,
-    graph::{CompiledDependency, CompiledNode, Constructor, ValidatedGraph},
+    graph::{CompiledDependency, CompiledNode, Constructor, DependencyInput, ValidatedGraph},
     service::{ServiceIdentifier, ServiceKey, ServiceSource, ServiceType},
 };
 
@@ -41,7 +41,7 @@ fn graph(nodes: Vec<CompiledNode>) -> Arc<ValidatedGraph> {
     let mut dependents = vec![vec![]; nodes.len()];
     for (consumer, node) in nodes.iter().enumerate() {
         for dependency in &node.dependencies {
-            if let Some(target) = dependency.target {
+            if let Some(target) = dependency.input.target() {
                 dependents[target].push(consumer);
             }
         }
@@ -164,10 +164,10 @@ async fn an_ordinary_dependency_constructs_a_lazy_provider_before_its_eager_cons
         slot: InputSlot::new(0),
         requested: identifier(0),
         optional: false,
-        lazy: None,
-        lazy_plan: None,
-        target: Some(0),
-        prepare: prepare_required::<u32>,
+        input: DependencyInput::Immediate {
+            target: 0,
+            prepare: prepare_required::<u32>,
+        },
         label: Some("ordinary"),
     });
     consumer.constructor = Constructor::Class(|mut inputs: ConstructionInputs| {

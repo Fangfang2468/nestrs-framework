@@ -5,10 +5,12 @@ use crate::{
     ServiceLifetime,
     activation::{
         ConstructionError, ConstructionInputs, ErasedService, InputSlot, LazyInjection,
-        LazyInputPlan, prepare_lazy_optional, prepare_optional, project_required,
+        LazyInputPlan, prepare_lazy_optional, project_required,
     },
     graph::NodePolicy,
-    graph::{CompiledDependency, CompiledNode, Constructor, ValidatedGraph},
+    graph::{
+        AbsentInput, CompiledDependency, CompiledNode, Constructor, DependencyInput, ValidatedGraph,
+    },
     service::{ServiceIdentifier, ServiceKey, ServiceSource, ServiceType},
 };
 use std::{
@@ -74,6 +76,117 @@ fn reports_token_with_plan(
     let token = inputs.take_lazy::<Reports>(slot).unwrap();
     inputs.ensure_all_consumed().unwrap();
     token
+}
+
+#[tokio::test]
+async fn lazy_edges_skip_activation_waits_but_order_cleanup_after_the_consumer() {
+    use crate::activation::{adapter::CleanupFuture, prepare_lazy_required};
+    use std::sync::Mutex;
+    static TARGET_BUILDS: AtomicUsize = AtomicUsize::new(0);
+    static CLEANUPS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+    struct Target;
+    struct Consumer {
+        target: LazyInjection<Target>,
+    }
+    fn target(inputs: ConstructionInputs) -> Result<ErasedService, ConstructionError> {
+        inputs.ensure_all_consumed()?;
+        TARGET_BUILDS.fetch_add(1, Ordering::SeqCst);
+        Ok(ErasedService::new(Target))
+    }
+    fn consumer(mut inputs: ConstructionInputs) -> Result<ErasedService, ConstructionError> {
+        let target = inputs.take_lazy(InputSlot::new(0))?;
+        inputs.ensure_all_consumed()?;
+        Ok(ErasedService::new(Consumer { target }))
+    }
+    fn cleanup_consumer() -> CleanupFuture {
+        Box::pin(async {
+            // 必须等整个异步 hook 完成后才开始依赖 hook，不能只检查提交顺序。
+            tokio::task::yield_now().await;
+            CLEANUPS.lock().unwrap().push("consumer");
+        })
+    }
+    fn cleanup_target() -> CleanupFuture {
+        Box::pin(async {
+            assert_eq!(*CLEANUPS.lock().unwrap(), ["consumer"]);
+            CLEANUPS.lock().unwrap().push("target");
+        })
+    }
+    let source = ServiceSource::new(file!(), line!(), 1);
+    let consumer_id = ServiceIdentifier::new(None, ServiceType::create::<Consumer>());
+    let target_id = ServiceIdentifier::new(None, ServiceType::create::<Target>());
+    let graph = Arc::new(ValidatedGraph {
+        nodes: vec![
+            CompiledNode {
+                identifier: consumer_id.clone(),
+                common: NodePolicy {
+                    lifetime: ServiceLifetime::Singleton,
+                    lazy: None,
+                    source,
+                    cleanup: Some(cleanup_consumer),
+                },
+                dependencies: vec![CompiledDependency {
+                    slot: InputSlot::new(0),
+                    requested: target_id.clone(),
+                    optional: false,
+                    input: DependencyInput::Lazy {
+                        prepare: prepare_lazy_required::<Target>,
+                        plan: Arc::new(LazyInputPlan {
+                            provider: 1,
+                            consumer: consumer_id,
+                            source,
+                            label: Some("target"),
+                            input: InputSlot::new(0),
+                            project: project_required::<Target>,
+                        }),
+                    },
+                    label: Some("target"),
+                }],
+                constructor: Constructor::Class(consumer),
+                requires_scope: false,
+            },
+            CompiledNode {
+                identifier: target_id,
+                common: NodePolicy {
+                    lifetime: ServiceLifetime::Singleton,
+                    lazy: None,
+                    source,
+                    cleanup: Some(cleanup_target),
+                },
+                dependencies: vec![],
+                constructor: Constructor::Class(target),
+                requires_scope: false,
+            },
+        ],
+        dependents: vec![vec![], vec![0]],
+        topological_order: vec![1, 0],
+        routes: HashMap::new(),
+    });
+    let (runtime, owner) = super::super::Runtime::start(graph, 1);
+    let lease = runtime.resolve(&owner, 0).await.unwrap();
+    assert_eq!(
+        TARGET_BUILDS.load(Ordering::SeqCst),
+        0,
+        "延迟目标不阻塞消费者发布"
+    );
+    // SAFETY: lease 保活准确的 Consumer 实例，运行期发布前已经核对真实类型。
+    let service = unsafe { lease.pointer::<Consumer>().unwrap().as_ref() };
+    service.target.get().await.unwrap();
+    assert_eq!(TARGET_BUILDS.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        owner
+            .data
+            .journal
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|entry| entry.provider)
+            .collect::<Vec<_>>(),
+        [0, 1],
+        "目标确实晚于消费者发布，不能单靠发布时间逆序得到正确清理顺序"
+    );
+    runtime.close(&owner).await.unwrap();
+    assert_eq!(*CLEANUPS.lock().unwrap(), ["consumer", "target"]);
 }
 
 #[tokio::test]
@@ -349,22 +462,25 @@ fn ten_thousand_deferred_nodes_construct_close_and_release_on_small_stack() {
                                 ServiceType::create::<Chain>(),
                             ),
                             optional: true,
-                            target,
-                            prepare: prepare_optional::<Chain>,
-                            lazy: Some(prepare_lazy_optional::<Chain>),
-                            lazy_plan: target.map(|provider| {
-                                Arc::new(LazyInputPlan {
-                                    provider,
-                                    consumer: ServiceIdentifier::new(
-                                        Some(ServiceKey::Indexed(index)),
-                                        ServiceType::create::<Chain>(),
-                                    ),
-                                    source,
-                                    label: Some("next"),
-                                    input: InputSlot::new(0),
-                                    project: project_required::<Chain>,
-                                })
-                            }),
+                            input: match target {
+                                Some(provider) => DependencyInput::Lazy {
+                                    prepare: prepare_lazy_optional::<Chain>,
+                                    plan: Arc::new(LazyInputPlan {
+                                        provider,
+                                        consumer: ServiceIdentifier::new(
+                                            Some(ServiceKey::Indexed(index)),
+                                            ServiceType::create::<Chain>(),
+                                        ),
+                                        source,
+                                        label: Some("next"),
+                                        input: InputSlot::new(0),
+                                        project: project_required::<Chain>,
+                                    }),
+                                },
+                                None => DependencyInput::Absent(AbsentInput::Lazy(
+                                    prepare_lazy_optional::<Chain>,
+                                )),
+                            },
                             label: Some("next"),
                         }],
                         constructor: Constructor::Class(construct),
@@ -411,7 +527,7 @@ fn ten_thousand_deferred_nodes_construct_close_and_release_on_small_stack() {
 #[test]
 fn an_accepted_lazy_request_reports_runtime_exit_instead_of_waiting_forever() {
     use crate::{
-        activation::{FactoryFuture, FactoryInputs, prepare_lazy_required, prepare_required},
+        activation::{FactoryFuture, FactoryInputs, prepare_lazy_required},
         registration::provider::FactoryInvoker,
     };
     use std::time::Duration;
@@ -452,17 +568,20 @@ fn an_accepted_lazy_request_reports_runtime_exit_instead_of_waiting_forever() {
                     slot: InputSlot::new(0),
                     requested: target.clone(),
                     optional: false,
-                    target: Some(1),
-                    prepare: prepare_required::<PendingTarget>,
-                    lazy: Some(prepare_lazy_required::<PendingTarget>),
-                    lazy_plan: Some(Arc::new(LazyInputPlan {
-                        provider: 1,
-                        consumer: ServiceIdentifier::new(None, ServiceType::create::<Consumer>()),
-                        source,
-                        label: Some("target"),
-                        input: InputSlot::new(0),
-                        project: project_required::<PendingTarget>,
-                    })),
+                    input: DependencyInput::Lazy {
+                        prepare: prepare_lazy_required::<PendingTarget>,
+                        plan: Arc::new(LazyInputPlan {
+                            provider: 1,
+                            consumer: ServiceIdentifier::new(
+                                None,
+                                ServiceType::create::<Consumer>(),
+                            ),
+                            source,
+                            label: Some("target"),
+                            input: InputSlot::new(0),
+                            project: project_required::<PendingTarget>,
+                        }),
+                    },
                     label: Some("target"),
                 }],
                 constructor: Constructor::Class(consumer),

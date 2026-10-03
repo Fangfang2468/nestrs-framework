@@ -130,7 +130,7 @@ fn injectable_compiles_execution_policy_and_exact_dependency_slots() {
     );
     assert!(!database.optional);
     assert_eq!(
-        graph.nodes[database.target.unwrap()].identifier,
+        graph.nodes[database.input.target().unwrap()].identifier,
         database.requested
     );
 
@@ -145,9 +145,14 @@ fn injectable_compiles_execution_policy_and_exact_dependency_slots() {
         )
     );
     assert!(audit.optional);
-    assert!(audit.target.is_none());
+    assert!(audit.input.target().is_none());
+    let crate::graph::DependencyInput::Absent(crate::graph::AbsentInput::Immediate(prepare)) =
+        audit.input
+    else {
+        panic!("缺席的普通字段必须交付 Option<Injection<T>>")
+    };
     assert!(
-        (audit.prepare)(audit.slot, None)
+        prepare(audit.slot, None)
             .unwrap()
             .into_optional::<dyn Audit>(audit.slot)
             .unwrap()
@@ -167,7 +172,7 @@ fn injectable_compiles_execution_policy_and_exact_dependency_slots() {
         )
     );
     assert_eq!(
-        graph.nodes[input.target.unwrap()].identifier,
+        graph.nodes[input.input.target().unwrap()].identifier,
         input.requested
     );
 }

@@ -48,6 +48,9 @@ pub enum ConstructionError {
         actual: &'static str,
     },
 
+    #[error("构造输入槽位 {slot:?} 的投影返回了不同实例的注入令牌")]
+    ProjectionOwnerMismatch { slot: InputSlot },
+
     #[error("构造输入槽位 {slot:?} 仍未被消费")]
     UnconsumedSlot { slot: InputSlot },
 

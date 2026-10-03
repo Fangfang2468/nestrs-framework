@@ -26,7 +26,8 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     ServiceLifetime,
     activation::{
-        InputPreparer, InputSlot, LazyInputPlan, LazyInputPreparer, adapter::CleanupHook,
+        InputPreparer, InputSlot, LazyInputPlan, LazyInputPreparer, ServiceProjector,
+        adapter::CleanupHook,
     },
     service::{ServiceIdentifier, ServiceSource},
 };
@@ -82,24 +83,70 @@ pub(crate) struct CompiledDependency {
     pub(crate) slot: InputSlot,
     /// 保留原始请求用于诊断，不能用选中的 concrete 身份覆盖 trait/key/缺席信息。
     pub(crate) requested: ServiceIdentifier,
+    /// 原始请求的可选性仅用于诊断；运行期交付直接匹配 input，不再推导字段组合。
+    /// 装配边界保证只有 optional 请求能形成 Absent，存在目标时适配器固定令牌形态。
     pub(crate) optional: bool,
-    /// 延迟字段在消费者构造时交付句柄；目标边仍参与完整图验证与关闭排序。
-    pub(crate) lazy: Option<LazyInputPreparer>,
-    /// 每条存在目标的延迟边只有一份不可变描述；全部 root/scope/字段 occurrence 共享它。
-    /// 缺席 optional 不创建描述，初始化接收端与结果缓存仍由每个字段分别拥有。
-    pub(crate) lazy_plan: Option<Arc<LazyInputPlan>>,
-    /// None 只在成功图中表示已确定缺席的 optional 输入。
-    pub(crate) target: Option<ProviderId>,
-    /// 目标发布后用此类型化函数准备槽位；target 为 None 时写入合法缺席值。
-    pub(crate) prepare: InputPreparer,
+    pub(crate) input: DependencyInput,
     pub(crate) label: Option<&'static str>,
+}
+
+/// 已冻结的一项执行选择。装配协议中的可选字段在这里收敛为互斥分支：
+/// 缺席没有目标，立即输入必须有目标和准备函数，延迟输入必须有完整共享计划。
+/// 运行期不再组合 target/lazy/lazy_plan 来判断是否调度或怎样交付。
+#[derive(Debug, Clone)]
+pub(crate) enum DependencyInput {
+    Absent(AbsentInput),
+    Immediate {
+        target: ProviderId,
+        prepare: InputPreparer,
+    },
+    Lazy {
+        /// 全部消费者 occurrence 共享固定描述，各自的字段仍独立保存初始化状态。
+        plan: Arc<LazyInputPlan>,
+        prepare: LazyInputPreparer,
+    },
+}
+
+/// 缺席输入仍要交付正确的 Rust 类型：Option<Injection<T>> 与
+/// Option<LazyInjection<T>> 的 None 不可互换。这里仅保存相应准备函数，
+/// 不创建目标任务、延迟计划或运行期请求句柄。
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum AbsentInput {
+    Immediate(InputPreparer),
+    Lazy(LazyInputPreparer),
+}
+
+impl DependencyInput {
+    /// 完整静态依赖关系用于生命周期诊断与关闭排序，必须包含延迟目标。
+    /// 激活前置依赖只匹配 Immediate，不能直接用此方法展开构造任务。
+    pub(crate) fn target(&self) -> Option<ProviderId> {
+        match self {
+            Self::Absent(_) => None,
+            Self::Immediate { target, .. } => Some(*target),
+            Self::Lazy { plan, .. } => Some(plan.provider),
+        }
+    }
+
+    /// 保留延迟声明的诊断形态，含没有候选的 optional 延迟输入。
+    pub(crate) fn is_lazy(&self) -> bool {
+        matches!(self, Self::Lazy { .. } | Self::Absent(AbsentInput::Lazy(_)))
+    }
+
+    /// 只有实际存在延迟目标才有关联 owner 的必要；缺席输入不分配延迟状态。
+    pub(crate) fn lazy_plan(&self) -> Option<&Arc<LazyInputPlan>> {
+        match self {
+            Self::Lazy { plan, .. } => Some(plan),
+            Self::Absent(_) | Self::Immediate { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RootRoute {
     pub(crate) provider: ProviderId,
-    /// trait 根查询复用 binding 的必选输入投影，concrete 根使用实例的准确类型地址。
-    pub(crate) projection: Option<InputPreparer>,
+    /// trait 根与延迟访问共享直接投影能力；查询不经过构造输入的装箱与消费协议。
+    /// concrete 根继续使用实例保存的准确类型地址。
+    pub(crate) projection: Option<ServiceProjector>,
 }
 
 #[cfg(test)]

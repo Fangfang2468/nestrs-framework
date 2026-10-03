@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::{
     InitializationMode, ServiceKey, ServiceLifetime, ServiceProviderOptions,
-    activation::InputSlot,
+    activation::{InputSlot, construction::project_token},
     error::{BuildError, DisposeError, ResolveError},
     graph::{ValidatedGraph, plan},
     runtime::{Owner, Runtime},
@@ -236,19 +236,12 @@ impl<'owner> ServiceProviderRef<'owner> {
             return Ok(None);
         };
         let lease = self.runtime.resolve(self.owner, route.provider).await?;
-        // concrete 查询复用实例保存的准确地址；trait 查询复用构图时选中的 typed
-        // 投影。两条路径都必须验证类型，trait 路径还核对投影没有替换实例所有者。
+        // concrete 查询复用实例保存的准确地址；trait 查询与延迟交付共用直接投影，
+        // 不为一次根查询构造 PreparedInput 的临时堆载荷。project_token 同时核对
+        // 结果类型与实例 lease；投影只能创建当前实例的视图，不能更换它的所有者。
         let pointer = if let Some(project) = route.projection {
-            let prepared = project(InputSlot::new(0), Some(lease.erased_ref()))
+            let token = project_token::<T>(InputSlot::new(0), lease, project)
                 .map_err(|error| ResolveError::new(error.to_string()))?;
-            let token = prepared
-                .into_required::<T>(InputSlot::new(0))
-                .map_err(|error| ResolveError::new(error.to_string()))?;
-            if !token.lease().ptr_eq(&lease) {
-                return Err(ResolveError::new(
-                    "trait 投影返回了不同实例的注入令牌".to_owned(),
-                ));
-            }
             token.into_ptr()
         } else {
             lease.pointer::<T>().ok_or_else(|| {
@@ -264,3 +257,9 @@ impl<'owner> ServiceProviderRef<'owner> {
         Ok(Some(unsafe { pointer.as_ref() }))
     }
 }
+
+// 门面白盒测试仍存放于 tests/。挂载在本模块可直接建立隔离计划，避免为了测试
+// 暴露第二个构建入口或替换进程共享的编译计划。
+#[cfg(all(test, not(nestrs_compiler_contract)))]
+#[path = "../tests/unit/facade_api.rs"]
+mod tests;

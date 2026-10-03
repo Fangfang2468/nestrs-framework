@@ -89,7 +89,7 @@ fn injected_generic_repository_uses_a_closed_target_without_runtime_materializat
         input.requested.service_type,
         ServiceType::create::<Repository<User>>()
     );
-    let repository = &graph.nodes[input.target.unwrap()];
+    let repository = &graph.nodes[input.input.target().unwrap()];
     assert_eq!(
         repository.identifier.service_type,
         ServiceType::create::<Repository<User>>()
@@ -111,10 +111,10 @@ fn nested_closed_generics_freeze_a_complete_execution_chain() {
     let graph = &crate::graph::plan::load().graph;
     let c = node::<C>();
     assert_eq!(c.dependencies.len(), 1);
-    let b = &graph.nodes[c.dependencies[0].target.unwrap()];
+    let b = &graph.nodes[c.dependencies[0].input.target().unwrap()];
     assert_eq!(b.identifier.service_type, ServiceType::create::<B<u32>>());
     assert_eq!(b.dependencies.len(), 1);
-    let a = &graph.nodes[b.dependencies[0].target.unwrap()];
+    let a = &graph.nodes[b.dependencies[0].input.target().unwrap()];
     assert_eq!(a.identifier.service_type, ServiceType::create::<A<u32>>());
     assert!(a.dependencies.is_empty());
     let Constructor::Class(constructor) = a.constructor else {

@@ -95,7 +95,7 @@ impl OwnerData {
         if !graph.nodes.iter().any(|node| {
             node.dependencies
                 .iter()
-                .any(|dependency| dependency.lazy.is_some())
+                .any(|dependency| dependency.input.is_lazy())
         }) {
             return;
         }
@@ -131,7 +131,7 @@ impl OwnerData {
             let mut targets: Vec<_> = graph.nodes[provider]
                 .dependencies
                 .iter()
-                .filter_map(|dependency| dependency.target)
+                .filter_map(|dependency| dependency.input.target())
                 .collect();
             targets.sort_unstable();
             targets.dedup();

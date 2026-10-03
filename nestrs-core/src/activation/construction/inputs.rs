@@ -95,7 +95,8 @@ impl PreparedInput {
         self.lease.clone()
     }
 
-    /// 根服务查询复用 binding preparer，并以准确 token 类型恢复 trait 指针。
+    /// 直接消费一个已准备的必选载荷，供构造协议的隔离校验使用。
+    /// 根查询与延迟目标交付使用 project_token，不再经过此装箱输入路径。
     pub(crate) fn into_required<T>(self, slot: InputSlot) -> Result<Injection<T>, ConstructionError>
     where
         T: Injectable + ?Sized,
@@ -104,7 +105,7 @@ impl PreparedInput {
         Ok(self.into_value())
     }
 
-    /// 延迟可选目标就绪后复用原有的真实投影载荷，准确恢复其 token。
+    /// 直接消费一个已准备的可选载荷；缺席和存在都必须匹配准确的 Option 类型。
     pub(crate) fn into_optional<T>(
         self,
         slot: InputSlot,

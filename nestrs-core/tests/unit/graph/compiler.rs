@@ -217,7 +217,10 @@ fn automatic_capabilities_activate_from_registered_provider_dependencies() {
     .unwrap();
     let consumer = graph.routes[&token::<Consumer>(None)].provider;
     let alpha = graph.routes[&token::<Alpha>(None)].provider;
-    assert_eq!(graph.nodes[consumer].dependencies[0].target, Some(alpha));
+    assert_eq!(
+        graph.nodes[consumer].dependencies[0].input.target(),
+        Some(alpha)
+    );
 }
 
 #[test]
@@ -256,7 +259,10 @@ fn automatic_materialization_closes_new_concrete_and_interface_dependencies() {
     assert_eq!(graph.nodes.len(), 2);
     let alpha = graph.routes[&token::<Alpha>(None)].provider;
     let gamma = graph.routes[&token::<Gamma>(None)].provider;
-    assert_eq!(graph.nodes[alpha].dependencies[0].target, Some(gamma));
+    assert_eq!(
+        graph.nodes[alpha].dependencies[0].input.target(),
+        Some(gamma)
+    );
     assert_eq!(graph.topological_order, vec![gamma, alpha]);
 }
 
@@ -357,8 +363,11 @@ fn snapshot_order_is_deterministic_and_optional_absence_is_frozen() {
     assert_eq!(forward.topological_order, reverse.topological_order);
     let consumer = forward.routes[&token::<Consumer>(None)].provider;
     let alpha = forward.routes[&token::<Alpha>(None)].provider;
-    assert_eq!(forward.nodes[consumer].dependencies[0].target, Some(alpha));
-    assert_eq!(forward.nodes[consumer].dependencies[1].target, None);
+    assert_eq!(
+        forward.nodes[consumer].dependencies[0].input.target(),
+        Some(alpha)
+    );
+    assert_eq!(forward.nodes[consumer].dependencies[1].input.target(), None);
     assert_eq!(forward.dependents[alpha], vec![consumer]);
     assert!(
         forward.topological_order.iter().position(|&id| id == alpha)
@@ -438,7 +447,7 @@ fn trait_routes_use_exact_keys_and_primary_is_local_to_each_candidate_set() {
     );
     let consumer = graph.routes[&token::<Consumer>(None)].provider;
     assert_eq!(
-        graph.nodes[consumer].dependencies[0].target,
+        graph.nodes[consumer].dependencies[0].input.target(),
         Some(route.provider)
     );
 }
@@ -508,8 +517,13 @@ fn absent_optional_trait_compiles_without_a_binding() {
         vec![trait_dependency(true, None)],
     )])
     .unwrap();
-    assert_eq!(graph.nodes[0].dependencies[0].target, None);
-    assert!((graph.nodes[0].dependencies[0].prepare)(InputSlot::new(0), None).is_ok());
+    assert_eq!(graph.nodes[0].dependencies[0].input.target(), None);
+    let DependencyInput::Absent(AbsentInput::Immediate(prepare)) =
+        graph.nodes[0].dependencies[0].input
+    else {
+        panic!("缺席的普通 optional 输入应使用立即准备函数")
+    };
+    assert!(prepare(InputSlot::new(0), None).is_ok());
 }
 
 #[test]
@@ -582,8 +596,8 @@ fn closed_roots_are_idempotent_and_materialization_closes_the_whole_graph() {
     let root_id = graph.routes[&token::<GenericRoot>(None)].provider;
     assert_eq!(graph.nodes[root_id].dependencies.len(), 2);
     assert_eq!(
-        graph.nodes[root_id].dependencies[0].target,
-        graph.nodes[root_id].dependencies[1].target
+        graph.nodes[root_id].dependencies[0].input.target(),
+        graph.nodes[root_id].dependencies[1].input.target()
     );
 }
 
@@ -1080,8 +1094,8 @@ fn closed_blueprint_catalog_expands_dependencies_without_changing_their_keys() {
     );
     assert!(!graph.routes.contains_key(&token::<Alpha>(None)));
     let consumer = &graph.nodes[graph.routes[&token::<Consumer>(None)].provider];
-    assert!(consumer.dependencies[0].target.is_some());
-    assert!(consumer.dependencies[1].target.is_none());
+    assert!(consumer.dependencies[0].input.target().is_some());
+    assert!(consumer.dependencies[1].input.target().is_none());
 }
 
 #[test]
@@ -1171,12 +1185,15 @@ fn lazy_dependencies_preserve_all_graph_validation_rules() {
     .unwrap();
     let consumer = graph.routes[&token::<Consumer>(None)].provider;
     let alpha = graph.routes[&token::<Alpha>(None)].provider;
-    assert_eq!(graph.nodes[consumer].dependencies[0].target, Some(alpha));
-    assert!(graph.nodes[consumer].dependencies[0].lazy.is_some());
+    assert_eq!(
+        graph.nodes[consumer].dependencies[0].input.target(),
+        Some(alpha)
+    );
+    assert!(graph.nodes[consumer].dependencies[0].input.is_lazy());
     assert_eq!(
         graph.nodes[consumer].dependencies[0]
-            .lazy_plan
-            .as_ref()
+            .input
+            .lazy_plan()
             .unwrap()
             .provider,
         alpha
@@ -1206,9 +1223,9 @@ fn lazy_optional_traits_freeze_absence_but_do_not_hide_ambiguity() {
     request.lazy = Some(crate::activation::prepare_lazy_optional::<dyn Audit>);
     let consumer = || provider::<Consumer>(None, ServiceLifetime::Singleton, vec![request.clone()]);
     let graph = compile(vec![consumer()]).unwrap();
-    assert!(graph.nodes[0].dependencies[0].target.is_none());
-    assert!(graph.nodes[0].dependencies[0].lazy.is_some());
-    assert!(graph.nodes[0].dependencies[0].lazy_plan.is_none());
+    assert!(graph.nodes[0].dependencies[0].input.target().is_none());
+    assert!(graph.nodes[0].dependencies[0].input.is_lazy());
+    assert!(graph.nodes[0].dependencies[0].input.lazy_plan().is_none());
 
     let error = GraphCompiler::compile_snapshot(crate::registration::catalog::RegistrySnapshot {
         providers: vec![
@@ -1250,10 +1267,10 @@ fn lazy_factory_inputs_are_planned_without_invoking_any_factory() {
         .find(|node| node.identifier == token::<Consumer>(None))
         .unwrap();
     let input = &factory.dependencies[0];
-    assert!(input.lazy.is_some());
-    assert!(input.lazy_plan.is_some());
+    assert!(input.input.is_lazy());
+    assert!(input.input.lazy_plan().is_some());
     assert_eq!(
-        graph.nodes[input.target.unwrap()].identifier,
+        graph.nodes[input.input.target().unwrap()].identifier,
         token::<Alpha>(None)
     );
 }
@@ -1272,4 +1289,50 @@ fn lazy_concrete_without_a_direct_projector_is_invalid_metadata() {
         diagnostic.kind == GraphDiagnosticKind::InvalidMetadata
             && diagnostic.message.contains("延迟输入缺少直接类型化投影")
     }));
+}
+
+#[test]
+fn malformed_lazy_metadata_preserves_missing_and_topological_diagnostics() {
+    for cycle in [false, true] {
+        let mut deferred = dependency::<Alpha>(0, None);
+        deferred.lazy = Some(crate::activation::prepare_lazy_required::<Alpha>);
+        deferred.project = None;
+        let (lifetime, dependencies, expected) = if cycle {
+            (
+                ServiceLifetime::Singleton,
+                vec![dependency::<Consumer>(0, None)],
+                GraphDiagnosticKind::Cycle,
+            )
+        } else {
+            (
+                ServiceLifetime::Scoped,
+                vec![],
+                GraphDiagnosticKind::ScopeRequired,
+            )
+        };
+        // 非法延迟描述与缺失必选输入不能在 enum 转换时提前 panic，也不能使
+        // 已知目标边丢失。参考编译器仍应一次报告结构错误和后续拓扑诊断。
+        let error = compile(vec![
+            provider::<Consumer>(
+                None,
+                ServiceLifetime::Singleton,
+                vec![deferred, dependency::<Beta>(1, None)],
+            ),
+            provider::<Alpha>(None, lifetime, dependencies),
+        ])
+        .unwrap_err();
+        for kind in [
+            GraphDiagnosticKind::InvalidMetadata,
+            GraphDiagnosticKind::MissingDependency,
+            expected,
+        ] {
+            assert!(
+                error
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.kind == kind),
+                "缺少 {kind:?}：{error}"
+            );
+        }
+    }
 }

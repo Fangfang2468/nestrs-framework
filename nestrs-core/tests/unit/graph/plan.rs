@@ -5,9 +5,11 @@ use crate::activation::adapter::{ActivationAdapter, InputAdapter, ProjectionAdap
 use crate::{
     InitializationMode, ServiceKey, ServiceLifetime,
     activation::{
-        ConstructionError, ConstructionInputs, ErasedService, InputSlot, prepare_bound_optional,
-        prepare_bound_required, prepare_lazy_optional, prepare_optional_absent, prepare_required,
+        ActivationPreparation, ConstructionError, ConstructionInputs, ErasedService, InputSlot,
+        prepare_bound_optional, prepare_bound_required, prepare_lazy_optional,
+        prepare_optional_absent, prepare_required,
     },
+    graph::{AbsentInput, DependencyInput},
     registration::{
         binding::TraitBinding,
         catalog::RegistrySnapshot,
@@ -150,24 +152,79 @@ fn compiled_indices_load_exact_routes_all_slots_and_typed_adapters_without_callb
     assert_eq!(graph.topological_order, [1, 0]);
     assert_eq!(graph.dependents, [vec![], vec![0]]);
     assert_eq!(graph.nodes[0].dependencies.len(), 3);
-    assert_eq!(graph.nodes[0].dependencies[0].target, Some(1));
-    assert_eq!(graph.nodes[0].dependencies[1].target, Some(1));
-    assert_eq!(graph.nodes[0].dependencies[2].target, None);
-    assert!(graph.nodes[0].dependencies[2].lazy.is_some());
-    assert!(graph.nodes[0].dependencies[2].lazy_plan.is_none());
+    assert_eq!(graph.nodes[0].dependencies[0].input.target(), Some(1));
+    assert_eq!(graph.nodes[0].dependencies[1].input.target(), Some(1));
+    assert_eq!(graph.nodes[0].dependencies[2].input.target(), None);
+    assert!(graph.nodes[0].dependencies[2].input.is_lazy());
+    assert!(graph.nodes[0].dependencies[2].input.lazy_plan().is_none());
     assert_eq!(
         graph.routes[&identifier::<dyn Port>(Some(ServiceKey::Named("primary".into())))].provider,
         1
     );
     assert!(!graph.routes.contains_key(&identifier::<dyn Port>(None)));
     assert!(!graph.routes.contains_key(&identifier::<dyn Missing>(None)));
-    let absent = (graph.nodes[0].dependencies[2].prepare)(InputSlot::new(2), None).unwrap();
+    let DependencyInput::Absent(AbsentInput::Lazy(prepare)) = graph.nodes[0].dependencies[2].input
+    else {
+        panic!("缺席的延迟输入必须交付 Option<LazyInjection<T>>")
+    };
+    let mut preparation = ActivationPreparation::new(1);
+    preparation
+        .prepare_lazy(InputSlot::new(0), prepare, None)
+        .unwrap();
+    let (mut inputs, leases) = preparation.finish_class().unwrap();
     assert!(
-        absent
-            .into_optional::<dyn Missing>(InputSlot::new(2))
+        inputs
+            .take_optional_lazy::<dyn Missing>(InputSlot::new(0))
             .unwrap()
             .is_none()
     );
+    inputs.ensure_all_consumed().unwrap();
+    assert!(leases.is_empty(), "缺席输入不能分配依赖 lease");
+}
+
+#[test]
+fn absent_immediate_and_lazy_slots_deliver_distinct_optional_token_types() {
+    let mut requests = vec![inputs().remove(2); 2];
+    requests[0].input_slot = InputSlot::new(0);
+    requests[0].declaration_position = 0;
+    requests[0].lazy = None;
+    requests[1].input_slot = InputSlot::new(1);
+    requests[1].declaration_position = 1;
+    let mut assembly = TestAssembly::default();
+    let output = (&mut assembly as *mut TestAssembly).cast();
+    // SAFETY: 一个 provider 的两个连续槽位均由编译器决定缺席，没有外部地址或回调执行。
+    unsafe {
+        plan_push_provider(output, provider::<Consumer>(None, requests), false);
+        plan_set_input(output, 0, 0, ABSENT, ABSENT);
+        plan_set_input(output, 0, 1, ABSENT, ABSENT);
+        plan_push_order(output, 0);
+    }
+    let application = assembly.finish();
+    let dependencies = &application.graph.nodes[0].dependencies;
+    let DependencyInput::Absent(AbsentInput::Immediate(immediate)) = dependencies[0].input else {
+        panic!("普通 optional 缺席必须固定为立即输入")
+    };
+    let DependencyInput::Absent(AbsentInput::Lazy(lazy)) = dependencies[1].input else {
+        panic!("延迟 optional 缺席必须保留延迟令牌类型")
+    };
+    // 两个 None 在业务上都表示缺席，在 ABI 上却是不同的 Rust 类型；同时走真实
+    // 准备事务和 typed extraction，避免仅比较 enum 分支而漏掉错误准备函数。
+    let mut preparation = ActivationPreparation::new(2);
+    preparation
+        .prepare(InputSlot::new(0), immediate, None)
+        .unwrap();
+    preparation
+        .prepare_lazy(InputSlot::new(1), lazy, None)
+        .unwrap();
+    let (mut inputs, leases) = preparation.finish_class().unwrap();
+    let immediate: Option<crate::Injection<dyn Missing>> =
+        inputs.take_optional(InputSlot::new(0)).unwrap();
+    let lazy: Option<crate::LazyInjection<dyn Missing>> =
+        inputs.take_optional_lazy(InputSlot::new(1)).unwrap();
+    assert!(immediate.is_none());
+    assert!(lazy.is_none());
+    inputs.ensure_all_consumed().unwrap();
+    assert!(leases.is_empty());
 }
 
 #[test]
@@ -292,8 +349,8 @@ fn lazy_edges_freeze_selected_projection_and_absence_once() {
     }
     let application = assembly.finish();
     let inputs = &application.graph.nodes[0].dependencies;
-    let direct = inputs[0].lazy_plan.as_ref().unwrap();
-    let bound = inputs[1].lazy_plan.as_ref().unwrap();
+    let direct = inputs[0].input.lazy_plan().unwrap();
+    let bound = inputs[1].input.lazy_plan().unwrap();
     assert_eq!(direct.provider, 1);
     assert_eq!(direct.input, InputSlot::new(0));
     assert_eq!(direct.source, source());
@@ -304,7 +361,10 @@ fn lazy_edges_freeze_selected_projection_and_absence_once() {
     );
     assert!(!Arc::ptr_eq(direct, bound), "重复目标仍有各自的输入描述");
     assert!(std::ptr::fn_addr_eq(bound.project, binding.project));
-    assert!(inputs[2].lazy_plan.is_none(), "缺席字段不分配延迟计划");
+    assert!(
+        inputs[2].input.lazy_plan().is_none(),
+        "缺席字段不分配延迟计划"
+    );
 }
 
 #[tokio::test]
@@ -346,8 +406,8 @@ async fn lazy_metadata_is_shared_across_occurrences_and_survives_owner_and_graph
     }
     let application = assembly.finish();
     let plan = application.graph.nodes[0].dependencies[0]
-        .lazy_plan
-        .as_ref()
+        .input
+        .lazy_plan()
         .unwrap()
         .clone();
     let weak_plan = Arc::downgrade(&plan);

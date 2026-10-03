@@ -122,7 +122,7 @@ pub(super) fn select(
                     identifier.clone(),
                     RootRoute {
                         provider,
-                        projection: Some(binding.prepare_required),
+                        projection: Some(binding.project),
                     },
                 )
                 .is_some()

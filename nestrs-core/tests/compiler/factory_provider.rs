@@ -250,7 +250,7 @@ fn factory_compiles_configuration_and_parameter_inputs() {
         assert_eq!(input.requested, ServiceIdentifier::from(service_type));
         assert!(!input.optional);
         assert_eq!(
-            graph.nodes[input.target.unwrap()].identifier,
+            graph.nodes[input.input.target().unwrap()].identifier,
             input.requested
         );
     }
@@ -265,9 +265,14 @@ fn factory_compiles_configuration_and_parameter_inputs() {
         )
     );
     assert!(audit.optional);
-    assert!(audit.target.is_none());
+    assert!(audit.input.target().is_none());
+    let crate::graph::DependencyInput::Absent(crate::graph::AbsentInput::Immediate(prepare)) =
+        audit.input
+    else {
+        panic!("缺席的 factory 普通输入必须交付 Option<Injection<T>>")
+    };
     assert!(
-        (audit.prepare)(audit.slot, None)
+        prepare(audit.slot, None)
             .unwrap()
             .into_optional::<Audit>(audit.slot)
             .unwrap()

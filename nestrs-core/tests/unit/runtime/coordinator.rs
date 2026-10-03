@@ -23,7 +23,7 @@ use crate::{
         InputSlot, prepare_required,
     },
     graph::NodePolicy,
-    graph::{CompiledDependency, CompiledNode, Constructor, ValidatedGraph},
+    graph::{CompiledDependency, CompiledNode, Constructor, DependencyInput, ValidatedGraph},
     lifetime::ServiceLifetime,
     service::{ServiceIdentifier, ServiceKey, ServiceSource, ServiceType},
 };
@@ -63,7 +63,7 @@ fn graph(nodes: Vec<CompiledNode>) -> Arc<ValidatedGraph> {
     let mut dependents = vec![Vec::new(); nodes.len()];
     for (consumer, node) in nodes.iter().enumerate() {
         for dependency in &node.dependencies {
-            if let Some(provider) = dependency.target {
+            if let Some(provider) = dependency.input.target() {
                 dependents[provider].push(consumer);
             }
         }
@@ -308,10 +308,10 @@ async fn retiring_a_failed_parent_still_drains_its_previously_accepted_children(
                 ServiceType::create::<u32>(),
             ),
             optional: false,
-            lazy: None,
-            lazy_plan: None,
-            target: Some(provider),
-            prepare: prepare_required::<u32>,
+            input: DependencyInput::Immediate {
+                target: provider,
+                prepare: prepare_required::<u32>,
+            },
             label: None,
         })
         .collect();
@@ -427,10 +427,10 @@ fn deep_graph_activation_and_shutdown_do_not_use_a_recursive_rust_stack() {
                                         ServiceType::create::<Chain>(),
                                     ),
                                     optional: false,
-                                    lazy: None,
-                                    lazy_plan: None,
-                                    target: Some(index - 1),
-                                    prepare: prepare_required::<Chain>,
+                                    input: DependencyInput::Immediate {
+                                        target: index - 1,
+                                        prepare: prepare_required::<Chain>,
+                                    },
                                     label: Some("previous"),
                                 }],
                             )
@@ -612,10 +612,10 @@ async fn a_ready_successor_does_not_wait_for_an_unrelated_slow_node() {
                     ServiceType::create::<Fast>(),
                 ),
                 optional: false,
-                lazy: None,
-                lazy_plan: None,
-                target: Some(0),
-                prepare: prepare_required::<Fast>,
+                input: DependencyInput::Immediate {
+                    target: 0,
+                    prepare: prepare_required::<Fast>,
+                },
                 label: Some("fast"),
             }],
         ),

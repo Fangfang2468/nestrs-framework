@@ -9,7 +9,7 @@ use std::{
 
 use super::{project_bound, project_required, project_token};
 use crate::activation::{
-    ConstructionError, DependencyLease, ErasedService, InputSlot, ReleaseDomain,
+    ConstructionError, DependencyLease, ErasedService, ErasedServiceRef, InputSlot, ReleaseDomain,
     prepare_bound_required, prepare_required,
 };
 
@@ -109,7 +109,8 @@ fn concrete_and_trait_projection_deliver_without_temporary_allocations() {
     assert_eq!(bound.value(), 73);
     assert_eq!(bound_count, 0);
 
-    // 与此前 LazyInjection 使用的通用 PreparedInput 路径作同条件对照。
+    // 与构造输入仍使用的通用 PreparedInput 路径作同条件对照；根 trait 查询和
+    // LazyInjection 现在共用上面的直接交付，实例身份检查也不能引入临时堆载荷。
     let (ordinary, ordinary_count) = allocations(|| {
         let input = prepare_required::<Adapter>(slot, Some(instance.erased_ref())).unwrap();
         std::hint::black_box(input)
@@ -182,6 +183,76 @@ fn a_swallowed_wrong_type_write_invalidates_the_whole_delivery() {
         }),
         Err(ConstructionError::InputTypeMismatch { slot: actual, .. }) if actual == slot
     ));
+}
+
+struct TrackedAdapter(Arc<AtomicUsize>);
+
+impl Port for TrackedAdapter {
+    fn value(&self) -> u32 {
+        91
+    }
+}
+
+impl Drop for TrackedAdapter {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// 模拟完全由安全调用组成的错误 adapter：取得正确类型的输入，再创建同类型的
+/// 另一个实例。它的令牌本身有效，但不属于执行计划已选择、owner 已发布的实例。
+fn replacement_instance(
+    slot: InputSlot,
+    input: ErasedServiceRef,
+) -> Result<ErasedServiceRef, ConstructionError> {
+    let original = super::required_token::<TrackedAdapter>(slot, input)?;
+    Ok(lease(TrackedAdapter(original.0.clone())).erased_ref())
+}
+
+#[test]
+fn same_type_replacement_is_rejected_and_only_the_substitute_is_released() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    let original = lease(TrackedAdapter(drops.clone()));
+    let slot = InputSlot::new(11);
+    let result = project_token::<TrackedAdapter>(slot, original.clone(), |slot, input, target| {
+        project_required::<TrackedAdapter>(slot, replacement_instance(slot, input)?, target)
+    });
+    assert!(matches!(
+        result,
+        Err(ConstructionError::ProjectionOwnerMismatch { slot: actual }) if actual == slot
+    ));
+    // 拒绝错误投影时立即回滚替代实例；原实例的 lease 仍由调用者持有。
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    let correct =
+        project_token::<TrackedAdapter>(slot, original.clone(), project_required::<TrackedAdapter>)
+            .unwrap();
+    assert!(Arc::ptr_eq(&correct.0, &drops));
+    drop(correct);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    drop(original);
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn valid_trait_coercion_cannot_hide_a_different_instance_owner() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    let original = lease(TrackedAdapter(drops.clone()));
+    let slot = InputSlot::new(12);
+    let result = project_token::<dyn Port>(slot, original.clone(), |slot, input, target| {
+        project_bound::<TrackedAdapter, dyn Port>(
+            slot,
+            replacement_instance(slot, input)?,
+            target,
+            |value| value,
+        )
+    });
+    assert!(matches!(
+        result,
+        Err(ConstructionError::ProjectionOwnerMismatch { slot: actual }) if actual == slot
+    ));
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    drop(original);
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
 }
 
 #[test]

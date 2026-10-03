@@ -11,7 +11,7 @@ use crate::{
         ConstructionError, ConstructionInputs, DependencyLease, ErasedService, InputSlot,
         prepare_required,
     },
-    graph::{CompiledDependency, Constructor, ValidatedGraph},
+    graph::{CompiledDependency, Constructor, DependencyInput, ValidatedGraph},
     runtime::{
         TaskId,
         coordinator::Coordinator,
@@ -42,10 +42,10 @@ fn dependency(input: usize, provider: usize) -> CompiledDependency {
             ServiceType::create::<u32>(),
         ),
         optional: false,
-        lazy: None,
-        lazy_plan: None,
-        target: Some(provider),
-        prepare: prepare_required::<u32>,
+        input: DependencyInput::Immediate {
+            target: provider,
+            prepare: prepare_required::<u32>,
+        },
         label: None,
     }
 }

@@ -13,7 +13,10 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use super::{CompiledDependency, CompiledNode, NodePolicy, RootRoute, ValidatedGraph};
+use super::{
+    AbsentInput, CompiledDependency, CompiledNode, DependencyInput, NodePolicy, RootRoute,
+    ValidatedGraph,
+};
 use crate::{
     InitializationMode, ServiceKey, ServiceLifetime, ServiceProviderOptions,
     activation::{
@@ -292,25 +295,33 @@ pub unsafe fn plan_set_input(
     let input_slot = InputSlot::new(slot);
     let requested =
         ServiceIdentifier::new(key(key_kind, key_name, key_index), adapter.service_type);
-    let lazy_plan = adapter.lazy.and(target).map(|target| {
-        let consumer = &assembly.nodes[provider].node;
-        Arc::new(LazyInputPlan {
-            provider: target,
-            consumer: consumer.identifier.clone(),
-            source: consumer.common.source,
-            label,
-            input: input_slot,
-            project: project.expect("Nestrs 编译计划的延迟输入缺少直接类型化投影"),
-        })
-    });
+    // 可选字段只存在于编译器装配协议。此处一次确定最终交付分支，worker 随后
+    // 直接匹配该分支；不会再遇到“有延迟标记但没有对应计划”的半完成执行节点。
+    // 缺席延迟输入保留专用 preparer，保证写入 Option<LazyInjection<T>> 的 None。
+    let input = match (target, adapter.lazy) {
+        (None, None) => DependencyInput::Absent(AbsentInput::Immediate(prepare)),
+        (None, Some(prepare)) => DependencyInput::Absent(AbsentInput::Lazy(prepare)),
+        (Some(target), None) => DependencyInput::Immediate { target, prepare },
+        (Some(target), Some(prepare)) => {
+            let consumer = &assembly.nodes[provider].node;
+            DependencyInput::Lazy {
+                plan: Arc::new(LazyInputPlan {
+                    provider: target,
+                    consumer: consumer.identifier.clone(),
+                    source: consumer.common.source,
+                    label,
+                    input: input_slot,
+                    project: project.expect("Nestrs 编译计划的延迟输入缺少直接类型化投影"),
+                }),
+                prepare,
+            }
+        }
+    };
     assembly.nodes[provider].inputs[slot] = Some(CompiledDependency {
         slot: input_slot,
         requested,
         optional,
-        lazy: adapter.lazy,
-        lazy_plan,
-        target,
-        prepare,
+        input,
         label,
     });
 }
@@ -339,7 +350,7 @@ pub unsafe fn plan_push_trait_route(output: *mut (), provider: usize, binding: u
                 identifier,
                 RootRoute {
                     provider,
-                    projection: Some(binding.prepare_required)
+                    projection: Some(binding.project)
                 }
             )
             .is_none(),

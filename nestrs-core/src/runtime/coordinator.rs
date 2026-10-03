@@ -17,7 +17,7 @@ use tokio::{
 use crate::{
     activation::ReleaseDomain,
     error::{DisposeError, ResolveError},
-    graph::ValidatedGraph,
+    graph::{DependencyInput, ValidatedGraph},
     lifetime::ServiceLifetime,
 };
 
@@ -268,12 +268,10 @@ impl Coordinator {
             let targets: Vec<_> = self.graph.nodes[provider]
                 .dependencies
                 .iter()
-                .map(|dependency| {
-                    if dependency.lazy.is_some() {
-                        None
-                    } else {
-                        dependency.target
-                    }
+                .map(|dependency| match &dependency.input {
+                    DependencyInput::Immediate { target, .. } => Some(*target),
+                    // 缺席输入直接交付 None，延迟输入只交付句柄，都不占前置任务。
+                    DependencyInput::Absent(_) | DependencyInput::Lazy { .. } => None,
                 })
                 .collect();
             let mut failure = None;
@@ -437,7 +435,7 @@ impl Coordinator {
                 .dependencies
                 .iter()
                 .map(|dependency| {
-                    dependency.lazy_plan.as_ref().map(|plan| {
+                    dependency.input.lazy_plan().map(|plan| {
                         super::lazy::dependency(&self.owners[&activation.owner].data, plan.clone())
                     })
                 })

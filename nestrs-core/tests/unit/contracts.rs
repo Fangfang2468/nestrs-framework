@@ -174,10 +174,10 @@ mod class_provider {
         assert_eq!(compiled.common.source, common.source);
         assert_eq!(compiled.dependencies.len(), 2);
         assert_eq!(compiled.dependencies[0].slot, InputSlot::new(0));
-        assert!(compiled.dependencies[0].target.is_some());
+        assert!(compiled.dependencies[0].input.target().is_some());
         assert_eq!(compiled.dependencies[1].slot, InputSlot::new(1));
         assert!(compiled.dependencies[1].optional);
-        assert!(compiled.dependencies[1].target.is_none());
+        assert!(compiled.dependencies[1].input.target().is_none());
     }
 }
 

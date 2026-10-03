@@ -14,8 +14,8 @@ mod routes;
 mod topology;
 
 use super::{
-    CompiledDependency, CompiledNode, Constructor, GraphDiagnostic, GraphDiagnosticKind as Kind,
-    GraphError, ProviderId, RootRoute, ValidatedGraph,
+    AbsentInput, CompiledDependency, CompiledNode, Constructor, DependencyInput, GraphDiagnostic,
+    GraphDiagnosticKind as Kind, GraphError, ProviderId, RootRoute, ValidatedGraph,
 };
 use crate::{
     registration::{
@@ -58,7 +58,7 @@ impl From<Provider> for Declaration {
 }
 
 impl GraphCompiler {
-    /// 生产与隔离测试使用同一入口，避免为不同注册来源维护多套编译协议。
+    /// 隔离测试的参考编译入口；生产只装载工具链已经验证的不可变计划。
     pub(crate) fn compile_snapshot(
         snapshot: RegistrySnapshot,
     ) -> Result<ValidatedGraph, GraphError> {

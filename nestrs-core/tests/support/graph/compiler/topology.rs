@@ -26,7 +26,7 @@ pub(super) fn analyze(
             if let Some(target) = nodes[provider]
                 .dependencies
                 .iter()
-                .filter_map(|dependency| dependency.target)
+                .filter_map(|dependency| dependency.input.target())
                 .find(|&target| nodes[target].requires_scope)
             {
                 nodes[provider].requires_scope = true;
@@ -77,7 +77,7 @@ fn topological_order(nodes: &[CompiledNode]) -> Topology {
         .map(|node| {
             node.dependencies
                 .iter()
-                .filter_map(|dependency| dependency.target)
+                .filter_map(|dependency| dependency.input.target())
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect()
@@ -176,7 +176,7 @@ fn describe_path(nodes: &[CompiledNode], path: &[ProviderId]) -> String {
             let edge = path.get(index + 1).and_then(|next| {
                 node.dependencies
                     .iter()
-                    .find(|dependency| dependency.target == Some(*next))
+                    .find(|dependency| dependency.input.target() == Some(*next))
             });
             let suffix = edge
                 .map(|edge| match edge.label {

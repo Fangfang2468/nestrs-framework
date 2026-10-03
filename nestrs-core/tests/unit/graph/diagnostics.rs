@@ -8,7 +8,9 @@ use crate::{
         ConstructionError, ConstructionInputs, ErasedService, FactoryFuture, FactoryInputs,
         InputSlot, prepare_required,
     },
-    graph::{CompiledDependency, CompiledNode, GraphCompiler, ProviderId},
+    graph::{
+        AbsentInput, CompiledDependency, CompiledNode, DependencyInput, GraphCompiler, ProviderId,
+    },
     registration::{
         dependency::{Delivery, DependencyRequest, ProviderSource},
         provider::{ClassProvider, Provider, ProviderCommon},
@@ -56,12 +58,17 @@ fn dependency(
 ) -> CompiledDependency {
     CompiledDependency {
         slot: InputSlot::new(slot),
-        target,
         requested: identifier(requested),
         optional: target.is_none(),
-        lazy: None,
-        lazy_plan: None,
-        prepare: prepare_required::<()>,
+        input: match target {
+            Some(target) => DependencyInput::Immediate {
+                target,
+                prepare: prepare_required::<()>,
+            },
+            None => DependencyInput::Absent(AbsentInput::Immediate(
+                crate::activation::prepare_optional_absent::<()>,
+            )),
+        },
         label: Some(label),
     }
 }
@@ -80,7 +87,7 @@ fn graph(nodes: Vec<CompiledNode>) -> ValidatedGraph {
     let mut dependents = vec![vec![]; nodes.len()];
     for (id, node) in nodes.iter().enumerate() {
         for dependency in &node.dependencies {
-            if let Some(target) = dependency.target
+            if let Some(target) = dependency.input.target()
                 && dependents[target].last() != Some(&id)
             {
                 dependents[target].push(id);

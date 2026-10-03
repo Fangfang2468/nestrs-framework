@@ -1,12 +1,12 @@
 //! 把声明期的依赖请求编译为运行期可直接使用的构造输入槽位。
 //!
 //! 此处完成 optional 缺席、concrete 输入与 trait 投影的最终选择。运行期无需再判断
-//! 候选或泛型来源，只按冻结的 target/prepare 准备输入。即使多个输入指向相同 Provider，
+//! 候选或泛型来源，只按冻结的执行分支准备输入。即使多个输入指向相同 Provider，
 //! 也保留全部槽位；对 Transient 而言，每个槽位代表独立的实例消费。
 
 use super::{
-    CompiledDependency, CompiledNode, Declaration, GraphDiagnostic, Kind, dependency_label,
-    routes::SelectedRoutes, source, token,
+    AbsentInput, CompiledDependency, CompiledNode, Declaration, DependencyInput, GraphDiagnostic,
+    Kind, dependency_label, routes::SelectedRoutes, source, token,
 };
 use crate::{
     ServiceLifetime,
@@ -180,14 +180,26 @@ pub(super) fn compile(
                 None
             };
             if let Some(prepare) = prepare {
+                let input = match (route, request.lazy, lazy_plan) {
+                    (None, Some(prepare), _) => DependencyInput::Absent(AbsentInput::Lazy(prepare)),
+                    (None, None, _) => DependencyInput::Absent(AbsentInput::Immediate(prepare)),
+                    (Some(_), Some(prepare), Some(plan)) => DependencyInput::Lazy { plan, prepare },
+                    (Some(route), _, _) => {
+                        // 参考编译器必须继续聚合所有诊断：非法 lazy 元数据已经记错，
+                        // 此处暂存目标边以便后续仍能发现环及 Scoped 泄漏，不能 unwrap
+                        // 缺失的延迟计划提前 panic。含该降级边的图必定在最终诊断门禁
+                        // 返回 Err，永远不会交付运行期，也不会调用这个准备函数。
+                        DependencyInput::Immediate {
+                            target: route.provider,
+                            prepare,
+                        }
+                    }
+                };
                 dependencies.push(CompiledDependency {
                     slot: request.input_slot,
                     requested: request.token.clone(),
                     optional: request.optional,
-                    lazy: request.lazy,
-                    lazy_plan,
-                    target: route.map(|route| route.provider),
-                    prepare,
+                    input,
                     label: request.label,
                 });
             }

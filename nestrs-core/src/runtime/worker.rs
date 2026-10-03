@@ -7,7 +7,7 @@ use super::{Resolution, owner::Published};
 use crate::{
     activation::{ActivationPreparation, DependencyLease, ReleaseDomain, adapter::FactoryInvoker},
     error::ResolveError,
-    graph::{Constructor, ValidatedGraph},
+    graph::{AbsentInput, Constructor, DependencyInput, ValidatedGraph},
 };
 use std::{
     any::Any,
@@ -32,15 +32,23 @@ pub(super) async fn activate(
     // Preparation 对写入失败负责回滚，factory frame 则持有跨 await 的真实借用对象。
     let mut preparation = ActivationPreparation::new(node.dependencies.len());
     for ((dependency, input), lazy_input) in node.dependencies.iter().zip(inputs).zip(lazy_inputs) {
-        if let Some(preparer) = dependency.lazy {
-            preparation
-                .prepare_lazy(dependency.slot, preparer, lazy_input)
-                .map_err(convert)?;
-        } else {
-            preparation
-                .prepare(dependency.slot, dependency.prepare, input)
-                .map_err(convert)?;
+        // 计划已经决定完整交付形态。缺席分支使用准确类型的 None；只有立即输入
+        // 消费已就绪实例，只有实际延迟目标才接收关联 owner 的请求句柄。
+        match &dependency.input {
+            DependencyInput::Absent(AbsentInput::Immediate(prepare)) => {
+                preparation.prepare(dependency.slot, *prepare, None)
+            }
+            DependencyInput::Absent(AbsentInput::Lazy(prepare)) => {
+                preparation.prepare_lazy(dependency.slot, *prepare, None)
+            }
+            DependencyInput::Immediate { prepare, .. } => {
+                preparation.prepare(dependency.slot, *prepare, input)
+            }
+            DependencyInput::Lazy { prepare, .. } => {
+                preparation.prepare_lazy(dependency.slot, *prepare, lazy_input)
+            }
         }
+        .map_err(convert)?;
     }
     let (service, dependencies) = match node.constructor {
         Constructor::Class(constructor) => {
