@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["nestrs-core", "cargo-nestrs", "cargo-nestrs/internal/bridge", "example/di-checkout"]
+members = ["nestrs-core", "nestrs-config", "cargo-nestrs", "cargo-nestrs/internal/bridge", "example/di-checkout"]
 # The private bridge is built with the pinned driver by tools/build-toolchain.py.
 default-members = ["nestrs-core", "cargo-nestrs"]
 

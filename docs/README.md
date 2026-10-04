@@ -3,7 +3,7 @@
 每个主题保留一个主要入口。初次使用从[项目 README](../README.md)和声明指南开始；
 维护实现时按下面的编译期、运行期边界阅读。
 
-用法与设计文档描述当前实现；[修复记录](NESTRS_FIXES.md)按轮次保存缺陷、原因、
+除明确标为设计阶段的文档外，用法与设计文档描述当前实现；[修复记录](NESTRS_FIXES.md)按轮次保存缺陷、原因、
 修复方式及当时的验证范围；[性能与内存](NESTRS_PERFORMANCE.md)保存有基线的历史测量。
 阅读历史结论时应同时核对对应快照、工具链和平台，不能将其视为后续版本的自动验收。
 
@@ -11,6 +11,7 @@
 | --- | --- |
 | [服务声明与查询](NESTRS_MACROS.md) | injectable、constructor、factory、注入、key、trait、泛型、lazy 和跨 crate 怎么用？ |
 | [core 设计与架构](../nestrs-core/README.md) | root / scope 如何按配置创建与初始化？冻结计划、构造输入、实例所有权、并发、取消与关闭如何协作？ |
+| [独立配置库与框架集成设计](../nestrs-config/README.md) | 如何用普通 Cargo 加载、合并和绑定配置，使用 section/explain 与安全错误？后续配置宏、自动校验及 DI 的边界是什么？ |
 | [Cargo 工具链](NESTRS_CARGO_TOOLCHAIN.md) | 如何构建、检查、运行、测试、导图？配置、缓存、平台和回归边界是什么？ |
 | [IDE 接入](NESTRS_IDE.md) | 如何配置原版 rust-analyzer？项目模型、保存检查和 constructor 补全如何工作？ |
 | [rustc 扩展与集成](NESTRS_RUSTC_EXTENSION_GUIDE.md) | 宏、HIR、Ty/DefId、MIR 和跨 crate 摘要怎样生成执行计划？reflect 产物是什么？ |

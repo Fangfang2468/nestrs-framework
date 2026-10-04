@@ -59,7 +59,54 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 
 * Nestrs 以 DI 为根基。用户面向 `nestrs-core` 与 `cargo-nestrs`；`nestrs-tool-bridge`
   是工具包内部的 `publish = false` 构建工件，不是应用依赖或独立公开 API。
-* `nestrs-core` 是 DI 容器和所有运行期生态库的地基。
+* `nestrs-core` 是 DI 容器和 DI 生态的地基；独立配置库不要求依赖 core。
+* `nestrs-config` 已提供可通过普通 Cargo 独立使用的配置运行时；唯一文档入口为
+  `nestrs-config/README.md`。本阶段单 crate，不依赖 core、工具链或 Tokio，支持内存、
+  JSON/TOML、环境及可选 dotenv、类型化读取、来源扩展、section/explain 和安全诊断。
+  `configable`、字段 `config_value`、自动校验、sensitive 宏及 DI 接入仍未实现，
+  不得将这些设计示例写成已支持能力。普通配置类型使用自身 Serde Deserialize。
+  配置声明与具体客户端分离；公共协议固定定义，工具链生成 Deserialize/校验实现及类型化调用，
+  不为每个应用生成不同身份的公共 trait。独立阶段在同一 crate 定义 ConfigService 与
+  ConfigError，公共协议不引用具体客户端的节点或来源类型；后续声明支持与 package
+  拆分另行评审，不把配置实现搬入 core 或让运行时依赖工具链。
+  configable 显式声明带 prefix 的配置数据模型，不生成配置 provider，不使用服务生命周期
+  或 lazy 标记。该模型及其字段通过 config_value 消费，不能恢复 inject 配置模型。
+  移除 config_object，不以无 prefix 的 configable、nested 或 ValidateNested 代替。
+  普通嵌套类型不因从配置根可达而自动注册服务，也不因此被禁止使用其既有 DI 能力。
+  对配置类型作为服务请求/注册的诊断范围，以及绑定次数、对象所有权和字段 Clone
+  的具体基线见唯一设计文档，仍需实现前评审，不沿用旧配置 Singleton 缓存语义。
+  config_value 以字符串对象/字段地址为主、类型字段选择器为补充；工具链静态映射
+  真实 schema，消费者依赖所选配置服务，完整绑定和校验所属模型后交付普通值，不退化为
+  运行期原始路径查询。对象地址和字段地址共同检查歧义，不按目标类型隐式消歧。
+  公共 ConfigService trait 仅定义 get<T>(path) 与 get_required<T>(path)，
+  T: DeserializeOwned；客户端自行读取和转换，不强制 get_value、统一 ConfigValue、
+  snapshot、section/explain 或共同绑定器。官方客户端可有自己的扩展，第三方无需复用。
+  这个泛型 trait 不支持标准 dyn ConfigService，impl dyn 也不能补救；原节点门面
+  A/B 提案已撤回，服务分派与 DI 注入方式仍待评审，不把自动特化或类型擦除写成现有能力。
+  第一版拟同步或异步准备客户端、交付后同步读取固定版本，不隐式在 get 中执行文件/网络 I/O。
+  配置字段拟使用 default/default(表达式)/label("配置键") 与 sensitive；configable
+  不透传用户直接写在类型或字段上的任意 Serde helper。default 只控制缺失绑定值，
+  不改变 Rust 的 Default；label 影响输入键及字符串字段地址，不改 Rust 字段名或输出名。
+  配置校验拟由工具链统一收集字段与类型规则，包含格式、集合、条件/跨字段与 rule。
+  从 configable 根沿真实字段类型自动深层级联，覆盖普通嵌套 struct 及 Option、Vec、
+  数组、受支持 Map 值；本地没有规则仍继续检查子类型，可分析的全部可达规则为空才省略校验。
+  普通嵌套类型保留自身 Deserialize、映射、未知字段策略和 Debug，不自动套用根模型的
+  default/label/sensitive；这些绑定与 Debug 扩展在没有外层宏时的入口另待设计。
+  无类型标记的普通 struct 上校验 helper 的合法采集/消费机制仍需新增并评审，不能把
+  类型图分析当作属性已经合法；须保留标准宏流程，不扫描源文本、不注册 nestrs 工具属性，
+  不回写已编译 rlib。上游库生成合法校验能力与 metadata；未提供规则协议的第三方类型可作
+  不透明叶子，不穿透其私有结构；已知规则缺少合法执行能力或需经不支持的容器时须诊断，
+  不能当作无规则。
+  有限深层类型图用工作栈，第一版仍不支持递归类型循环。
+  业务不声明 validate/validate_with、不实现或启用 Validate；值在消费者的 config_value
+  读取后检查，普通 get/get_required 只按目标 Deserialize 绑定，不自动调用独立校验；
+  官方低层 bind 扩展同样不自动启用规则。
+  成功读取只返回 T，生成规则错误的配置来源可缺省，不要求反查来源或增设公共来源查询。
+  公共安全错误约定仍须遵守，不能伪造来源信息。真正服务的初始化仍遵守 Lazy/Eager；
+  准备客户端不代表校验全部模型；未消费 schema 只接受编译期检查，集中启动校验仍须另定机制。
+  Map 元素错误用稳定条目序号定位，不将被校验的动态键和值泄漏进错误链。
+  拟议 sensitive 字段标注保留 String 等原类型，由 configable 接管明确请求的
+  标准 Debug 实现字段遮罩；不承诺普通字段值或消费者的 Debug 自动继承脱敏。
 * `cargo-nestrs` 是构建工具：Cargo CLI、编译器适配、声明生成、IDE 项目模型和 HTML 图。
   它不是 runtime crate，应用运行时不链接工具实现。
 * `cargo-nestrs/internal/bridge` 是标准 proc-macro 薄桥接，委托
@@ -77,11 +124,11 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 工具内部：nestrs-tool-bridge → cargo-nestrs::codegen → 类型化服务声明
 工具编排：cargo nestrs → rustc/rustdoc 的 extern 注入与 rust-analyzer 项目依赖
 语义分析：nestrs-driver → 根据真实类型生成 binding、验证完整 DI 图并编译执行计划
-运行期：  应用及未来 bootstrap/logger/config → nestrs-core
+运行期：  DI 应用及未来 bootstrap/logger → nestrs-core；独立 config 不依赖 core
 ```
 
 * core 不依赖 CLI、codegen、宏 crate 或 rustc 内部库。
-* 所有运行期生态库单向依赖 core，未来 bootstrap 位于其上；生态库不得反向依赖 bootstrap。
+* 需要 DI 的运行期生态库单向依赖 core，未来 bootstrap 位于其上；独立 nestrs-config 无需 core，生态库不得反向依赖 bootstrap。
 * 编译期 codegen 位于 `cargo-nestrs/src/codegen`，只使用生成所需工具；生成的 typed adapter
   引用 core 实际所属私有模块。driver 按真实宏卫生来源与虚拟源码区间授权，普通业务
   源码不能访问；不导出 `__private` 或换名后的公开内部 ABI 模块。
@@ -379,10 +426,10 @@ AI 修改时必须遵守；后续改变这些边界仍须与维护者确认。
 ## 10. 未来生态与命名
 
 * 顶层引导库继续命名 nestrs-bootstrap，不使用暗示底层公共库的 nestrs-common。
-* 未来 bootstrap 对接 logger/config/DI 等生态并聚合相应 features；运行期生态库
-  建立在 core 之上，bootstrap 位于最上层。
-* 本次工具链整合不增加 runtime crate，不提前实现 bootstrap、动态注册、运行期扩图
-  或集合解析。
+* 未来 bootstrap 对接 logger/config/DI 等生态并聚合相应 features；需要 DI 的生态库
+  建立在 core 之上，bootstrap 位于最上层；独立配置库不依赖 core。
+* nestrs-config 独立运行时已实现，宏、自动校验与框架接入仍为设计阶段。
+  不提前实现 bootstrap、动态注册、运行期扩图或集合解析。
 
 ## 11. 后续范围与文档维护
 

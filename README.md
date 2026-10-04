@@ -13,6 +13,7 @@ Nestrs 是以静态依赖图为基础的 Rust DI 框架。服务通过属性声�
 | 位置 | 职责 |
 | --- | --- |
 | [`nestrs-core/`](nestrs-core/README.md) | 公开 DI API、冻结计划装配、生命周期、实例所有权和执行调度 |
+| [`nestrs-config/`](nestrs-config/README.md) | 可独立使用的配置加载、合并、Serde 读取、子树和来源诊断；宏、自动校验与 DI 接入仍待实现 |
 | [`cargo-nestrs/`](docs/NESTRS_CARGO_TOOLCHAIN.md) | CLI、声明生成、rustc 适配、IDE 模型及离线 HTML 依赖图 |
 | `cargo-nestrs/internal/bridge/` | 工具内部的标准 proc-macro 薄桥接，复用唯一 codegen 后端 |
 | [`example/`](example/README.md) | 电商业务项目与独立的预期编译失败示例 |

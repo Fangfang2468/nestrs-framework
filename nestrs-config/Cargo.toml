@@ -1,0 +1,24 @@
+[package]
+name = "nestrs-config"
+version.workspace = true
+edition.workspace = true
+description = "可独立使用的类型化配置加载与读取库"
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+publish = false
+
+[features]
+default = ["toml", "json"]
+toml = ["dep:toml"]
+json = ["dep:serde_json"]
+dotenv = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"], optional = true }
+toml = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde = { workspace = true, features = ["derive"] }

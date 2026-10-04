@@ -1,0 +1,11 @@
+[package]
+name = "nestrs-config-standalone-acceptance"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+settings = { package = "nestrs-config", path = "../../..", default-features = false }
+serde = { version = "1", features = ["derive"] }
