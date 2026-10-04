@@ -668,8 +668,8 @@ hidden line、`compile_fail`、`should_panic`、`no_run`、`ignore` 及 crate �
 当前 [toolchain.json](../cargo-nestrs/toolchain.json) 固定：
 
 ```text
-release: 1.98.0
-commit:  88d9e12ae178fab0fb5cc050a94da85685d449ea
+release: 1.99.0
+commit:  b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
 host:    x86_64-unknown-linux-gnu / x86_64-pc-windows-msvc
 ```
 

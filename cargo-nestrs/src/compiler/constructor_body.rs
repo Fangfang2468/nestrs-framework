@@ -318,7 +318,7 @@ impl Analyzer<'_, '_> {
                 self.bind(pattern, origin, bindings)?;
                 Ok(Origin::Other)
             }
-            E::Loop(..) | E::While(..) | E::ForLoop { .. } => Err((
+            E::Loop(..) | E::While(..) | E::ForLoop(..) => Err((
                 expression.span,
                 "constructor 的字段来源分析暂不支持循环；请将循环业务计算提取为普通辅助函数",
             )),

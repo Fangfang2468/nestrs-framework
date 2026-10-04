@@ -336,7 +336,14 @@ pub(crate) fn descriptor_calls<'tcx>(
             };
             let arguments = ty::EarlyBinder::bind(tcx, arguments)
                 .instantiate(tcx, instance.args)
-                .skip_normalization();
+                .skip_normalization()
+                .no_bound_vars()
+                .ok_or_else(|| {
+                    format!(
+                        "DI 描述 {} 的调用含未闭合的绑定参数",
+                        tcx.def_path_str(definition)
+                    )
+                })?;
             if tcx
                 .opt_item_name(definition)
                 .is_some_and(|name| name.as_str() == crate::protocol::constructor::DEPENDENCIES)

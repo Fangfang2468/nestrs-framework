@@ -9,7 +9,7 @@
 在仓库根目录运行，需要 Python 3.10+ 和 [toolchain.json](toolchain.json) 指定的
 rustc/rustc-dev。基础与展开探针支持 `--rustc /absolute/path/to/rustc`，先核对 release、
 完整 commit、host 和 compiler metadata，不安装组件或切换全局默认工具链。
-当前实验 pin 为 1.98.0、`88d9e12ae178fab0fb5cc050a94da85685d449ea`、Linux GNU x86_64。
+当前实验 pin 为 1.99.0、`b940084d7eb6a299eb4bfeb8e34901bc051e7ac4`、Linux GNU x86_64。
 探针的固定 Linux 配置不代表生产工具全部 host 的覆盖范围。
 
 仓库另有 [verify-macro-editor.py](../verify-macro-editor.py) 这个宏服务器低层协议
@@ -57,7 +57,8 @@ python3 tools/compiler-probe/verify_lowering.py
 | `inert_needs_lowering` | 属性合法但未改写 DI 类型，仍报 E0277 |
 | `plain_rustc_unknown_tool` | 普通 rustc 不认识工具命名空间，报 E0433 |
 
-探针证明根解析、展开和名称解析的时序边界：注册 `registered_tools` 不会提供展开器；
+探针证明根解析、展开和名称解析的时序边界：注册 `registered_attr_tools` /
+`registered_lint_tools` 不会提供展开器；
 `after_expansion` 已经过名称解析，不能随意追加 item 而跳过重新检查；early lint
 获得共享 AST 引用，也不能当作可变 lowering 回调。这些限制解释了薄过程宏桥接的
 选择，不代表生产 constructor 关联或 AOT 计划由此探针实现。

@@ -24,13 +24,14 @@ Nestrs 是以静态依赖图为基础的 Rust DI 框架。服务通过属性声�
 ## 从源码运行
 
 先准备 [toolchain.json](cargo-nestrs/toolchain.json) 指定的 Rust 与匹配的 `rustc-dev`、
-`rust-src`。当前 pin 为 Rust `1.98.0`、完整 commit
-`88d9e12ae178fab0fb5cc050a94da85685d449ea`，支持的本机 host 是 Linux GNU x86_64
+`rust-src`。当前 pin 为 Rust `1.99.0`、完整 commit
+`b940084d7eb6a299eb4bfeb8e34901bc051e7ac4`，支持的本机 host 是 Linux GNU x86_64
 和 Windows MSVC x86_64。release、commit、host 必须全部匹配。
 
 以下命令在 Linux 仓库根目录执行：
 
 ```sh
+export RUSTUP_TOOLCHAIN=1.99.0
 python3 tools/build-toolchain.py
 export PATH="$PWD/target/debug:$PATH"
 cargo nestrs doctor

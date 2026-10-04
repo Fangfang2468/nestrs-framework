@@ -16,8 +16,8 @@
 
 原始日志、任务起点快照、精确差异及工具哈希保存在各轮 `target/` 目录，不随仓库分发。
 本文正文和正式源码、测试链接保留必要说明，使清理 `target/` 后仍能理解修复。
-记录编号 R01～R18 是本文的时间线索引，不是原报告中会重复使用的 F1/P2 编号，
-也不是 Git 提交号。各轮基线均包含当时已有未提交工作，没有用 Git HEAD 代替实际快照。
+记录编号 R01～R19 是本文的时间线索引，不是原报告中会重复使用的 F1/P2 编号，
+也不是 Git 提交号。各轮均记录实际起点快照，已有未提交修改包含在基线内，不以 Git HEAD 代替实际快照。
 
 ## 修复与复核时间线
 
@@ -41,6 +41,7 @@
 | 2026-10-03 / R16 | 自动绑定验收报告改为记录测试构建后的执行工具身份 | 准备与执行身份分别保存；执行前后不一致不能报告成功，保留测试原始失败码 |
 | 2026-10-03 / R17 | 宏服务器探针补齐私有 bridge 的限定构建授权 | 关闭 R15 记录的 E0554；原有加载和展开断言完整通过，不替代全套 LSP 验收 |
 | 2026-10-04 / R18 | 源码 workspace 的 IDE 准备补齐内部工具编译授权 | 按工具源码身份限定 rustc 子进程；同名业务 crate 仍拒绝不稳定特性 |
+| 2026-10-04 / R19 | 固定 Rust 升级到 1.99.0 并适配编译器内部接口 | 保留限定 bootstrap 和精确身份校验；修复回归夹具漂移，双平台分别验收 |
 
 这些发现来自逐步扩充的输入组合。后续新缺陷不意味着前一轮的原始修复失效；每轮都应
 同时保留原触发复测和新增失败证据，不能用已有测试全绿替代边界核查。
@@ -787,3 +788,63 @@ bridge E0554；修复后重新构建工具，仓库根目录 `init --vscode` 成
 保存现场并恢复标准字符设备后，原测试与断言未改即通过。该环境问题与 bridge 授权
 缺口分别记录，未通过放宽测试掩盖。日志与最终工具身份保存在
 `target/init-bootstrap-repro/`；原有工作区修改保留，没有提交或推送。
+
+## R19：Rust 1.99.0 工具链迁移
+
+**编译器身份。** 正式工具与历史编译器探针升级到 Rust `1.99.0`，完整 commit 为
+`b940084d7eb6a299eb4bfeb8e34901bc051e7ac4`。正式 host 仍为 Linux GNU x86_64 和
+Windows MSVC x86_64，driver、bridge、sysroot 必须完整匹配；历史实验 pin 仍限 Linux。
+当前安装和构建方法见[工具链说明](NESTRS_CARGO_TOOLCHAIN.md)，旧性能记录继续保留
+实际使用的 1.98 编译器身份，不将既有测量写成 1.99 结果。
+
+**生产适配。** 函数项 `FnDef` 实参改用 rustc 的 `Binder` 表示；生成已闭合调用时
+使用 `Binder::dummy`，读取时验证 `no_bound_vars`，保留嵌套高阶函数指针和 trait
+约束。内联常量只匹配 `AnonConstKind::NonTypeSystemInline`，不扩大到全部匿名
+常量。同步适配 `clauses_of`、`TraitErrors::has_errors`、模块身份及可见性查询，
+constructor 使用新的常量节点和 `ForLoop` 形态。宏卫生、私有访问审计、真实 trait
+求解、跨 crate 查询摘要和两阶段生成边界保持不变。
+
+`proc_macro_def_site` 在 1.99 仍不稳定，bridge 仍需要定义点 span；`rustc_private`
+同样不是稳定接口。本次保留 R18 的工具源码身份验证及限定子进程授权，没有设置全局
+`RUSTC_BOOTSTRAP` 或向应用、build.rs、编辑器环境传播授权。缓存的 Windows 黄金值
+随完整编译器身份更新；release、commit、host 和两个工具指纹影响缓存的断言保留。
+
+**回归入口修复。** 68 个 DI UI 正反例中，仅 `factory-requires-function-item`
+的一个原生 E0658 标题由 `custom attributes cannot be applied to expressions`
+改为 `macro attributes on expressions are unstable`。已核对真实 Cargo JSON 和
+1.99 `rustc_expand` 实现，错误码、三个错误的数量及源码位置均保持，未批量覆盖诊断。
+
+另外恢复了两个既有测试入口：内部编译契约原先 `include!` 带 `//!` 的 core 根文件，
+在 1.98 与 1.99 最小复现中都报 E0753；现复制真实 `src/`、`tests/` 并以原文件副本
+作为 crate 根追加契约模块，保留 12 组案例、源码文档和私有边界。独立私有访问探针
+补齐真实 `protocol` 模块，并把模拟 core 的旧配置 sink 同步到既有 v3 签名；原有
+访问和来源认证正反例保留。这些夹具漂移不归因为升级导致的生产语义退化。
+
+**双平台实际验证。** 两端均使用上述 1.99 完整身份；Windows 在原生 MSVC 环境
+构建 exe/DLL，以当前源码快照运行。726 个文件经过 SHA-256 核对，生产与测试源码
+一致，测试过程未改源码；仅本修复记录在主工作区继续补充。以下数量按各入口分别列出，
+不把外层 harness 与其内部案例相加：
+
+| 验证 | Linux GNU x86_64 | Windows MSVC x86_64 |
+| --- | --- | --- |
+| CLI、driver、私有 bridge 源码构建及 doctor | 通过 | 通过 |
+| core 单元测试 | 148 项 | 148 项 |
+| 真实 core 内部编译契约 | 12 组，修复入口后全通过 | 12 组，修复入口后全通过 |
+| DI 运行期 / UI 编译契约 | 37 项 / 68 个案例 | 37 项 / 68 个案例 |
+| 跨 crate check、Debug/Release run、graph | 32 项 | 32 项 |
+| 原版 rust-analyzer LSP | default、alternate、release 全通过 | default、alternate、release 全通过 |
+| 原版宏服务器 | 协议 6、两项展开通过 | 协议 6、两项展开通过 |
+
+Windows 另运行 native_host、bridge_metadata、rustdoc、tool_bootstrap 和 constructor
+共 15 项集成测试并通过；没有据此宣称 Windows 执行了整个工具侧 compiler-driver 套件。
+Linux 完整工具 / compiler-driver 测试首轮通过 315 项，唯一失败的内部契约入口修复后
+定向重跑通过，合计 316 个测试均有通过记录；259 项显式 ignored 的文档测试未计为
+通过。初次全套运行的非零退出及重跑日志分别保留，没有把原日志改写成全绿。
+Linux 的独立图导出 25 项、宏跨 crate 的 6 次 Debug/Release 执行、36 项 Python
+维护测试以及基础语义、lowering、私有访问探针均通过。其它 host/target、编辑器 UI
+操作和性能容量不属于本轮验证，历史测量没有重新执行。
+
+**证据位置。** 本轮从 `master` 的干净工作区开始，基线为
+`497b726b2c3c1d813312d0a380f7ff7ff82751c9`。原始构建、初始失败、定向修复后重测、
+工具身份、Windows 源码快照哈希和 LSP 报告保存于 `target/rust-1.99-upgrade/`。
+该目录不随仓库分发；以上结果对应提交前的验证快照。

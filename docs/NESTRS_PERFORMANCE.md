@@ -41,7 +41,7 @@
   676 个文件的 hash、快照和保护文件核对保存在 `target/direct-input-20261002/`。
 - 两版分别使用匹配的 CLI、driver、bridge、core，业务源码相同，registry 依赖锁定；
   不交叉混用 v1/v2 组件。
-- Linux x86_64 / WSL2，rustc 1.98.0（完整 pin 见工具链指南），current-thread Tokio，
+- Linux x86_64 / WSL2，rustc 1.98.0（commit `88d9e12ae178fab0fb5cc050a94da85685d449ea`），current-thread Tokio，
   CPU 2，Release opt-level 3、16 codegen units、无 LTO，无 native CPU 优化。
 - 22 场景 × 2 版本 × 20 轮，共 880 个独立进程；每进程 64 批、每批 32 次查询，
   合计 1,802,240 次计量查询。新旧交替运行，不删样本。

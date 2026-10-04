@@ -13,7 +13,7 @@ use rustc_abi::ExternAbi;
 use rustc_hir::{
     self as hir,
     def::Res,
-    def_id::{CrateNum, DefId, LOCAL_CRATE, LocalDefId},
+    def_id::{CrateNum, DefId, LOCAL_CRATE, LocalDefId, ModId},
     intravisit,
 };
 use rustc_middle::{
@@ -32,7 +32,7 @@ use std::{
 };
 
 /// 外部定义原始可见性查询的函数签名。
-type VisibilityQuery = for<'tcx> fn(TyCtxt<'tcx>, DefId) -> ty::Visibility<DefId>;
+type VisibilityQuery = for<'tcx> fn(TyCtxt<'tcx>, DefId) -> ty::Visibility<ModId>;
 
 /// 外部模块子项查询的函数签名。
 type ChildrenQuery = for<'tcx> fn(TyCtxt<'tcx>, DefId) -> &'tcx [ModChild];
@@ -265,7 +265,7 @@ fn is_runtime(tcx: TyCtxt<'_>, definition: DefId) -> bool {
 }
 
 /// 仅在解析阶段临时开放 runtime 名称，其他定义使用原始可见性。
-fn visibility(tcx: TyCtxt<'_>, definition: DefId) -> ty::Visibility<DefId> {
+fn visibility(tcx: TyCtxt<'_>, definition: DefId) -> ty::Visibility<ModId> {
     if is_runtime(tcx, definition) {
         ty::Visibility::Public
     } else {
@@ -274,7 +274,7 @@ fn visibility(tcx: TyCtxt<'_>, definition: DefId) -> ty::Visibility<DefId> {
 }
 
 /// 绕过临时包装，读取定义的原始 Rust 可见性。
-fn original_visibility(tcx: TyCtxt<'_>, definition: DefId) -> ty::Visibility<DefId> {
+fn original_visibility(tcx: TyCtxt<'_>, definition: DefId) -> ty::Visibility<ModId> {
     (VISIBILITY
         .get()
         .expect("Nestrs visibility hook not installed"))(tcx, definition)

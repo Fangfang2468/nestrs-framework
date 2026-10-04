@@ -192,9 +192,7 @@ impl<'ast> Visitor<'ast> for Collect<'_, '_> {
                 {
                     continue;
                 }
-                let ast::ConstItemRhsKind::Body {
-                    rhs: Some(expression),
-                } = &constant.rhs_kind
+                let (ast::ConstItemKind::Body, Some(expression)) = (constant.kind, &constant.body)
                 else {
                     continue;
                 };
@@ -649,7 +647,6 @@ fn connect_helper(
                 id,
                 kind: ast::TyKind::Path(None, prefix),
                 span: path.span,
-                tokens: None,
             }),
             path_span: path.span.shrink_to_lo(),
             position: 0,

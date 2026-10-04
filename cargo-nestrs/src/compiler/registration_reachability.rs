@@ -56,7 +56,7 @@ fn declaration_reachability(tcx: TyCtxt<'_>, (): ()) -> &EffectiveVisibilities {
         effective.update(
             definition,
             None,
-            Visibility::Restricted(tcx.parent_module_from_def_id(definition).into()),
+            Visibility::Restricted(tcx.parent_module_from_def_id(definition)),
             EffectiveVisibility::from_vis(Visibility::Public),
             Level::ReachableThroughImplTrait,
             tcx,

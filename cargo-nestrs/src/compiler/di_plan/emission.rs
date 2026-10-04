@@ -459,7 +459,7 @@ impl<'tcx> Writer<'_, 'tcx> {
                         mir::Const::zero_sized(Ty::new_fn_def(
                             self.tcx,
                             instance.def_id(),
-                            instance.args,
+                            ty::Binder::dummy(instance.args),
                         )),
                         self.info.span,
                     ),

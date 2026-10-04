@@ -12,9 +12,9 @@ extern crate rustc_index;
 extern crate rustc_infer;
 extern crate rustc_trait_selection;
 
-use rustc_hir::LangItem;
+use rustc_hir::attrs::lang_items::LangItem;
 use rustc_hir::def::{DefKind, Res};
-use rustc_hir::def_id::{DefId, DefIndex, LocalDefId, LocalModDefId};
+use rustc_hir::def_id::{CRATE_DEF_ID, DefId, DefIndex, LocalDefId};
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_index::Idx;
 use rustc_infer::infer::TyCtxtInferExt;
@@ -333,6 +333,37 @@ fn query_method(tcx: TyCtxt<'_>, method: DefId) -> bool {
     )
 }
 
+/// rustc 1.99 的函数项携带独立 binder；只有外层确实没有绑定变量时才能
+/// 交给 Instance 或读取 marker 实参。内嵌函数指针的高阶生命周期仍留在类型中。
+fn function_arguments<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    definition: DefId,
+    arguments: ty::Binder<'tcx, ty::GenericArgsRef<'tcx>>,
+    span: Span,
+) -> ty::GenericArgsRef<'tcx> {
+    arguments.no_bound_vars().unwrap_or_else(|| {
+        tcx.dcx().span_fatal(
+            span,
+            format!(
+                "Nestrs 无法分析仍包含绑定参数的函数项 {}",
+                tcx.def_path_str(definition)
+            ),
+        )
+    })
+}
+
+/// Inline const 在 1.99 归入 AnonConst；仅保留原有运行期 inline const
+/// 语义，不把 const 泛型参数及类型系统匿名常量一并纳入查询摘要。
+fn query_constant(tcx: TyCtxt<'_>, definition: DefId) -> bool {
+    match tcx.def_kind(definition) {
+        DefKind::Const { .. } | DefKind::AssocConst { .. } => true,
+        DefKind::AnonConst => {
+            tcx.anon_const_kind(definition) == ty::AnonConstKind::NonTypeSystemInline
+        }
+        _ => false,
+    }
+}
+
 /// 排除标准库和 runtime 实现，core 自身的编译契约测试保留业务语义。
 fn business_definition(tcx: TyCtxt<'_>, id: DefId) -> bool {
     match tcx.crate_name(id.krate).as_str() {
@@ -381,10 +412,11 @@ impl<'tcx> Summary<'_, 'tcx> {
             // 标准库的默认方法也可能继续转发到业务实现。这里只保存真实函数项；
             // 闭合实参携带已知查询类型时，收集阶段才按需读取其 MIR 调用边。
             self.records.push(Record {
-                value: QueryValue::Callable(
-                    self.tcx
-                        .erase_and_anonymize_regions(Ty::new_fn_def(self.tcx, id, args)),
-                ),
+                value: QueryValue::Callable(self.tcx.erase_and_anonymize_regions(Ty::new_fn_def(
+                    self.tcx,
+                    id,
+                    ty::Binder::dummy(args),
+                ))),
                 span,
             });
         }
@@ -465,7 +497,11 @@ impl<'tcx> Visitor<'tcx> for Summary<'_, 'tcx> {
             });
         }
         match *self.typeck.expr_ty(expression).kind() {
-            ty::FnDef(id, args) => self.function(id, args, expression.span),
+            ty::FnDef(id, args) => self.function(
+                id,
+                function_arguments(self.tcx, id, args, expression.span),
+                expression.span,
+            ),
             ty::Closure(id, _) | ty::Coroutine(id, _) | ty::CoroutineClosure(id, _)
                 if matches!(expression.kind, rustc_hir::ExprKind::Closure(..))
                     && business_definition(self.tcx, id) =>
@@ -702,7 +738,11 @@ fn call_block<'tcx>(
                 func: Operand::Constant(Box::new(mir::ConstOperand {
                     span: source_info.span,
                     user_ty: None,
-                    const_: mir::Const::zero_sized(Ty::new_fn_def(tcx, function, arguments)),
+                    const_: mir::Const::zero_sized(Ty::new_fn_def(
+                        tcx,
+                        function,
+                        ty::Binder::dummy(arguments),
+                    )),
                 })),
                 args: Vec::<Spanned<Operand<'tcx>>>::new().into(),
                 destination,
@@ -721,10 +761,7 @@ fn call_block<'tcx>(
 fn external_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
     // 常量初始化器随 CTFE MIR 发布；is_mir_available/optimized_mir 只覆盖函数侧。
     // 读取 MIR 不等于求值常量，其函数指针、链式常量和开放 trait 实参仍保留身份。
-    let body = if matches!(
-        tcx.def_kind(id),
-        DefKind::Const { .. } | DefKind::AssocConst { .. } | DefKind::InlineConst
-    ) {
+    let body = if query_constant(tcx, id) {
         if !tcx.defaultness(id).has_value() || tcx.trivial_const(id).is_some() {
             return Vec::new();
         }
@@ -745,6 +782,7 @@ fn external_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
             let ty::FnDef(callee, args) = *func.ty(&body.local_decls, tcx).kind() else {
                 return None;
             };
+            let args = function_arguments(tcx, callee, args, block.terminator().source_info.span);
             let value = if crate::registration_codegen::reflect_item(tcx, callee, ROOT_MARKER) {
                 QueryValue::Service(args.type_at(0))
             } else if crate::registration_codegen::reflect_item(tcx, callee, CALL_MARKER) {
@@ -773,10 +811,7 @@ fn constant_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> Vec<Reco
         if let mir::Const::Unevaluated(value, _) = constant.const_
             && value.promoted.is_none()
             && business_definition(tcx, value.def)
-            && matches!(
-                tcx.def_kind(value.def),
-                DefKind::Const { .. } | DefKind::AssocConst { .. } | DefKind::InlineConst
-            )
+            && query_constant(tcx, value.def)
         {
             records.push(Record {
                 value: QueryValue::Constant(value.def, value.args),
@@ -794,7 +829,7 @@ fn drop_callable<'tcx>(tcx: TyCtxt<'tcx>, value: Ty<'tcx>, span: Span) -> Record
         value: QueryValue::Callable(tcx.erase_and_anonymize_regions(Ty::new_fn_def(
             tcx,
             method,
-            [value],
+            ty::Binder::dummy([value]),
         ))),
         span,
     }
@@ -806,7 +841,7 @@ fn drop_type<'tcx>(tcx: TyCtxt<'tcx>, value: QueryValue<'tcx>) -> Option<Ty<'tcx
         && let ty::FnDef(id, args) = *value.kind()
         && Some(id) == tcx.lang_items().drop_glue_fn()
     {
-        Some(args.type_at(0))
+        Some(function_arguments(tcx, id, args, tcx.def_span(id)).type_at(0))
     } else {
         None
     }
@@ -930,10 +965,7 @@ fn mir_summary<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> Vec<Record<'t
 /// 无 Nestrs 摘要的普通外部库与标准库按同一规则补充原生调用边。仅在真实闭合
 /// 调用携带已知查询身份时读取，不扫描依赖库，也不以函数指针签名猜测目标。
 fn native_summary<'tcx>(tcx: TyCtxt<'tcx>, id: DefId) -> Vec<Record<'tcx>> {
-    if matches!(
-        tcx.def_kind(id),
-        DefKind::Const { .. } | DefKind::AssocConst { .. } | DefKind::InlineConst
-    ) {
+    if query_constant(tcx, id) {
         if tcx.defaultness(id).has_value() && tcx.trivial_const(id).is_none() {
             mir_summary(tcx, tcx.mir_for_ctfe(id))
         } else {
@@ -1032,13 +1064,13 @@ impl<'tcx> NominalIdentities<'tcx> {
                 let mut traits = VecDeque::new();
                 let mut parent = Some(id);
                 while let Some(id) = parent {
-                    let predicates = tcx.predicates_of(id);
-                    for &(clause, _) in predicates.predicates {
+                    let clauses = tcx.clauses_of(id);
+                    for &(clause, _) in clauses.clauses {
                         if let Some(predicate) = clause.as_trait_clause() {
                             traits.push_back(predicate.skip_binder().trait_ref.def_id);
                         }
                     }
-                    parent = predicates.parent;
+                    parent = clauses.parent;
                 }
                 // Family::Target: Run<P> 的 Run 不一定出现在函数签名中，例如
                 // helper 在 body 内构造 Target::default() 再调用它。沿真实关联
@@ -1048,7 +1080,7 @@ impl<'tcx> NominalIdentities<'tcx> {
                     if !identities.insert(id) {
                         continue;
                     }
-                    for bound in tcx.explicit_super_predicates_of(id).iter_identity_copied() {
+                    for bound in tcx.explicit_super_clauses_of(id).iter_identity_copied() {
                         let (clause, _) = bound.skip_normalization();
                         if let Some(predicate) = clause.as_trait_clause() {
                             traits.push_back(predicate.skip_binder().trait_ref.def_id);
@@ -1279,6 +1311,12 @@ fn concrete_virtual_call<'tcx>(
     let Some(trait_id) = tcx.trait_of_assoc(method) else {
         return Ok(None);
     };
+    let args = args.no_bound_vars().ok_or_else(|| {
+        format!(
+            "DI 虚调用 {} 的函数项仍包含绑定参数",
+            tcx.def_path_str(method)
+        )
+    })?;
     let called_object = args.type_at(0);
     if object != called_object {
         // 同名 trait 不代表相同对象形状。只允许 rustc 认可的 object upcast，
@@ -1299,7 +1337,7 @@ fn concrete_virtual_call<'tcx>(
             ty::ParamEnv::empty(),
             reference,
         ));
-        if !ocx.evaluate_obligations_error_on_ambiguity().is_empty() {
+        if ocx.evaluate_obligations_error_on_ambiguity().has_errors() {
             return Ok(None);
         }
     }
@@ -1347,7 +1385,7 @@ fn concrete_virtual_call<'tcx>(
             return Ok(Some(QueryValue::Callable(Ty::new_fn_def(
                 tcx,
                 method,
-                concrete_args,
+                ty::Binder::dummy(concrete_args),
             ))));
         }
     }
@@ -1526,7 +1564,7 @@ pub fn collect_with_providers<'tcx>(
                 .definition()
                 .is_some_and(|id| relevant.contains(&id))
     };
-    let fallback = LocalModDefId::CRATE_DEF_ID.to_local_def_id();
+    let fallback = CRATE_DEF_ID;
     let mut pending = VecDeque::new();
     for (&id, records) in &summaries {
         let owner = id.as_local().unwrap_or(fallback);
@@ -1637,7 +1675,12 @@ pub fn collect_with_providers<'tcx>(
         }
         let (id, args) = match record.value {
             QueryValue::Callable(value) => match *value.kind() {
-                ty::FnDef(id, args) => (id, args),
+                ty::FnDef(id, args) => (
+                    id,
+                    args.no_bound_vars().ok_or_else(|| {
+                        format!("DI 查询函数项 {} 仍包含绑定参数", tcx.def_path_str(id))
+                    })?,
+                ),
                 ty::Closure(id, args)
                 | ty::Coroutine(id, args)
                 | ty::CoroutineClosure(id, args) => (id, args),
@@ -1774,7 +1817,7 @@ fn provider_method_arguments<'tcx>(
         if ocx.eq(&cause, environment, provider, self_ty).is_err() {
             continue;
         }
-        for (predicate, _) in tcx.predicates_of(candidate).instantiate(tcx, args) {
+        for (predicate, _) in tcx.clauses_of(candidate).instantiate(tcx, args) {
             let predicate = ocx.normalize(&cause, environment, predicate);
             ocx.register_obligation(Obligation::new(tcx, cause.clone(), environment, predicate));
         }
@@ -1790,11 +1833,11 @@ fn provider_method_arguments<'tcx>(
                 .args
                 .extend_to(tcx, method, |_, _| tcx.lifetimes.re_erased.into())
         };
-        for (predicate, _) in tcx.predicates_of(method).instantiate(tcx, args) {
+        for (predicate, _) in tcx.clauses_of(method).instantiate(tcx, args) {
             let predicate = ocx.normalize(&cause, environment, predicate);
             ocx.register_obligation(Obligation::new(tcx, cause.clone(), environment, predicate));
         }
-        if !ocx.evaluate_obligations_error_on_ambiguity().is_empty() {
+        if ocx.evaluate_obligations_error_on_ambiguity().has_errors() {
             continue;
         }
         let args = tcx.erase_and_anonymize_regions(infcx.resolve_vars_if_possible(args));

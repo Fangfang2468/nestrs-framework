@@ -79,15 +79,17 @@ Singleton / Scoped 即便在所属 owner 为 Lazy 时也在创建前完成初始
 
 | 项目 | 当前值 |
 | --- | --- |
-| release | `1.98.0` |
-| 完整 commit | `88d9e12ae178fab0fb5cc050a94da85685d449ea` |
+| release | `1.99.0` |
+| 完整 commit | `b940084d7eb6a299eb4bfeb8e34901bc051e7ac4` |
 | 本机 host | `x86_64-unknown-linux-gnu`、`x86_64-pc-windows-msvc` |
 | 编译器组件 | 同一工具链的 `rustc-dev` |
 | IDE 附加要求 | 匹配的 `rust-src` 与工具链附带的 rust-analyzer proc-macro server |
 
-在已安装匹配工具链的环境中执行：
+Linux / WSL 安装命名工具链后，在当前 shell 选择它并构建：
 
 ```sh
+rustup toolchain install 1.99.0 --profile minimal --component rustc-dev --component rust-src
+export RUSTUP_TOOLCHAIN=1.99.0
 python3 tools/build-toolchain.py
 export PATH="$PWD/target/debug:$PATH"
 cargo nestrs doctor
@@ -102,8 +104,8 @@ Windows 使用 PowerShell 和原生 Windows Rust，不依赖 WSL。先准备 Rus
 Visual Studio C++ Build Tools 与 Windows SDK，再安装并选择匹配的 MSVC 工具链：
 
 ```powershell
-rustup toolchain install 1.98.0-x86_64-pc-windows-msvc --profile minimal --component rustc-dev --component rust-src
-$env:RUSTUP_TOOLCHAIN = "1.98.0-x86_64-pc-windows-msvc"
+rustup toolchain install 1.99.0-x86_64-pc-windows-msvc --profile minimal --component rustc-dev --component rust-src
+$env:RUSTUP_TOOLCHAIN = "1.99.0-x86_64-pc-windows-msvc"
 python tools/build-toolchain.py
 $env:PATH = "$PWD\target\debug;$env:PATH"
 cargo nestrs doctor

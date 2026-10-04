@@ -13,7 +13,7 @@ use crate::autobind_codegen::{BindingSpec, SourceInsertion};
 use crate::protocol::{self, Marker as ReflectionMarker};
 use crate::registration_codegen::reflect_item;
 use rustc_hir::def::DefKind;
-use rustc_hir::def_id::{DefId, DefIndex, LocalDefId, LocalModDefId};
+use rustc_hir::def_id::{CRATE_DEF_ID, DefId, DefIndex, LocalDefId, LocalModId};
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::mir;
@@ -138,6 +138,13 @@ impl<'tcx> Visitor<'tcx> for MarkerVisitor<'_, 'tcx> {
         {
             let kind = marker_kind(self.tcx, def_id);
             if let Some(kind) = kind {
+                let Some(args) = args.no_bound_vars() else {
+                    self.errors.push(format!(
+                        "DI 声明 marker {} 的函数项仍包含绑定参数",
+                        self.tcx.def_path_str(def_id)
+                    ));
+                    return;
+                };
                 let key = if kind == MarkerKind::Provider {
                     match self.provider_key(arguments) {
                         Ok(key) => Some(key),
@@ -770,7 +777,7 @@ fn external_registrations<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Vec<Marker<'tcx>>, 
             markers.extend(external_blueprint_markers(
                 tcx,
                 instance,
-                LocalModDefId::CRATE_DEF_ID.to_local_def_id(),
+                CRATE_DEF_ID,
                 tcx.def_span(definition),
                 false,
             )?);
@@ -1024,7 +1031,7 @@ fn declared_interfaces<'tcx>(
             tcx.impl_trait_ref(definition).instantiate(tcx, args),
         );
         ocx.register_obligation(Obligation::new(tcx, cause, environment, trait_ref));
-        if !ocx.evaluate_obligations_error_on_ambiguity().is_empty() {
+        if ocx.evaluate_obligations_error_on_ambiguity().has_errors() {
             continue;
         }
         let trait_ref = infcx.resolve_vars_if_possible(trait_ref);
@@ -1100,7 +1107,7 @@ fn interface_variants<'tcx>(
                 ty::ParamEnv::empty(),
                 ty::Unnormalized::new_wip(projection),
             );
-            if !ocx.evaluate_obligations_error_on_ambiguity().is_empty() {
+            if ocx.evaluate_obligations_error_on_ambiguity().has_errors() {
                 return Vec::new();
             }
             let value = infcx.resolve_vars_if_possible(value);
@@ -1217,7 +1224,7 @@ fn source_insertion<'tcx>(
     let owner = choices
         .into_iter()
         .find(|module| {
-            let (hir_module, span, _) = tcx.hir_get_module(LocalModDefId::new_unchecked(*module));
+            let (hir_module, span, _) = tcx.hir_get_module(LocalModId::new_unchecked(*module));
             !span.from_expansion()
                 && !hir_module.spans.inject_use_span.from_expansion()
                 && crate::type_source::accessible(tcx, concrete, *module)
@@ -1229,7 +1236,7 @@ fn source_insertion<'tcx>(
                 interface.map_or_else(|| concrete.to_string(), |interface| format!("both {concrete} and {interface}")),
             )
         })?;
-    let (module, span, _) = tcx.hir_get_module(LocalModDefId::new_unchecked(owner));
+    let (module, span, _) = tcx.hir_get_module(LocalModId::new_unchecked(owner));
     // This is the parser's legal item-insertion point, after inner attributes.
     // On this pinned compiler inner_span.hi() includes the closing brace for
     // an inline module and would accidentally place generated items outside.

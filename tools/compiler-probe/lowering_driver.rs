@@ -11,7 +11,6 @@ extern crate rustc_ast_pretty;
 extern crate rustc_driver;
 extern crate rustc_interface;
 extern crate rustc_middle;
-extern crate rustc_resolve;
 extern crate rustc_span;
 
 use rustc_ast::{
@@ -20,9 +19,14 @@ use rustc_ast::{
 };
 use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface;
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{RegisteredTools, TyCtxt};
 use rustc_span::{Ident, Symbol, source_map::SourceMap};
-use std::fmt::Write as _;
+use std::{fmt::Write as _, sync::OnceLock};
+
+type RegisteredToolsQuery = for<'tcx> fn(TyCtxt<'tcx>, ()) -> RegisteredTools;
+
+static ATTRIBUTE_TOOLS: OnceLock<RegisteredToolsQuery> = OnceLock::new();
+static LINT_TOOLS: OnceLock<RegisteredToolsQuery> = OnceLock::new();
 
 struct Observe<'a> {
     phase: &'static str,
@@ -51,11 +55,18 @@ struct LoweringProbe;
 impl Callbacks for LoweringProbe {
     fn config(&mut self, config: &mut interface::Config) {
         config.override_queries = Some(|_, providers| {
-            providers.queries.registered_tools = |tcx, ()| {
-                let (_, attrs) = &*tcx.crate_for_resolver(()).borrow();
-                // Retain rustc's normal explicitly registered and built-in
-                // tools. The only addition is this experiment's namespace.
-                let mut tools = rustc_resolve::registered_tools_ast(tcx.dcx(), attrs, tcx.sess);
+            // Rust 1.99 separates attribute tools from lint tools. Wrap each
+            // original query so explicit registrations and built-in tools keep
+            // their native semantics; only this probe adds the inert namespace.
+            let _ = ATTRIBUTE_TOOLS.set(providers.queries.registered_attr_tools);
+            let _ = LINT_TOOLS.set(providers.queries.registered_lint_tools);
+            providers.queries.registered_attr_tools = |tcx, ()| {
+                let mut tools = ATTRIBUTE_TOOLS.get().expect("attribute tools query")(tcx, ());
+                tools.insert(Ident::with_dummy_span(Symbol::intern("nestrs")));
+                tools
+            };
+            providers.queries.registered_lint_tools = |tcx, ()| {
+                let mut tools = LINT_TOOLS.get().expect("lint tools query")(tcx, ());
                 tools.insert(Ident::with_dummy_span(Symbol::intern("nestrs")));
                 tools
             };

@@ -686,7 +686,7 @@ mod tests {
         };
         let target = Path::new("target");
         let original = toolchain.cache_directory(target);
-        assert_eq!(original.file_name().unwrap(), "01c90ba81b78b681");
+        assert_eq!(original.file_name().unwrap(), "02ebbc366d04b319");
         assert_eq!(original.parent(), Some(target.join("nestrs").as_path()));
         assert_eq!(original.file_name().unwrap().to_str().unwrap().len(), 16);
         assert_eq!(toolchain.cache_directory(target), original);

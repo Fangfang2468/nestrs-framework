@@ -259,8 +259,8 @@ fn provider_helper(tcx: TyCtxt<'_>, definition: DefId) -> bool {
     {
         return false;
     }
-    tcx.predicates_of(definition)
-        .predicates
+    tcx.clauses_of(definition)
+        .clauses
         .iter()
         .any(|(clause, _)| {
             matches!(clause.kind().skip_binder(), ty::ClauseKind::Trait(predicate)
