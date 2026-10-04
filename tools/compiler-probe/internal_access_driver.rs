@@ -8,6 +8,10 @@ extern crate rustc_hir;
 extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_span;
+extern crate serde;
+
+#[path = "../../cargo-nestrs/src/protocol.rs"]
+mod protocol;
 
 #[path = "../../cargo-nestrs/src/compiler/internal_access.rs"]
 mod internal_access;

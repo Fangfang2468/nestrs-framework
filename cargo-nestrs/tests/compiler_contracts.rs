@@ -25,8 +25,19 @@ const CASES: &[&str] = &[
     "runtime_graph_initialization",
 ];
 
-fn quoted(path: &Path) -> String {
-    serde_json::to_string(&path.to_string_lossy()).unwrap()
+/// Preserve real source/test paths so private modules and their white-box tests
+/// resolve exactly as they do in core, including crate-root inner documentation.
+fn copy_tree(source: &Path, destination: &Path) {
+    fs::create_dir_all(destination).unwrap();
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let target = destination.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
 }
 
 fn project(root: &Path, directory: &Path, case: &str) -> PathBuf {
@@ -45,7 +56,7 @@ publish = false
 
 [lib]
 name = "nestrs_core"
-path = "lib.rs"
+path = "src/lib.rs"
 doctest = false
 
 [dependencies]
@@ -60,21 +71,21 @@ unexpected_cfgs = {{ level = "warn", check-cfg = ['cfg(nestrs_compiler)', 'cfg(n
         ),
     )
     .unwrap();
+    let core = root.join("nestrs-core");
+    for name in ["src", "tests"] {
+        copy_tree(&core.join(name), &directory.join(name));
+    }
+    let crate_root = directory.join("src/lib.rs");
+    let source = fs::read_to_string(&crate_root).unwrap();
     fs::write(
-        directory.join("lib.rs"),
+        crate_root,
         format!(
             "#![allow(macro_expanded_macro_exports_accessed_by_absolute_paths)]\n\
+             {source}\n\
              extern crate self as nestrs_core;\n\
-             include!({});\n\
              #[cfg(test)]\n\
-             #[path = {}]\n\
+             #[path = \"../tests/compiler/{case}.rs\"]\n\
              mod contract;\n",
-            quoted(&root.join("nestrs-core/src/lib.rs")),
-            quoted(
-                &root
-                    .join("nestrs-core/tests/compiler")
-                    .join(format!("{case}.rs"))
-            ),
         ),
     )
     .unwrap();

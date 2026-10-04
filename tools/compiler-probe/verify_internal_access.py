@@ -76,7 +76,7 @@ mod facade {
 pub use facade::Public;
 // 来源认证锚定真实执行协议，不再要求 core 提供编译器专用的空 marker。
 mod graph { pub(crate) mod plan {
-    pub unsafe fn plan_set_options(_output: *mut (), _eager: bool, _concurrency: usize) {}
+    pub unsafe fn plan_set_options_v3(_output: *mut (), _eager: bool, _scope_eager: bool, _concurrency: usize) {}
 } }
 #[macro_export] macro_rules! __nestrs_query {
     () => { $crate::activation::make().number() };
