@@ -1,6 +1,6 @@
 # 修复说明与详细记录
 
-本文统一保留 2026-10-01 至 2026-10-03 多轮修复及其后续复核。每轮分别记录触发条件、
+本文统一保留 2026-10-01 至 2026-10-04 多轮修复及其后续复核。每轮分别记录触发条件、
 根因、处理方式、正式回归入口和当时的验证边界；后续发现不会覆盖或删除前一轮的记录。
 当前用法见[服务声明与注入](NESTRS_MACROS.md)，实现原理见
 [编译器扩展指南](NESTRS_RUSTC_EXTENSION_GUIDE.md)和
@@ -16,7 +16,7 @@
 
 原始日志、任务起点快照、精确差异及工具哈希保存在各轮 `target/` 目录，不随仓库分发。
 本文正文和正式源码、测试链接保留必要说明，使清理 `target/` 后仍能理解修复。
-记录编号 R01～R17 是本文的时间线索引，不是原报告中会重复使用的 F1/P2 编号，
+记录编号 R01～R18 是本文的时间线索引，不是原报告中会重复使用的 F1/P2 编号，
 也不是 Git 提交号。各轮基线均包含当时已有未提交工作，没有用 Git HEAD 代替实际快照。
 
 ## 修复与复核时间线
@@ -40,6 +40,7 @@
 | 2026-10-03 / R15 | 对照当前实现核查源码注释、主题文档与基准复现说明 | 修正文义和示例；另确认历史宏服务器探针的构建授权缺失，脚本行为未改 |
 | 2026-10-03 / R16 | 自动绑定验收报告改为记录测试构建后的执行工具身份 | 准备与执行身份分别保存；执行前后不一致不能报告成功，保留测试原始失败码 |
 | 2026-10-03 / R17 | 宏服务器探针补齐私有 bridge 的限定构建授权 | 关闭 R15 记录的 E0554；原有加载和展开断言完整通过，不替代全套 LSP 验收 |
+| 2026-10-04 / R18 | 源码 workspace 的 IDE 准备补齐内部工具编译授权 | 按工具源码身份限定 rustc 子进程；同名业务 crate 仍拒绝不稳定特性 |
 
 这些发现来自逐步扩充的输入组合。后续新缺陷不意味着前一轮的原始修复失效；每轮都应
 同时保留原触发复测和新增失败证据，不能用已有测试全绿替代边界核查。
@@ -753,3 +754,36 @@ python3 tools/verify-macro-editor.py，私有 bridge 从源码构建成功，脚
 `target/macro-editor-bootstrap-fix-20261003/`，脚本默认报告继续位于
 `target/nestrs-tool-bridge-probe/report.json`。原有未提交修改保留，HEAD 和暂存区
 不变，没有提交、推送或合并。
+
+## R18：源码 workspace 初始化时限定内部工具的编译授权
+
+**触发与根因。** `python3 tools/build-toolchain.py` 成功后，在仓库根目录运行
+`cargo nestrs init --vscode` 仍可能在私有 bridge 的库和库测试各报一次 E0554。
+init 默认选择 workspace 的全部目标，其独立缓存需要重新编译 bridge；项目准备清除
+bootstrap 后，driver 原先把这些工具源码单元也交给普通业务编译流程。构建脚本的
+限定授权不会继承到这次独立检查，因而首次工具构建成功不能证明 init 可通过。
+
+**修复方式。** [driver](../cargo-nestrs/src/bin/nestrs-driver.rs)在保留真实 IDE
+编译记录后，核对 crate 名、Cargo package 名、manifest 目录及根源码规范路径。
+仅构建当前 driver 的源码树中已知 bridge / driver 入口获准交给固定 rustc 的独立
+子进程，并只授权当前工具 crate。Cargo、build.rs、普通业务编译和编辑器环境继续
+不携带 bootstrap；同名业务或另一份源码树不能只凭名称获得例外。不排除 workspace
+中的 bridge 目标，不改变宏生成、DI 或普通 Cargo 的行为。
+
+**正式回归。** [tool_bootstrap.rs](../cargo-nestrs/tests/tool_bootstrap.rs)通过真实
+CLI 检查 bridge 的库和测试单元、生成模型及保存检查的稳定性、driver 自身编译，
+并用普通源码与 build.rs 断言 bootstrap 未泄漏。两个同名业务工具负例仍须报告
+E0554；失败 init 必须保留已有项目、建议配置和 VS Code 设置。
+
+验证入口为 `cargo test -p cargo-nestrs --features compiler-driver --test tool_bootstrap`，
+外层测试构建环境按[工具链说明](NESTRS_CARGO_TOOLCHAIN.md#回归入口与核对位置)准备；测试内调用的
+应用与编辑器命令自行清除授权。该回归针对工具编译和 IDE 项目生成，不替代原版 LSP
+交互、Windows 或跨 target 验收。
+
+**本轮实际验证。** 固定 Rust 1.98.0、Linux x86_64 上，原始命令先复现两次
+bridge E0554；修复后重新构建工具，仓库根目录 `init --vscode` 成功，保存检查
+保持模型字节一致。上述两个集成回归及工具单元 / CLI / 帮助测试 184 项通过。
+回归期间另发现本机 `/dev/null` 被替换为普通文件，导致 Cargo stdin 探针误读诊断；
+保存现场并恢复标准字符设备后，原测试与断言未改即通过。该环境问题与 bridge 授权
+缺口分别记录，未通过放宽测试掩盖。日志与最终工具身份保存在
+`target/init-bootstrap-repro/`；原有工作区修改保留，没有提交或推送。

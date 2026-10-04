@@ -414,7 +414,10 @@ Windows 使用 PowerShell 和相同脚本名，把 `python3` 替换为本机 `py
 的 bin，并仅对该测试进程设置 `RUSTC_BOOTSTRAP=nestrs_driver,nestrs_tool_bridge`；不要把它传播给
 业务编译。上述测试和脚本由开发者在对应 host 手动执行，无需配置流水线。
 私有 bridge 与 driver 一起接受上述工具构建测试；应用路径的 workspace 测试排除
-bridge，因为 CLI 会清除 bootstrap，且 bridge 不是应用依赖。
+bridge，以保持测试面向应用目标，bridge 不是应用依赖。CLI 仍会清除继承的 bootstrap；
+检查构建当前 driver 的工具源码树时，仅已核实 package、crate 和入口路径的 bridge / driver
+目标在独立 rustc 子进程内获得限定授权，因此仓库根目录的 `cargo nestrs init --vscode`
+可以检查包括 bridge 在内的全部默认目标，无需设置全局环境变量。
 workspace 的 default-members 仅含 core 和工具，因此不指定 package 的普通 Cargo
 检查和单测也不会要求私有 bridge 的构建授权。
 支持 host 的声明、历史本机结果和当前源码的验证结果是不同证据；某个平台通过

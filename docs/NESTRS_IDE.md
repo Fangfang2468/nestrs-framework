@@ -42,6 +42,12 @@ cargo nestrs init --vscode --manifest-path path/to/Cargo.toml --features audit
 cargo nestrs init --output target/editor/rust-project.json
 ```
 
+在 Nestrs 自身的源码 workspace 中执行时，私有 bridge 的库和测试目标也会参与检查；
+启用 `compiler-driver` 时还包括 driver 自身。driver 仅对构建它的源码树中、package、
+crate 名称及规范化入口路径均匹配的这两个工具目标，在独立 rustc 子进程内给予所需
+bootstrap 授权。Cargo、build.rs、普通业务编译与编辑器配置不携带该授权，同名的
+业务 crate 也不会获得例外；检查另一份工具源码树前应在那里重新构建工具链。
+
 切换工作目录后仍可使用生成配置中的绝对路径。
 保存检查的 `check.extraEnv` 固定本次选择的 rustc、driver 和私有桥接路径，保留
 用户其他环境变量；相对 `--config` 文件路径也会转为绝对路径。编辑器无需继承
