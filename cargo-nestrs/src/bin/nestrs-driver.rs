@@ -515,6 +515,22 @@ fn run() -> Result<ExitCode, String> {
             ExitCode::FAILURE
         });
     }
+    if let Some(tool_crate) = source_tool_crate(&args)? {
+        check_toolchain(&rustc)?;
+        // Workspace preparation also checks the tools themselves. Keep their
+        // unstable API permission in this rustc child only: Cargo, build scripts,
+        // editor captures and application compilation remain unprivileged.
+        let status = Command::new(&rustc)
+            .args(&args[1..])
+            .env("RUSTC_BOOTSTRAP", tool_crate)
+            .status()
+            .map_err(|error| format!("cannot compile internal tool {tool_crate}: {error}"))?;
+        return Ok(if status.success() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        });
+    }
     if !uses_core && !local_core && !documentation::requires_pipeline() && !graph_binary {
         check_toolchain(&rustc)?;
         let mut probe = TransitiveCoreProbe::default();
@@ -661,6 +677,47 @@ fn is_rustc_wrapper_invocation(args: &[String]) -> bool {
             .file_name()
             .is_some_and(|name| name == "rustc" || name == "rustc.exe")
     })
+}
+
+/// 只授权构建当前 driver 的源码树中已知的工具入口，不能按业务 package/crate 同名授权。
+fn source_tool_crate(args: &[String]) -> Result<Option<&'static str>, String> {
+    let tool_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let (crate_name, package, manifest, source) = match flag_value(args, "--crate-name") {
+        Some("nestrs_tool_bridge") => (
+            "nestrs_tool_bridge",
+            "nestrs-tool-bridge",
+            tool_root.join("internal/bridge"),
+            tool_root.join("internal/bridge/src/lib.rs"),
+        ),
+        Some("nestrs_driver") => (
+            "nestrs_driver",
+            "cargo-nestrs",
+            tool_root.to_path_buf(),
+            tool_root.join("src/bin/nestrs-driver.rs"),
+        ),
+        _ => return Ok(None),
+    };
+    if std::env::var("CARGO_PKG_NAME").as_deref() != Ok(package) {
+        return Ok(None);
+    }
+    let Some(actual_manifest) = std::env::var_os("CARGO_MANIFEST_DIR") else {
+        return Ok(None);
+    };
+    let Some(actual_source) = arguments::source_file(&args[1..])? else {
+        return Ok(None);
+    };
+    // Installed binaries may no longer have their original source checkout.
+    // Missing paths deny the exception rather than matching two absent values.
+    let same_path = |actual: &Path, expected: &Path| {
+        matches!(
+            (actual.canonicalize(), expected.canonicalize()),
+            (Ok(actual), Ok(expected)) if actual == expected
+        )
+    };
+    Ok(
+        (same_path(Path::new(&actual_manifest), &manifest) && same_path(&actual_source, &source))
+            .then_some(crate_name),
+    )
 }
 
 /// rustdoc 不会使用 RUSTC_WRAPPER，因此所有 doctest 必须显式配置 driver builder。
